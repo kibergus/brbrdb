@@ -17,17 +17,24 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { state } from './state.js';
-import { addTrackMarker, addTrackMarkerAtDistance, initTrackMarkers, clearLapPolylines } from './map.js';
+import { addTrackMarker, addTrackMarkerAtDistance, initTrackMarkers, clearLapPolylines, calculateSegmentColor, setTrajectoryColorMode, LAP_PALETTE } from './map.js';
 
 function createMockElement(tagName = 'div') {
     const children = [];
     const attributes = {};
     const style = {};
+    const classList = {
+        add: vi.fn(),
+        remove: vi.fn(),
+        toggle: vi.fn(),
+        contains: vi.fn().mockReturnValue(false)
+    };
 
     return {
         tagName: tagName.toUpperCase(),
         children,
         style,
+        classList,
         innerHTML: '',
         textContent: '',
         className: '',
@@ -52,7 +59,7 @@ global.google = {
         Map: function() {
             this.addListener = () => {};
             this.mapTypes = new Map();
-            this.controls = { [1]: [] };
+            this.controls = { [1]: [], [2]: [] };
             this.data = {
                 setMap: () => {},
                 setStyle: () => {},
@@ -62,11 +69,12 @@ global.google = {
             };
         },
         SymbolPath: { CIRCLE: 1 },
-        ControlPosition: { TOP_LEFT: 1 },
+        ControlPosition: { TOP_LEFT: 1, TOP_RIGHT: 2 },
         Polyline: function(opts) {
             this.opts = opts;
             this.setMap = (m) => { this.map = m; };
             this.setPath = (p) => { this.path = p; };
+            this.setOptions = (o) => { Object.assign(this.opts, o); };
         },
         marker: {
             AdvancedMarkerElement: function(opts) {
@@ -175,3 +183,57 @@ describe('map.js track markers', () => {
         expect(state.lapPolylines).toEqual({});
     });
 });
+
+describe('calculateSegmentColor', () => {
+    it('calculates colors for pedals mode', () => {
+        expect(calculateSegmentColor({ brake: 80, throttle: 0 }, 'lap-1', 'pedals')).toContain('rgb(255,');
+        expect(calculateSegmentColor({ brake: 0, throttle: 100 }, 'lap-1', 'pedals')).toContain('255,');
+        expect(calculateSegmentColor({ brake: 0, throttle: 0 }, 'lap-1', 'pedals')).toBe('#ffffff');
+    });
+
+    it('calculates colors for speed mode using multi-stop spectrum', () => {
+        expect(calculateSegmentColor({ speed: 0 }, 'lap-1', 'speed', 100)).toBe('rgb(40, 20, 180)');
+        expect(calculateSegmentColor({ speed: 100 }, 'lap-1', 'speed', 100)).toBe('rgb(0, 255, 80)');
+    });
+
+    it('calculates colors for accel mode', () => {
+        expect(calculateSegmentColor({ acceleration: -4 }, 'lap-1', 'accel')).toBe('rgb(255, 0, 0)');
+        expect(calculateSegmentColor({ acceleration: 2.5 }, 'lap-1', 'accel')).toBe('rgb(0, 255, 0)');
+        expect(calculateSegmentColor({ acceleration: 0 }, 'lap-1', 'accel')).toBe('#ffffff');
+    });
+
+    it('calculates colors for gforce_lon mode', () => {
+        expect(calculateSegmentColor({ gx: -1.5 }, 'lap-1', 'gforce_lon')).toBe('rgb(255, 0, 0)');
+        expect(calculateSegmentColor({ gx: 1.0 }, 'lap-1', 'gforce_lon')).toBe('rgb(0, 255, 0)');
+        expect(calculateSegmentColor({ gx: 0 }, 'lap-1', 'gforce_lon')).toBe('#ffffff');
+    });
+
+    it('calculates colors for gforce_lat mode', () => {
+        expect(calculateSegmentColor({ gy: -1.5 }, 'lap-1', 'gforce_lat')).toBe('rgb(0, 0, 255)');
+        expect(calculateSegmentColor({ gy: 1.5 }, 'lap-1', 'gforce_lat')).toBe('rgb(255, 0, 0)');
+        expect(calculateSegmentColor({ gy: 0 }, 'lap-1', 'gforce_lat')).toBe('#ffffff');
+    });
+
+    it('calculates colors for lap mode', () => {
+        state.lapColorsForId['lap-1'] = LAP_PALETTE[2];
+        expect(calculateSegmentColor({}, 'lap-1', 'lap')).toBe(LAP_PALETTE[2]);
+    });
+});
+
+describe('setTrajectoryColorMode', () => {
+    it('updates state.trajectoryColorMode and polyline colors', () => {
+        const poly1 = new google.maps.Polyline({ strokeColor: '#ffffff' });
+        state.lapPolylines = {
+            's1-1': [poly1]
+        };
+        state.lapDataLookup = {
+            's1-1': { points: [{ speed: 0 }, { speed: 10 }] }
+        };
+        state.globalMaxSpeed = 100;
+
+        setTrajectoryColorMode('speed');
+        expect(state.trajectoryColorMode).toBe('speed');
+        expect(poly1.opts.strokeColor).toBe('rgb(40, 20, 180)');
+    });
+});
+

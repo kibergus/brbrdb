@@ -98,6 +98,13 @@ export function updateURL() {
             params.delete('sacol');
         }
 
+        // 4d. Trajectory color mode
+        if (state.trajectoryColorMode && state.trajectoryColorMode !== 'pedals') {
+            params.set('tcol', state.trajectoryColorMode);
+        } else {
+            params.delete('tcol');
+        }
+
         // 5. Telemetry xlim (range)
         if (state.globalTelemetryXRange && state.globalTelemetryXRange.length === 2) {
             params.set('xlim', `${state.globalTelemetryXRange[0].toFixed(2)},${state.globalTelemetryXRange[1].toFixed(2)}`);

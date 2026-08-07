@@ -133,6 +133,49 @@
                             </div>
                         </div>
                     </div>
+                    <div id="map-overlay-right-controls" class="map-overlay-controls map-overlay-right" style="display: none;">
+                        <div class="custom-dropdown" id="traj-color-dropdown">
+                            <button class="dropdown-trigger-btn" id="traj-color-btn" onclick="toggleTrajDropdown(event)" title="Trajectory Color Mode">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/>
+                                    <circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/>
+                                    <circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/>
+                                    <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/>
+                                    <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.92 0 1.7-.72 1.7-1.61 0-.43-.17-.83-.44-1.13-.24-.26-.4-.63-.4-1.04 0-.84.67-1.5 1.5-1.5H16c3.31 0 6-2.69 6-6 0-4.96-4.49-9-10-9z"/>
+                                </svg>
+                                <span id="traj-color-current-label">Pedals</span>
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M6 9l6 6 6-6"/>
+                                </svg>
+                            </button>
+                            <div class="dropdown-menu" id="traj-color-menu">
+                                <div class="dropdown-item active" onclick="setTrajectoryColorMode('pedals')" data-mode="pedals">
+                                    <span class="item-color-dot mode-pedals"></span>
+                                    <span>Brake/Throttle</span>
+                                </div>
+                                <div class="dropdown-item" onclick="setTrajectoryColorMode('speed')" data-mode="speed">
+                                    <span class="item-color-dot mode-speed"></span>
+                                    <span>Speed</span>
+                                </div>
+                                <div class="dropdown-item" onclick="setTrajectoryColorMode('accel')" data-mode="accel">
+                                    <span class="item-color-dot mode-accel"></span>
+                                    <span>Acceleration</span>
+                                </div>
+                                <div class="dropdown-item" onclick="setTrajectoryColorMode('gforce_lon')" data-mode="gforce_lon">
+                                    <span class="item-color-dot mode-gforce-lon"></span>
+                                    <span>G-Force Lon</span>
+                                </div>
+                                <div class="dropdown-item" onclick="setTrajectoryColorMode('gforce_lat')" data-mode="gforce_lat">
+                                    <span class="item-color-dot mode-gforce-lat"></span>
+                                    <span>G-Force Lat</span>
+                                </div>
+                                <div class="dropdown-item" onclick="setTrajectoryColorMode('lap')" data-mode="lap">
+                                    <span class="item-color-dot mode-lap"></span>
+                                    <span>Per Lap Color</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     <div id="map">
                         <div class="map-placeholder">
                             <div class="spinner" style="width: 40px; height: 40px; border-width: 4px;"></div>

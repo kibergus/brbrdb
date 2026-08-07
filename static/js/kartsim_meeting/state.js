@@ -44,6 +44,7 @@ export const state = {
     lapToPlotIndices: { speed: {}, braking: {} },
     globalTelemetryXRange: [0, 100],
     currentMapType: 'hybrid',
+    trajectoryColorMode: 'pedals',
     deltaPlotVisible: false,
     deltaPlotInitialized: false,
     speedPlotVisible: false,

@@ -155,6 +155,16 @@ export function getSpeedAtDistance(lap, distance) {
     return p ? p.speed : null;
 }
 
+function computePointHeading(p1, p2) {
+    if (!p1 || !p2 || p1.lat === undefined || p1.lat === null || p1.lng === undefined || p1.lng === null || p2.lat === undefined || p2.lat === null || p2.lng === undefined || p2.lng === null) return 0;
+    const lat1 = p1.lat * Math.PI / 180;
+    const lat2 = p2.lat * Math.PI / 180;
+    const dLng = (p2.lng - p1.lng) * Math.PI / 180;
+    const y = Math.sin(dLng) * Math.cos(lat2);
+    const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+    return Math.atan2(y, x) * 180 / Math.PI;
+}
+
 export function precalculateLapData(lap) {
     lap.brakingPoints = [];
     if (!lap.points) return;
@@ -192,6 +202,30 @@ export function precalculateLapData(lap) {
             }
         }
         p.acceleration = acc;
+
+        if (p.gx === undefined || p.gx === null) {
+            p.gx = acc / 9.81;
+        }
+        if (p.gy === undefined || p.gy === null) {
+            let gy = 0;
+            if (n > 2 && i > 0 && i < n - 1) {
+                const pPrev = lap.points[i - 1];
+                const pNext = lap.points[i + 1];
+                const dt = (pNext.time || 0) - (pPrev.time || 0);
+                if (dt > 0 && pPrev.lat !== undefined && pNext.lat !== undefined) {
+                    const h1 = computePointHeading(pPrev, p);
+                    const h2 = computePointHeading(p, pNext);
+                    let dh = h2 - h1;
+                    while (dh > 180) dh -= 360;
+                    while (dh < -180) dh += 360;
+                    const omega = (dh * Math.PI / 180) / dt;
+                    const v = (p.speed || 0) / 3.6;
+                    const aLat = v * omega;
+                    gy = aLat / 9.81;
+                }
+            }
+            p.gy = gy;
+        }
     }
 
     for (let i = 1; i < lap.points.length; i++) {

@@ -23,6 +23,195 @@ import { findSegmentIndex, precalculateLapData, fetchTelemetryChannel } from './
 import { parseLapTime } from '../utils.js';
 import { debouncedUpdateURL } from './url_sync.js';
 
+export const LAP_PALETTE = [
+    '#00f0ff', // Lap 1: Vivid Electric Cyan
+    '#ff6600', // Lap 2: Bright Safety Orange
+    '#00ff44', // Lap 3: Electric Lime Green
+    '#ff0055', // Lap 4: Vivid Hot Pink / Magenta
+    '#ffcc00', // Lap 5: Bright Yellow
+    '#a855f7', // Lap 6: Deep Electric Purple
+    '#0088ff', // Lap 7: Vivid Cobalt Blue
+    '#ff3300', // Lap 8: Red-Orange
+    '#00ffcc', // Lap 9: Bright Aqua Teal
+    '#ff00cc', // Lap 10: Bright Fuchsia
+    '#76e000', // Lap 11: Apple Lime
+    '#e60000', // Lap 12: Pure Bright Red
+    '#33ffff', // Lap 13: Bright Cyan
+    '#ff9900', // Lap 14: Amber Orange
+    '#cc33ff', // Lap 15: Violet
+    '#00ff99'  // Lap 16: Mint Green
+];
+
+export function interpolateMultiStopColor(u, stops) {
+    const val = Math.max(0, Math.min(1, u));
+    for (let i = 0; i < stops.length - 1; i++) {
+        const [u1, c1] = stops[i];
+        const [u2, c2] = stops[i + 1];
+        if (val >= u1 && val <= u2) {
+            const f = (val - u1) / (u2 - u1 || 1);
+            const r = Math.round(c1[0] + f * (c2[0] - c1[0]));
+            const g = Math.round(c1[1] + f * (c2[1] - c1[1]));
+            const b = Math.round(c1[2] + f * (c2[2] - c1[2]));
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+    }
+    const lastColor = stops[stops.length - 1][1];
+    return `rgb(${lastColor[0]}, ${lastColor[1]}, ${lastColor[2]})`;
+}
+
+export function calculateSegmentColor(p1, lapId, mode = 'pedals', maxSpeed = 100) {
+    if (!p1) return '#ffffff';
+
+    const currentMode = mode || state.trajectoryColorMode || 'pedals';
+
+    if (currentMode === 'speed') {
+        const v = p1.speed || 0;
+        const vMax = maxSpeed > 0 ? maxSpeed : (state.globalMaxSpeed || 100);
+        const vMin = (state.globalMinSpeed !== undefined && state.globalMinSpeed < vMax) ? state.globalMinSpeed : 0;
+        const range = vMax - vMin;
+        const u = range > 0 ? Math.max(0, Math.min(1, (v - vMin) / range)) : Math.max(0, Math.min(1, v / vMax));
+
+        const SPEED_STOPS = [
+            [0.00, [40, 20, 180]],   // Apex / Minimum speed: Deep Navy/Violet
+            [0.25, [0, 200, 255]],   // Low speed / Corner exit: Cyan
+            [0.55, [255, 30, 60]],   // Mid speed / Acceleration: Crimson Red
+            [0.80, [255, 200, 0]],   // High speed straight: Gold Yellow
+            [1.00, [0, 255, 80]]     // Top speed: Neon Green
+        ];
+
+        return interpolateMultiStopColor(u, SPEED_STOPS);
+    }
+
+    if (currentMode === 'accel') {
+        const acc = p1.acceleration || 0;
+        if (acc < 0) {
+            const factor = Math.min(1, Math.abs(acc) / 4.0);
+            const intensity = Math.pow(factor, 0.5);
+            const gb = Math.round(255 * (1 - intensity));
+            return `rgb(255, ${gb}, ${gb})`;
+        } else if (acc > 0) {
+            const factor = Math.min(1, acc / 2.5);
+            const intensity = Math.pow(factor, 0.5);
+            const rb = Math.round(255 * (1 - intensity));
+            return `rgb(${rb}, 255, ${rb})`;
+        }
+        return '#ffffff';
+    }
+
+    if (currentMode === 'gforce_lon') {
+        const gx = (p1.gx !== null && p1.gx !== undefined) ? p1.gx : ((p1.acceleration || 0) / 9.81);
+        if (gx < 0) {
+            const factor = Math.min(1, Math.abs(gx) / 1.5);
+            const intensity = Math.pow(factor, 0.5);
+            const gb = Math.round(255 * (1 - intensity));
+            return `rgb(255, ${gb}, ${gb})`;
+        } else if (gx > 0) {
+            const factor = Math.min(1, gx / 1.0);
+            const intensity = Math.pow(factor, 0.5);
+            const rb = Math.round(255 * (1 - intensity));
+            return `rgb(${rb}, 255, ${rb})`;
+        }
+        return '#ffffff';
+    }
+
+    if (currentMode === 'gforce_lat') {
+        const gy = (p1.gy !== null && p1.gy !== undefined) ? p1.gy : 0;
+        if (gy < 0) {
+            const factor = Math.min(1, Math.abs(gy) / 1.5);
+            const intensity = Math.pow(factor, 0.5);
+            const rg = Math.round(255 * (1 - intensity));
+            return `rgb(${rg}, ${rg}, 255)`;
+        } else if (gy > 0) {
+            const factor = Math.min(1, gy / 1.5);
+            const intensity = Math.pow(factor, 0.5);
+            const gb = Math.round(255 * (1 - intensity));
+            return `rgb(255, ${gb}, ${gb})`;
+        }
+        return '#ffffff';
+    }
+
+    if (currentMode === 'lap') {
+        if (lapId && state.lapColorsForId[lapId]) {
+            return state.lapColorsForId[lapId];
+        }
+        return LAP_PALETTE[0];
+    }
+
+    // Default 'pedals' (throttle/brake)
+    if (p1.brake > 1.0) {
+        const intensity = Math.pow(p1.brake / 100, 0.2);
+        const factor = 1 - intensity;
+        const gb = Math.round(255 * factor);
+        return `rgb(255, ${gb}, ${gb})`;
+    } else if (p1.throttle > 1.0) {
+        const factor = (100 - p1.throttle) / 100;
+        const rb = Math.round(255 * factor);
+        return `rgb(${rb}, 255, ${rb})`;
+    }
+    return '#ffffff';
+}
+
+export function toggleTrajDropdown(event) {
+    if (event) event.stopPropagation();
+    const dropdown = document.getElementById('traj-color-dropdown');
+    if (dropdown && dropdown.classList) {
+        dropdown.classList.toggle('open');
+    }
+}
+
+export function setTrajectoryColorMode(mode) {
+    state.trajectoryColorMode = mode;
+
+    const labelMap = {
+        pedals: 'Pedals',
+        speed: 'Speed',
+        accel: 'Accel',
+        gforce_lon: 'G Lon',
+        gforce_lat: 'G Lat',
+        lap: 'Per Lap'
+    };
+
+    const currentLabel = document.getElementById('traj-color-current-label');
+    if (currentLabel) {
+        currentLabel.textContent = labelMap[mode] || 'Pedals';
+    }
+
+    document.querySelectorAll('#traj-color-menu .dropdown-item').forEach(item => {
+        if (item.classList) {
+            if (item.getAttribute('data-mode') === mode) {
+                item.classList.add('active');
+            } else {
+                item.classList.remove('active');
+            }
+        }
+    });
+
+    const dropdown = document.getElementById('traj-color-dropdown');
+    if (dropdown && dropdown.classList) {
+        dropdown.classList.remove('open');
+    }
+
+    const maxSpeed = state.globalMaxSpeed || 100;
+
+    Object.keys(state.lapPolylines).forEach(lapId => {
+        const polylines = state.lapPolylines[lapId];
+        const lap = state.lapDataLookup[lapId];
+        if (!polylines || !lap || !lap.points) return;
+
+        const numSegments = lap.points.length - 1;
+        for (let i = 0; i < numSegments; i++) {
+            const segment = polylines[i];
+            if (segment && typeof segment.setOptions === 'function') {
+                const color = calculateSegmentColor(lap.points[i], lapId, mode, maxSpeed);
+                segment.setOptions({ strokeColor: color });
+                segment.originalColor = color;
+            }
+        }
+    });
+
+    debouncedUpdateURL();
+}
+
 export function loadBaseColumnsForSessions(sessionsData) {
     const fetchSessionBase = async (session) => {
         const session_id = session.session_id;
@@ -38,6 +227,8 @@ export function loadBaseColumnsForSessions(sessionsData) {
         const speedCol = findCol(['Speed (m/s)', 'Speed']);
         const throttleCol = findCol(['Throttle (%)', 'Throttle']);
         const brakeCol = findCol(['Brake (%)', 'Brake']);
+        const gxCol = findCol(['GForceX (g)', 'GForceX', 'G-force X', 'G-Force X (g)', 'G Long', 'g_x']);
+        const gyCol = findCol(['GForceY (g)', 'GForceY', 'G-force Y', 'G-Force Y (g)', 'G Lat', 'g_y']);
 
         const colsToFetch = {
             lat: latCol,
@@ -46,7 +237,9 @@ export function loadBaseColumnsForSessions(sessionsData) {
             dist: distCol,
             speed: speedCol,
             throttle: throttleCol,
-            brake: brakeCol
+            brake: brakeCol,
+            gx: gxCol,
+            gy: gyCol
         };
 
         const fetchPromises = Object.entries(colsToFetch).map(async ([key, colName]) => {
@@ -193,6 +386,31 @@ export function loadTrackPoints(overrideSessionId) {
             const fastest80Count = Math.ceil(allLaps.length * 0.8);
             const fastest80Ids = new Set(allLaps.slice(0, fastest80Count).map(l => l.lapId));
 
+            let globalMaxSpeed = 0;
+            let globalMinSpeed = Infinity;
+            let globalLapCounter = 0;
+            sessionsData.forEach(session => {
+                if (!session.laps) return;
+                session.laps.forEach(lap => {
+                    if (lap.is_valid === false) return;
+                    const lapId = `${session.session_id}-${lap.lap_num}`;
+                    if (!state.lapColorsForId[lapId]) {
+                        state.lapColorsForId[lapId] = LAP_PALETTE[globalLapCounter % LAP_PALETTE.length];
+                    }
+                    globalLapCounter++;
+                    if (lap.points) {
+                        lap.points.forEach(p => {
+                            if (p.speed > globalMaxSpeed) globalMaxSpeed = p.speed;
+                            if (p.speed !== null && p.speed !== undefined && p.speed < globalMinSpeed) {
+                                globalMinSpeed = p.speed;
+                            }
+                        });
+                    }
+                });
+            });
+            state.globalMaxSpeed = globalMaxSpeed > 0 ? globalMaxSpeed : 100;
+            state.globalMinSpeed = (globalMinSpeed !== Infinity && globalMinSpeed < state.globalMaxSpeed) ? globalMinSpeed : 0;
+
             sessionsData.forEach((session, sIdx) => {
                 if (!session.laps) return;
                 session.laps.forEach(lap => {
@@ -228,17 +446,7 @@ export function loadTrackPoints(overrideSessionId) {
                         const p1 = lap.points[i];
                         const p2 = lap.points[i + 1];
 
-                        let color = '#ffffff';
-                        if (p1.brake > 1.0) {
-                            const intensity = Math.pow(p1.brake / 100, 0.2);
-                            const factor = 1 - intensity;
-                            const gb = Math.round(255 * factor);
-                            color = `rgb(255, ${gb}, ${gb})`;
-                        } else if (p1.throttle > 1.0) {
-                            const factor = (100 - p1.throttle) / 100;
-                            const rb = Math.round(255 * factor);
-                            color = `rgb(${rb}, 255, ${rb})`;
-                        }
+                        const color = calculateSegmentColor(p1, lapId, state.trajectoryColorMode, state.globalMaxSpeed);
 
                         const segment = new google.maps.Polyline({
                             path: [p1, p2],
@@ -378,6 +586,11 @@ export function initMap() {
             if (controls) {
                 state.map.controls[google.maps.ControlPosition.TOP_LEFT].push(controls);
                 controls.style.display = 'block';
+            }
+            const rightControls = document.getElementById('map-overlay-right-controls');
+            if (rightControls) {
+                state.map.controls[google.maps.ControlPosition.TOP_RIGHT].push(rightControls);
+                rightControls.style.display = 'block';
             }
         }
 

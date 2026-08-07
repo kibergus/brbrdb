@@ -20,7 +20,7 @@
  */
 import { state } from './state.js';
 import { showTab, showRightPanelTab, showStatsSubTab, setSort, toggleAllLaps, toggleGroupVisibility, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, onSessionChange } from './lap_selection.js';
-import { setMapType, updateDistanceMarker } from './map.js';
+import { setMapType, setTrajectoryColorMode, toggleTrajDropdown, updateDistanceMarker } from './map.js';
 import { stepDistance } from './telemetry.js';
 import { initExpandablePlots } from './plots_sync.js';
 import { debouncedUpdateURL } from './url_sync.js';
@@ -37,10 +37,18 @@ window.toggleGroupVisibility = toggleGroupVisibility;
 window.togglePlay = togglePlay;
 window.setPlaybackSpeed = setPlaybackSpeed;
 window.setMapType = setMapType;
+window.setTrajectoryColorMode = setTrajectoryColorMode;
+window.toggleTrajDropdown = toggleTrajDropdown;
 window.toggleDeltaPlot = toggleDeltaPlot;
 window.toggleSpeedPlot = toggleSpeedPlot;
 
 document.addEventListener('DOMContentLoaded', () => {
+    document.addEventListener('click', (e) => {
+        const dropdown = document.getElementById('traj-color-dropdown');
+        if (dropdown && !dropdown.contains(e.target)) {
+            dropdown.classList.remove('open');
+        }
+    });
     const slider = document.getElementById('distance-slider');
     const display = document.getElementById('distance-display');
 
@@ -158,6 +166,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Restore right panel tab from URL
     const rtab = params.get('rtab') || 'cornering';
     showRightPanelTab(rtab);
+
+    // Restore trajectory color mode from URL
+    const tcol = params.get('tcol');
+    if (tcol && ['pedals', 'speed', 'accel', 'gforce_lon', 'gforce_lat', 'lap'].includes(tcol)) {
+        setTrajectoryColorMode(tcol);
+    }
 
     window.addEventListener('resize', () => {
         const ids = ['stats-plot-lap-times', 'stats-plot-turn-gaps', 'stats-plot-apex-speeds', 'telemetry-chart', 'acceleration-chart', 'slip_angle-chart'];

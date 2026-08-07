@@ -390,6 +390,11 @@ body {
     margin-left: 1rem;
 }
 
+.map-overlay-controls.map-overlay-right {
+    margin-left: 0;
+    margin-right: 1rem;
+}
+
 .custom-selector {
     display: flex;
     background: var(--card-bg);
@@ -424,6 +429,110 @@ body {
 .selector-item.active {
     background: var(--accent);
     color: var(--bg-color);
+}
+
+/* Custom Dropdown for Map Overlay Controls */
+.custom-dropdown {
+    position: relative;
+    display: inline-block;
+}
+
+.dropdown-trigger-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 0.55rem 0.9rem;
+    color: var(--text-primary);
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(8px);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dropdown-trigger-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--accent);
+}
+
+.dropdown-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 190px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(12px);
+    display: none;
+    flex-direction: column;
+    z-index: 1000;
+    overflow: hidden;
+    padding: 4px 0;
+}
+
+.custom-dropdown.open .dropdown-menu {
+    display: flex;
+}
+
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.dropdown-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+}
+
+.dropdown-item.active {
+    background: rgba(56, 189, 248, 0.15);
+    color: var(--accent);
+    font-weight: 700;
+}
+
+.item-color-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.item-color-dot.mode-pedals {
+    background: linear-gradient(135deg, #ef4444 50%, #22c55e 50%);
+}
+
+.item-color-dot.mode-speed {
+    background: linear-gradient(135deg, rgb(40,20,180), rgb(0,200,255), rgb(255,30,60), rgb(255,200,0), rgb(0,255,80));
+}
+
+.item-color-dot.mode-accel {
+    background: linear-gradient(135deg, #ff3333 50%, #00ff44 50%);
+}
+
+.item-color-dot.mode-gforce-lon {
+    background: linear-gradient(135deg, #ef4444 50%, #22c55e 50%);
+}
+
+.item-color-dot.mode-gforce-lat {
+    background: linear-gradient(135deg, #3b82f6 50%, #f97316 50%);
+}
+
+.item-color-dot.mode-lap {
+    background: linear-gradient(135deg, #00f0ff 33%, #ff6600 33% 66%, #00ff44 66%);
 }
 
 #btn-delta, #btn-speed {
