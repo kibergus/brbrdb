@@ -1,0 +1,79 @@
+# Copyright 2026 Alexey Guseynov (kibergus). All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+import os
+import json
+import functools
+from typing import Any
+from flask import request
+
+_KEYS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'keys.json')
+AUTH_COOKIE = 'auth_key'
+_LOCALHOST_ADDRS = {'127.0.0.1', '::1'}
+
+
+@functools.lru_cache(maxsize=1)
+def load_keys() -> dict[str, dict[str, Any]]:
+    """Load valid auth keys from keys.json."""
+    with open(_KEYS_PATH, 'r') as f:
+        return json.load(f)
+
+
+def get_current_acl() -> dict[str, Any]:
+    """Return the ACL configuration for the current authenticated key or localhost."""
+    # Support multiple key sources to accommodate different clients:
+    # 1. 'X-API-Key': Custom header used by existing API routes.
+    # 2. 'key' query param: Required for SSE (EventSource) connections without custom header support.
+    # 3. AUTH_COOKIE: Web browser session cookie.
+    key = request.headers.get('X-API-Key') or request.args.get('key') or request.cookies.get(AUTH_COOKIE)
+
+    # 4. 'Authorization: Bearer <key>': Standard HTTP authorization header used by REST clients & LLM frameworks.
+    if not key and request.headers.get('Authorization', '').startswith('Bearer '):
+        key = request.headers.get('Authorization', '')[7:].strip()
+
+    valid_keys = load_keys()
+    if key in valid_keys:
+        return valid_keys[key]
+
+    if request.remote_addr in _LOCALHOST_ADDRS:
+        # Default all permissions for local development
+        return {
+            'see_videos': True,
+            'see_gallery': True,
+            'kartsim_data': True,
+            'upload_sessions': {
+                'drivers': ['*'],
+                'leagues': ['*']
+            }
+        }
+    return {}
+
+
+def can_upload_session_for_driver(acl: dict[str, Any], driver_name: str) -> bool:
+    """Check if the ACL allows session uploads for the given driver."""
+    upload_sessions = acl.get('upload_sessions')
+    if not upload_sessions:
+        return False
+    drivers = upload_sessions.get('drivers', [])
+    return '*' in drivers or driver_name in drivers
+
+
+def can_upload_session_for_league(acl: dict[str, Any], league: str) -> bool:
+    """Check if the ACL allows session uploads for the given league."""
+    upload_sessions = acl.get('upload_sessions')
+    if not upload_sessions:
+        return False
+    leagues = upload_sessions.get('leagues', [])
+    return '*' in leagues or league in leagues

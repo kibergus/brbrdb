@@ -1,0 +1,53 @@
+.plots-section {
+    margin-top: 2.5rem;
+}
+
+.plot-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.plot-card h3 {
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.plot-card h3 a {
+    color: inherit;
+    text-decoration: none;
+    transition: color 0.15s ease;
+    display: block;
+}
+
+.plot-card h3 a:hover {
+    color: var(--accent);
+}
+
+.plot-card img {
+    width: 100%;
+    border-radius: 8px;
+    display: block;
+}
+
+.gap-override-input {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 0.4rem 0.8rem;
+    border-radius: 8px;
+    width: 90px;
+    font-size: 0.9rem;
+    transition: border-color 0.2s;
+}
+
+.gap-override-input:focus {
+    border-color: var(--accent);
+    outline: none;
+}

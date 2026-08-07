@@ -1,0 +1,56 @@
+{% extends "layout.html" %}
+
+{% block breadcrumb %}
+Drivers
+{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/drivers_list.css') }}">
+{% endblock %}
+
+{% block extra_navbar %}
+<div class="drivers-header">
+    <div class="drivers-header-container">
+        <!-- Alphabet wrapper -->
+        <div class="drivers-alphabet-wrapper">
+            <div class="pagination">
+                {% for letter in drivers_grouped.keys() %}
+                <a href="#letter-{{ letter }}" class="pagination-item">{{ letter }}</a>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Search wrapper -->
+        <div class="drivers-search-wrapper">
+            <input type="text" id="driverSearch" placeholder="Search drivers...">
+        </div>
+
+        <!-- Mobile Toggle Button -->
+        <button id="alphabetToggleBtn" class="alphabet-toggle-btn" aria-label="Toggle Alphabet View">A-Z</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="drivers-container" style="margin-top: 1rem;">
+    {% for letter, drivers in drivers_grouped.items() %}
+    <div id="letter-{{ letter }}" class="letter-section" style="margin-bottom: 4rem;">
+        <h2
+            style="font-size: 2.5rem; color: var(--accent); opacity: 0.3; margin-bottom: 1rem; border-bottom: 2px solid var(--border-color);">
+            {{ letter }}</h2>
+        <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));">
+            {% for driver in drivers %}
+            <a href="{{ url_for('driver_view', name=driver) }}" class="card driver-card" data-name="{{ driver }}"
+                style="padding: 1rem 1.5rem; display: flex; align-items: center; gap: 0.75rem;">
+                <span style="font-weight: 500;">{{ driver }}</span>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<script src="{{ url_for('static', filename='js/drivers_list.js') }}"></script>
+
+
+{% endblock %}

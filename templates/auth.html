@@ -1,0 +1,32 @@
+{% extends "layout.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+{% endblock %}
+
+{% block breadcrumb %}
+<span>Authentication</span>
+{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+    <div class="auth-header">
+        <h1>Welcome Back</h1>
+        <p>Please enter your access key to continue</p>
+    </div>
+
+    {% if error %}
+    <div class="error-message">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="POST" class="auth-form">
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <div class="form-group" style="margin-bottom: 0;">
+            <input type="password" name="key" class="form-control" placeholder="Access Key" required autofocus>
+        </div>
+        <button type="submit" class="submit-btn">Authorize</button>
+    </form>
+</div>
+{% endblock %}

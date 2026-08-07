@@ -1,0 +1,178 @@
+.letter-section {
+    scroll-margin-top: var(--sticky-header-height, 180px);
+}
+
+.driver-card {
+    margin-bottom: 0 !important;
+}
+
+.driver-card:hover {
+    background: rgba(56, 189, 248, 0.05);
+    border-color: var(--accent);
+    transform: scale(1.02);
+}
+
+/* Extra navbar / header container */
+.drivers-header {
+    border-top: 1px solid var(--border-color);
+    margin-top: 0.5rem;
+    width: 100%;
+}
+
+.drivers-header-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1.5rem;
+    padding-top: 1rem;
+    padding-bottom: 1rem;
+}
+
+.drivers-alphabet-wrapper {
+    flex: 1;
+}
+
+.drivers-alphabet-wrapper .pagination {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0;
+}
+
+.drivers-alphabet-wrapper .pagination-item {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    margin: 0;
+}
+
+.drivers-search-wrapper {
+    display: flex;
+    align-items: center;
+}
+
+#driverSearch {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 0.625rem 1rem;
+    border-radius: 8px;
+    outline: none;
+    min-width: 250px;
+    transition: all 0.2s;
+}
+
+#driverSearch:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
+/* Toggle button hidden on desktop */
+.alphabet-toggle-btn {
+    display: none;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 0.625rem 1rem;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+}
+
+.alphabet-toggle-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.alphabet-toggle-btn.active {
+    background: var(--accent);
+    color: var(--bg-color);
+    border-color: var(--accent);
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+
+    /* Make navbar sticky on drivers page */
+    .navbar {
+        position: sticky !important;
+        /* top will be set dynamically via JS */
+        z-index: 1000;
+        padding-bottom: 0 !important;
+    }
+
+    .drivers-header {
+        margin-top: 0;
+    }
+
+    .drivers-header-container {
+        padding-top: 0.75rem;
+        padding-bottom: 0.75rem;
+        gap: 0.75rem;
+        width: 100%;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+    }
+
+    /* By default: search mode is active */
+    .drivers-search-wrapper {
+        flex: 1;
+        display: flex;
+    }
+
+    #driverSearch {
+        width: 100%;
+        min-width: 0;
+        /* allows shrinking */
+    }
+
+    .drivers-alphabet-wrapper {
+        display: none;
+        /* hidden by default on mobile */
+        flex: 1;
+    }
+
+    .drivers-alphabet-wrapper .pagination {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        justify-content: flex-start;
+    }
+
+    .drivers-alphabet-wrapper .pagination-item {
+        width: 34px;
+        height: 34px;
+        font-size: 0.85rem;
+    }
+
+    .alphabet-toggle-btn {
+        display: block;
+        /* show on mobile */
+        flex-shrink: 0;
+    }
+
+    /* When alphabet view is active */
+    .show-alphabet .drivers-search-wrapper {
+        display: none !important;
+    }
+
+    .show-alphabet .drivers-alphabet-wrapper {
+        display: block !important;
+    }
+
+    /* Prevent driver cards/pills from dropping margins, borders, padding, and border-radius on mobile */
+    .driver-card {
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        margin-bottom: 0 !important;
+        border-radius: 12px !important;
+        border: 1px solid var(--border-color) !important;
+    }
+}

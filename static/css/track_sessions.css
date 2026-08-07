@@ -1,0 +1,40 @@
+.plot-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-top: 2rem;
+}
+
+.plot-card img {
+    width: 100%;
+    border-radius: 8px;
+    display: block;
+}
+
+.track-header {
+    margin-bottom: 0.5rem;
+}
+
+.track-header h2 {
+    color: var(--accent);
+    font-size: 1.5rem;
+    margin-bottom: 0.25rem;
+}
+
+.track-header .conditions-badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    background: rgba(56, 189, 248, 0.1);
+    color: var(--accent);
+    border: 1px solid rgba(56, 189, 248, 0.2);
+}
+
+.track-summary {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-top: 0.75rem;
+}

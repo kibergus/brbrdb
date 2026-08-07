@@ -1,0 +1,101 @@
+{% extends "layout.html" %}
+
+{% block breadcrumb %}
+About
+{% endblock %}
+
+{% block content %}
+{% macro yt_link(handle, name) %}
+<a href="https://www.youtube.com/{{ handle }}" class="yt-link-badge" target="_blank" rel="noopener noreferrer">
+    <svg viewBox="0 0 24 24">
+        <path
+            d="M23.498 6.163a3.003 3.003 0 0 0-2.11-2.11C19.518 3.545 12 3.545 12 3.545s-7.518 0-9.388.508a3.003 3.003 0 0 0-2.11 2.11C0 8.033 0 12 0 12s0 3.967.502 5.837a3.003 3.003 0 0 0 2.11 2.11c1.87.508 9.388.508 9.388.508s7.518 0 9.388-.508a3.003 3.003 0 0 0 2.11-2.11C24 15.967 24 12 24 12s0-3.967-.502-5.837zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
+    </svg>
+    <span>{{ name }}</span>
+</a>
+{% endmacro %}
+
+<div class="card info-card">
+    <h2>Why</h2>
+
+    <p>
+        To better understand how my daughter progresses on her karting journey, how races unfold, and how she compares
+        to other athletes, I built a couple of dashboards. And then somehow it grew into this site. I share it in the hope
+        that it will help other athletes grow too, and in the belief that making knowledge accessible and structured is
+        the right thing to do.
+    </p>
+    <p>
+        For me, this project is a hobby and a way to help my daughter; I do not seek any commercial gain from it. I
+        don't mind if the whole system, or elements of it, make their way into other systems. I still need to clean up
+        the code a bit and, after that, I will share it under Apache 2.0.
+    </p>
+    <p>
+        If you are the owner of one of the systems from which I ingest data, please don't see me as a competitor. In a
+        sense, it would be easier for me if I could meet my needs using existing shared infrastructure. I only built this site
+        because I think there are better ways to show the data.
+    </p>
+
+    <h2>Terms of use</h2>
+    <p>
+        I provide this service free of charge. It is provided as-is, without warranties of any kind. In particular, I
+        can't guarantee that the information provided here is accurate, complete, or up to date, though I do my best to
+        keep it so. As this is a hobby project, it receives updates when I have free time, and I can't promise any timely
+        resolution of bugs or feature requests. Similarly, I can't promise any specific level of availability or
+        performance of the service.
+    </p>
+
+    <h2>Privacy</h2>
+    <p>
+        Analytics provided on this site are based on publicly available data. This project is in its early stages and
+        might not always get things right. If you think that something needs to be done differently, please let me know
+        by writing to <a href="mailto:brbrdb@kibergus.com">brbrdb@kibergus.com</a>.
+    </p>
+    <p>
+        This site does not use third-party cookies. This site does collect access logs so that I can understand which
+        features are used and guide further improvements.
+    </p>
+
+    <h2>Gallery</h2>
+    <p>
+        Some of you may have access to the gallery section of the site. This gallery is intended for sharing race photos
+        with athletes or their guardians. It is then their decision whether to share these photos further (whether on
+        social media or by sending them to family members). Please don't share access links widely; instead, share
+        the photos themselves. As the author of the photos, I grant permission to use them for any lawful purposes,
+        commercial or non-commercial, as long as you have permission to do so from the people in the photos or their
+        guardians.
+    </p>
+    <p>
+        This gallery exists because it is easy for me to take a few extra photos while photographing my daughter on
+        the track, and I hope it is useful and helps preserve memories. Thus, the gallery is semi-private,
+        shared with people I meet at racing events.
+    </p>
+    <p>
+        You may find some videos in the gallery too. They will all be low-resolution, and currently I don't have a
+        process for sharing them more widely without requiring a significant investment of my time.
+    </p>
+
+    <h2>Telemetry</h2>
+    <p>
+        Telemetry is an invaluable source of insights. It helps focus on specific aspects that can be improved. In a
+        simulator, we can get a lot of detailed telemetry. I couldn't find an analysis platform that I liked, so I wrote
+        my own. I also don't think that access to powerful data analysis should cost a fortune.
+    </p>
+    <p>
+        This feature is highly experimental and is not yet ready for general use, though I might start offering early
+        access soon. Since I want to facilitate learning and help athletes grow, I will likely require the sessions
+        to be publicly visible so that athletes can learn from each other.
+    </p>
+
+    <h2>Credits and gratitude</h2>
+    <p>
+        If you have found these tools useful, consider subscribing and engaging with our YouTube channels:
+    </p>
+    <div class="yt-channels-container">
+        {{ yt_link('@brbrkitten', 'BrBrKitten') }}
+        {{ yt_link('@curiogus', 'Curiogus') }}
+    </div>
+    <p>
+        © Alexey Guseynov 2026.
+    </p>
+</div>
+{% endblock %}

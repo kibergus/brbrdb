@@ -1,0 +1,19 @@
+.gap-override-input {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 0.4rem 0.8rem;
+    border-radius: 8px;
+    width: 90px;
+    font-size: 0.9rem;
+    transition: border-color 0.2s;
+}
+
+.gap-override-input:focus {
+    border-color: var(--accent);
+    outline: none;
+}
+
+.session-title-link:hover {
+    color: var(--accent) !important;
+}

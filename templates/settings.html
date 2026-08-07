@@ -1,0 +1,60 @@
+{% extends "layout.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 600px; margin: 2rem auto; padding: 2rem;">
+    <h1>Settings</h1>
+    <form action="{{ url_for('save_settings') }}" method="POST">
+        {% if next_url %}
+        <input type="hidden" name="next_url" value="{{ next_url }}">
+        {% endif %}
+        
+        <div class="form-section">
+            <label style="display: block; font-weight: 600; margin-bottom: 0.8rem; font-size: 1.1rem; color: var(--text-primary);">Selected drivers</label>
+            <div id="hero-pilots-list">
+                {# Render active heroes #}
+                {% for pilot in hero_pilot.split(',') if pilot.strip() %}
+                <div class="pilot-item pilot-active" style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <input type="text" name="hero_pilot" value="{{ pilot.strip() }}" class="form-control" placeholder="Driver Name">
+                    <button type="button" class="btn btn-icon toggle-btn active" onclick="togglePilot(this)" title="Toggle Highlight (Active)">
+                        <span class="icon">👁️</span>
+                    </button>
+                    <button type="button" class="btn btn-icon btn-danger" onclick="this.parentElement.remove()" title="Delete">&times;</button>
+                </div>
+                {% endfor %}
+
+                {# Render disabled heroes #}
+                {% for pilot in disabled_heroes.split(',') if pilot.strip() %}
+                <div class="pilot-item pilot-disabled" style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
+                    <input type="text" name="disabled_hero" value="{{ pilot.strip() }}" class="form-control disabled-input" placeholder="Driver Name">
+                    <button type="button" class="btn btn-icon toggle-btn disabled" onclick="togglePilot(this)" title="Toggle Highlight (Disabled)">
+                        <span class="icon">👁️</span>
+                    </button>
+                    <button type="button" class="btn btn-icon btn-danger" onclick="this.parentElement.remove()" title="Delete">&times;</button>
+                </div>
+                {% endfor %}
+            </div>
+            
+            <button type="button" class="btn btn-secondary" onclick="addPilot()" style="margin-top: 0.5rem; width: auto;">
+                + Add Driver
+            </button>
+        </div>
+
+        <p class="hint" style="margin-top: 1.5rem; color: var(--text-secondary); font-size: 0.85rem; line-height: 1.4;">
+            Drivers with <span class="eye-sample active">👁️</span> are highlighted on plots. 
+            Disabled drivers (<span class="eye-sample disabled">👁️</span>) are remembered but won't be highlighted.
+        </p>
+
+        <button type="submit" class="btn btn-save" style="margin-top: 2rem; width: 100%;">
+            Save Settings
+        </button>
+    </form>
+</div>
+
+
+<script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+
+{% endblock %}

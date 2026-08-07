@@ -1,0 +1,89 @@
+{% extends "layout.html" %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a>
+<span class="text-secondary"> / </span>
+<span>Plots Verification</span>
+{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/plots.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="plots-header">
+    <h1>Plots Verification</h1>
+    <p class="text-secondary">A quick glance at key plots to ensure everything is rendering correctly.</p>
+</div>
+
+<div class="tabs">
+    <button class="tab-btn active" onclick="openTab(event, 'violin-tab')">Violinplots</button>
+    <button class="tab-btn" onclick="openTab(event, 'gap-tab')">Gap</button>
+    <button class="tab-btn" onclick="openTab(event, 'combined-tab')">Combined</button>
+</div>
+
+<div id="violin-tab" class="tab-content active">
+    <div class="plots-container">
+        {% for plot in violin_plots %}
+        <div class="card plot-card">
+            <div class="plot-info">
+                <h3 class="plot-title">{{ plot.label }}</h3>
+                <code class="plot-path">{{ plot.url }}</code>
+            </div>
+            <div class="plot-image-container">
+                <img src="{{ plot.url }}" alt="{{ plot.label }}" class="plot-image" loading="lazy">
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div id="gap-tab" class="tab-content">
+    <div class="plots-container">
+        {% for plot in gap_plots %}
+        <div class="card plot-card">
+            <div class="plot-info">
+                <h3 class="plot-title">{{ plot.label }}</h3>
+                <code class="plot-path">{{ plot.url }}</code>
+            </div>
+            <div class="plot-image-container">
+                <img src="{{ plot.url }}" alt="{{ plot.label }}" class="plot-image" loading="lazy">
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div id="combined-tab" class="tab-content">
+    <div class="plots-container">
+        {% for plot in combined_plots %}
+        <div class="card plot-card">
+            <div class="plot-info">
+                <h3 class="plot-title">{{ plot.label }}</h3>
+                <code class="plot-path">{{ plot.url }}</code>
+            </div>
+            <div class="plot-image-container">
+                <img src="{{ plot.url }}" alt="{{ plot.label }}" class="plot-image" loading="lazy">
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<script>
+function openTab(evt, tabName) {
+    var i, tabcontent, tablinks;
+    tabcontent = document.getElementsByClassName("tab-content");
+    for (i = 0; i < tabcontent.length; i++) {
+        tabcontent[i].classList.remove("active");
+    }
+    tablinks = document.getElementsByClassName("tab-btn");
+    for (i = 0; i < tablinks.length; i++) {
+        tablinks[i].classList.remove("active");
+    }
+    document.getElementById(tabName).classList.add("active");
+    evt.currentTarget.classList.add("active");
+}
+</script>
+
+{% endblock %}

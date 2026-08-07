@@ -1,0 +1,38 @@
+{% extends "layout.html" %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a>
+<span class="breadcrumb-separator">/</span>
+<span class="active">Social Violin Plots Demo</span>
+{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/social_violins.css') }}">
+{% endblock %}
+
+{% block content %}
+
+<div class="social-plots-grid">
+    {% for plot in demo_plots %}
+    <div class="social-plot-card">
+        <div class="plot-card-media">
+            <img src="{{ plot.url }}" alt="Violin Plot" class="social-violin-img" loading="lazy">
+        </div>
+        <div class="plot-card-actions">
+            <a href="{{ plot.url }}" target="_blank" class="btn btn-secondary">Open Full Image</a>
+            <button class="btn btn-primary" onclick="copyUrl('{{ request.host_url[:-1] }}{{ plot.url }}')">Copy
+                URL</button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+
+<script>
+    function copyUrl(url) {
+        navigator.clipboard.writeText(url).then(() => {
+            alert('URL copied to clipboard!');
+        });
+    }
+</script>
+{% endblock %}

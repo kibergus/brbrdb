@@ -1,0 +1,18 @@
+{% extends "layout.html" %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a> / {{ get_league_name(league) }}
+{% endblock %}
+
+{% block content %}
+<div class="grid">
+    {% for class_name in classes %}
+    <a href="{{ url_for('class_view', league=league, class_name=class_name) }}" class="card"
+        style="display: flex; align-items: center; justify-content: center; text-align: center; min-height: 100px;">
+        <h3 class="{{ get_class_info(class_name).class_type or '' }}" style="margin: 0;">
+            {{get_class_info(class_name).name}}
+        </h3>
+    </a>
+    {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,343 @@
+{% extends "layout.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/session.css') }}">
+{% endblock %}
+
+{% block nav_links_extra %}
+{% if get_current_acl().get('see_gallery') and has_meeting_gallery(metadata.league, metadata.date) %}
+<a href="{{ get_gallery_url() }}" class="nav-link">Gallery</a>
+{% endif %}
+{% endblock %}
+
+{% block nav_mobile_extra %}
+{% if get_current_acl().get('see_gallery') and has_meeting_gallery(metadata.league, metadata.date) %}
+<a href="{{ get_gallery_url() }}" class="nav-mobile-link">Gallery</a>
+{% endif %}
+{% endblock %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a> /
+<a href="{{ url_for('league_view', league=metadata.league) }}">{{ get_league_name(metadata.league) }}</a> /
+<a href="{{ url_for('class_view', league=metadata.league, class_name=metadata.class) }}">
+    {{get_class_info(metadata.class).name}}
+</a> /
+{% if metadata.league == 'kartsim' %}
+<a
+    href="{{ url_for('location.telemetry_view', league=metadata.league, class_name=metadata.class, date=metadata.date, track=metadata.track) }}">{{
+    metadata.date }} - {{ metadata.track }}</a> /
+{% else %}
+<a
+    href="{{ url_for('meeting_view', league=metadata.league, class_name=metadata.class, date=metadata.date, track=metadata.track) }}">{{
+    metadata.date }} - {{ metadata.track }}</a> /
+{% endif %}
+{% if ' / ' in metadata.session_name %}
+    {% set parts = metadata.session_name.split(' / ', 1) %}
+    {% set p0 = parts[0].strip().lower() %}
+    {% set c_name = get_class_info(metadata.class).name.strip().lower() %}
+    {% set c_id = metadata.class.strip().lower() %}
+    {% if p0 in c_name or c_name in p0 or p0 in c_id or c_id in p0 %}
+        {{ parts[1] }}
+    {% else %}
+        <a href="{{ url_for('class_view', league=metadata.league, class_name=metadata.class) }}">{{ parts[0] }}</a> / {{ parts[1] }}
+    {% endif %}
+{% else %}
+    {{ metadata.session_name }}
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="session-header">
+    {% if prev_session %}
+    <a href="{{ url_for('session_view', league=metadata.league, class_name=metadata.class, date=metadata.date, track=metadata.track, session_id=prev_session.session_id) }}"
+        class="nav-btn prev" title="Previous: {{ prev_session.session_name }}">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+    </a>
+    {% else %}
+    <div class="nav-btn prev disabled">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+    </div>
+    {% endif %}
+
+    <div class="session-header-content">
+        <div>
+            <h1 style="margin-bottom: 0.5rem">{{ metadata.session_name }}</h1>
+            <p style="color: var(--text-secondary); margin-bottom: 0.5rem;">
+                {{ get_class_info(metadata.class).name }} • {{ metadata.date }}{% if metadata.time %} • {{ metadata.time
+                }}{% endif %} • {{ metadata.track }}
+            </p>
+            {% if metadata.track_conditions or metadata.temperature or metadata.weather %}
+            <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem;">
+                {% if metadata.track_conditions %}<span class="badge badge-grey">{{ metadata.track_conditions }}</span>{%
+                endif %}
+                {% if metadata.weather %}<span class="badge badge-grey">{{ metadata.weather }}</span>{% endif %}
+                {% if metadata.temperature %}<span class="badge badge-grey">{{ metadata.temperature }}</span>{% endif %}
+            </div>
+            {% endif %}
+        </div>
+        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
+            {% if metadata.alphatiming_url %}
+            <a href="{{ metadata.alphatiming_url }}" target="_blank" class="badge"
+                style="background: var(--accent); color: white; text-decoration: none; padding: 0.5rem 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                Official Results
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                    <polyline points="15 3 21 3 21 9"></polyline>
+                    <line x1="10" y1="14" x2="21" y2="3"></line>
+                </svg>
+            </a>
+            {% endif %}
+            {% if has_telemetry %}
+            <a href="{{ url_for('location.telemetry_view', league=metadata.league, class_name=metadata.class, date=metadata.date, track=metadata.track, session_id=metadata.session_id) }}" class="badge"
+                style="background: var(--accent); color: white; text-decoration: none; padding: 0.5rem 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                Telemetry
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                </svg>
+            </a>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if next_session %}
+    <a href="{{ url_for('session_view', league=metadata.league, class_name=metadata.class, date=metadata.date, track=metadata.track, session_id=next_session.session_id) }}"
+        class="nav-btn next" title="Next: {{ next_session.session_name }}">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+    </a>
+    {% else %}
+    <div class="nav-btn next disabled">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+    </div>
+    {% endif %}
+</div>
+
+
+
+<h2>Lap Time Comparison</h2>
+<div class="chart-container">
+    <canvas id="lapChart" height="400"></canvas>
+</div>
+
+<h2>Results</h2>
+<div class="table-container">
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 1px; white-space: nowrap; text-align: center;"><input type="checkbox" id="selectAll"
+                        checked title="Select/Deselect All"></th>
+                <th style="width: 1px; white-space: nowrap; text-align: center;">Pos</th>
+                <th>Driver Name</th>
+                <th>Best Lap</th>
+                <th colspan="2" style="text-align: center;">Gap</th>
+                <th>Consistency (Std)</th>
+                <th>Laps</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% set colors = ['#38bdf8', '#f87171', '#4ade80', '#fbbf24', '#a78bfa', '#ec4899', '#6366f1', '#f59e0b',
+            '#10b981', '#ef4444'] %}
+            {% for driver in drivers %}
+            {% set driver_penalties = penalties | selectattr('Name', 'equalto', driver.name) | list %}
+            <tr data-driver="{{ driver.name }}" {% if driver_penalties %}class="has-penalty" {% endif %}>
+                <td style="width: 1px; white-space: nowrap; text-align: center;">
+                    <input type="checkbox" class="driver-toggle driver-checkbox" data-driver="{{ driver.name }}" checked
+                        style="--check-color: {{ colors[loop.index0 % colors|length] }};">
+                </td>
+                <td
+                    style="width: 1px; white-space: nowrap; text-align: center; font-weight: 600; color: var(--text-secondary);">
+                    <div style="display: flex; align-items: baseline; justify-content: center; gap: 0.5rem;">
+                        <span>{{ driver.pos }}</span>
+                        {% if driver.pos_gained > 0 %}
+                        <span style="color: var(--success); font-size: 0.75rem;">▲{{ driver.pos_gained }}</span>
+                        {% elif driver.pos_gained < 0 %} <span style="color: var(--danger); font-size: 0.75rem;">▼{{
+                            driver.pos_gained | abs }}</span>
+                            {% endif %}
+                    </div>
+                </td>
+                <td style="font-weight: 600;">
+                    <a href="{{ url_for('driver_view', name=driver.name) }}"
+                        style="color: inherit; text-decoration: none;">{{ driver.name }}</a>
+                    {% if driver.is_fastest %}
+                    <span class="badge badge-blue" style="margin-left: 0.5rem">Fastest</span>
+                    {% endif %}
+                    {% if driver.pos == 'EXCL' %}
+                    <span class="badge badge-red" style="margin-left: 0.5rem">Excluded</span>
+                    {% endif %}
+                </td>
+                <td style="color: var(--accent);">{{ driver.best_lap }}</td>
+                <td style="text-align: right; font-family: monospace; color: var(--text-secondary); width: 1px; white-space: nowrap;">{{ driver.gap_leader }}</td>
+                <td style="text-align: right; font-family: monospace; color: var(--text-secondary); width: 1px; white-space: nowrap;">{{ driver.gap_next }}</td>
+                <td>{{ driver.consistency }}</td>
+                <td>{{ driver.count }}</td>
+            </tr>
+            {% for p in driver_penalties %}
+            <tr class="penalty-row {% if not loop.last %}has-penalty{% endif %}" data-driver="{{ driver.name }}">
+                <td colspan="100"
+                    style="padding-top: 0; padding-bottom: 0.75rem; color: var(--danger); font-size: 0.875rem;">
+                    <span style="font-weight: 600; margin-left: 3.5rem;">Penalty:</span> {{ p.Penalty }}
+                </td>
+            </tr>
+            {% endfor %}
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if metadata.session_id %}
+<br />
+
+<div class="analysis-plots">
+    <div class="card" style="margin-bottom: 2rem; padding: 1rem;">
+        {% if metadata.is_final %}
+        <h3 style="margin-bottom: 1rem;">Gap to Leader</h3>
+        <img src="{{ url_for('plots.gap_plot', session=metadata.league + '/' + metadata.class + '/' + metadata.date + '/' + metadata.track + '/' + metadata.session_id) }}"
+            alt="Gap Plot" style="width: 100%; border-radius: 8px; background: #000;">
+        {% endif %}
+
+        <h3 style="margin-bottom: 1rem;">Lap Time Distribution</h3>
+        <img src="{{ url_for('plots.violin_plot', league=metadata.league, class_name=metadata.class, date=metadata.date, track=metadata.track, session_id=metadata.session_id) }}"
+            alt="Violin Plot" style="width: 100%; border-radius: 8px; background: #000;">
+    </div>
+</div>
+
+{% if overlapping_videos %}
+<h2>Session Videos</h2>
+    {% for entry in overlapping_videos %}
+    {% set outer_loop_index = loop.index %}
+    <div class="card video-card" id="video-card-{{ outer_loop_index }}">
+        {% if entry.videos %}
+            {# Grouped videos #}
+            {% set first_video = entry.videos[0] %}
+            <h3 style="margin-bottom: 1rem;" id="title-{{ outer_loop_index }}">
+                {{ entry.source_name }}: {{ first_video.basename }}
+            </h3>
+        {% else %}
+            {# Single non-grouped video #}
+            {% set first_video = entry %}
+            <h3 style="margin-bottom: 1rem;">{{ entry.basename }}</h3>
+        {% endif %}
+
+        <div class="video-container" id="container-{{ outer_loop_index }}">
+            <video src="{{ first_video.url }}" id="video-{{ outer_loop_index }}" poster="{{ first_video.thumbnail_url }}" preload="none" onclick="togglePlay('video-{{ outer_loop_index }}')"></video>
+            
+            <div class="video-controls-overlay">
+                <div class="progress-area" onclick="seekVideo(event, 'video-{{ outer_loop_index }}')">
+                    <div class="progress-bar" id="progress-{{ outer_loop_index }}"></div>
+                </div>
+                
+                <div class="controls-main">
+                    <div class="controls-left">
+                        <button class="v-btn play-pause-btn" onclick="togglePlay('video-{{ outer_loop_index }}')" title="Play/Pause (Space)">
+                            <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"></path></svg>
+                            <svg class="pause-icon" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path></svg>
+                        </button>
+                        <div class="time-display" id="time-{{ outer_loop_index }}">0:00 / 0:00</div>
+                    </div>
+
+                    <div class="controls-center">
+                        <button class="v-btn" title="Step Back (,)" onclick="stepVideo('video-{{ outer_loop_index }}', -0.033)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"></polyline><polyline points="18 17 13 12 18 7"></polyline></svg>
+                        </button>
+                        <button class="v-btn" title="Step Forward (.)" onclick="stepVideo('video-{{ outer_loop_index }}', 0.033)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"></polyline><polyline points="6 17 11 12 6 7"></polyline></svg>
+                        </button>
+                    </div>
+
+                    <div class="controls-right">
+                        <select class="speed-select-mini" onchange="document.getElementById('video-{{ outer_loop_index }}').playbackRate = parseFloat(this.value)">
+                            <option value="1" selected>1x</option>
+                            <option value="0.1">0.1x</option>
+                            <option value="0.25">0.25x</option>
+                            <option value="0.5">0.5x</option>
+                            <option value="1.25">1.25x</option>
+                            <option value="1.5">1.5x</option>
+                            <option value="2">2x</option>
+                            <option value="4">4x</option>
+                            <option value="8">8x</option>
+                        </select>
+                        <button class="v-btn" title="Fullscreen" onclick="toggleFullscreen('video-card-{{ outer_loop_index }}')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="driver-marker-controls" style="margin-top: 1.5rem; display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <label for="driver-select-{{ outer_loop_index }}"
+                    style="font-weight: 500; font-size: 0.9rem; color: var(--text-secondary); letter-spacing: 0.05em;">Sync to:</label>
+                <select id="driver-select-{{ outer_loop_index }}" class="driver-marker-select"
+                    data-video-index="{{ outer_loop_index }}" style="margin-left: 0;">
+                    {% for driver in drivers %}
+                    <option value="{{ driver.name }}">{{ driver.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div id="markers-{{ outer_loop_index }}"
+                style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;">
+                {% if entry.videos %}
+                    {% for video in entry.videos %}
+                        {% set video_loop = loop %}
+                        {% for marker in video.markers %}
+                        <button class="badge badge-grey marker-pill {{ 'v-odd' if video_loop.index % 2 != 0 else 'v-even' }}" 
+                            data-driver="{{ marker.driver }}"
+                            data-url="{{ video.url }}"
+                            data-filename="{{ video.basename }}"
+                            data-source="{{ entry.source_name }}"
+                            data-video-time="{{ marker.video_time }}"
+                            style="cursor: pointer; border: none; margin: 0;"
+                            onclick="switchVideo(this, '{{ outer_loop_index }}')">
+                            L{{ marker.lap }} ({{ format_time(marker.lap_time) }})
+                        </button>
+                        {% endfor %}
+                    {% endfor %}
+                {% else %}
+                    {% for marker in entry.markers %}
+                    <button class="badge badge-grey marker-pill" data-driver="{{ marker.driver }}"
+                        style="cursor: pointer; border: none; margin: 0;"
+                        onclick="playAtTime('video-{{ outer_loop_index }}', {{ marker.video_time }})">
+                        L{{ marker.lap }} ({{ format_time(marker.lap_time) }})
+                    </button>
+                    {% endfor %}
+                {% endif %}
+                <div class="no-markers-msg"
+                    style="display: none; color: var(--text-secondary); font-size: 0.9rem; padding: 0.5rem 0;">
+                    No markers for this driver in this video.
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% endif %}
+
+<script>
+    const SESSION_CONFIG = {
+        lapData: {{ lap_data | tojson }},
+        driversList: {{ drivers | tojson }},
+        sessionDrivers: {{ drivers | map(attribute = 'name') | list | tojson }},
+        heroNames: {{ HERO_NAMES | tojson }}
+    };
+</script>
+<script src="{{ url_for('static', filename='js/video_player.js') }}"></script>
+<script src="{{ url_for('static', filename='js/session.js') }}"></script>
+
+{% endblock %}

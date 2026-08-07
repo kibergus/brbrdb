@@ -1,0 +1,448 @@
+{% extends "layout.html" %}
+
+{% block container_class %}{% endblock %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a> /
+<a href="{{ url_for('league_view', league=league) }}">{{ get_league_name(league) }}</a> /
+{{get_class_info(class_name).name}}
+{% endblock %}
+
+{% block content %}
+<div class="container">
+{% if years|length > 0 %}
+<div class="pagination">
+    {% for year in years %}
+    <a href="{{ url_for('class_view', league=league, class_name=class_name, year=year, view=view_mode) }}"
+        class="pagination-item {% if year == selected_year %}active{% endif %}">
+        {{ year }}
+    </a>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if is_kartsim %}
+<div class="pagination" style="margin-bottom: 1.5rem;">
+    <a href="{{ url_for('class_view', league=league, class_name=class_name, year=selected_year, view='by_date') }}"
+        class="pagination-item {% if view_mode == 'by_date' %}active{% endif %}">
+        By Date
+    </a>
+    <a href="{{ url_for('class_view', league=league, class_name=class_name, year=selected_year, view='by_track') }}"
+        class="pagination-item {% if view_mode == 'by_track' %}active{% endif %}">
+        By Track
+    </a>
+    {% if HERO_NAMES %}
+    <a href="{{ url_for('class_view', league=league, class_name=class_name, year=selected_year, view='activity') }}"
+        class="pagination-item {% if view_mode == 'activity' %}active{% endif %}">
+        Activity
+    </a>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if is_kartsim and HERO_NAMES and view_mode == 'activity' %}
+<div class="card" style="margin-bottom: 2rem; border-top: 4px solid var(--accent); padding: 1.5rem;">
+    <h2 style="color: var(--accent); margin-bottom: 1.0rem; margin-top: 0;">
+        Training activity
+    </h2>
+    <div id="driverPillsContainer" style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem;"></div>
+    <div style="background: rgba(0,0,0,0.2); border-radius: 8px; padding: 1.5rem; margin-bottom: 1.5rem;">
+        <h3 style="font-size: 0.875rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1rem;">Daily Training Time</h3>
+        <div style="height: 200px; position: relative;">
+            <canvas id="dailyChart"></canvas>
+        </div>
+    </div>
+    <div style="background: rgba(0,0,0,0.2); border-radius: 8px; padding: 1.5rem;">
+        <h3 style="font-size: 0.875rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1rem;">Weekly Training Time</h3>
+        <div style="height: 200px; position: relative;">
+            <canvas id="weeklyChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const league = "{{ league }}";
+    const className = "{{ class_name }}";
+    const year = "{{ selected_year }}";
+    
+    fetch("{{ url_for('plots.training_data_api', league=league, class_name=class_name) }}?year=" + year)
+        .then(response => response.json())
+        .then(data => {
+            // Determine active drivers across both daily and weekly datasets
+            const allDrivers = new Set();
+            const checkDrivers = (arr) => {
+                if (arr) {
+                    arr.forEach(d => {
+                        if (d.drivers) {
+                            Object.keys(d.drivers).forEach(name => {
+                                if (d.drivers[name] > 0) {
+                                    allDrivers.add(name);
+                                }
+                            });
+                        }
+                    });
+                }
+            };
+            checkDrivers(data.daily);
+            checkDrivers(data.weekly);
+            const activeDrivers = Array.from(allDrivers).sort();
+
+            const palette = [
+                '#38bdf8', // Sky Blue
+                '#10b981', // Emerald Green
+                '#fbbf24', // Amber/Yellow
+                '#ec4899', // Fuchsia
+                '#8b5cf6', // Violet
+                '#f97316', // Orange
+            ];
+            const accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#38bdf8';
+
+            // Populate driver pills
+            const pillsContainer = document.getElementById('driverPillsContainer');
+            if (pillsContainer) {
+                pillsContainer.innerHTML = '';
+                if (activeDrivers.length <= 1) {
+                    const driverName = activeDrivers[0] || (data.hero_names && data.hero_names[0]) || 'Training Time';
+                    const color = accentColor;
+                    createPill(pillsContainer, driverName, color);
+                } else {
+                    activeDrivers.forEach((driverName, idx) => {
+                        const color = palette[idx % palette.length];
+                        createPill(pillsContainer, driverName, color);
+                    });
+                }
+            }
+
+            if (data.daily && data.daily.length > 0) {
+                renderChart('dailyChart', data.daily, 'date', data.hero_names, activeDrivers, palette, accentColor);
+            }
+            if (data.weekly && data.weekly.length > 0) {
+                renderChart('weeklyChart', data.weekly, 'week', data.hero_names, activeDrivers, palette, accentColor);
+            }
+        });
+
+    function createPill(container, name, color) {
+        const pill = document.createElement('div');
+        pill.className = 'badge';
+        pill.style.display = 'inline-flex';
+        pill.style.alignItems = 'center';
+        pill.style.gap = '0.5rem';
+        pill.style.background = 'rgba(255, 255, 255, 0.05)';
+        pill.style.border = '1px solid var(--border-color)';
+        pill.style.color = 'var(--text-primary)';
+        pill.style.padding = '0.35rem 0.75rem';
+        pill.style.fontSize = '0.8rem';
+        pill.style.borderRadius = '9999px';
+        
+        const dot = document.createElement('span');
+        dot.style.width = '8px';
+        dot.style.height = '8px';
+        dot.style.borderRadius = '50%';
+        dot.style.backgroundColor = color;
+        dot.style.display = 'inline-block';
+        
+        pill.appendChild(dot);
+        
+        const label = document.createElement('span');
+        label.textContent = name;
+        pill.appendChild(label);
+        
+        container.appendChild(pill);
+    }
+
+    function formatDuration(totalSeconds) {
+        const h = Math.floor(totalSeconds / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        if (h > 0) return h + 'h ' + m + 'm';
+        return m + 'm';
+    }
+
+    function getDriverTime(d, name) {
+        if (!d.drivers) return 0;
+        if (d.drivers[name] !== undefined) return d.drivers[name];
+        const lowerName = name.toLowerCase();
+        for (const k of Object.keys(d.drivers)) {
+            if (k.toLowerCase() === lowerName) {
+                return d.drivers[k];
+            }
+        }
+        return 0;
+    }
+
+    function renderChart(canvasId, chartData, xKey, heroNames, activeDrivers, palette, accentColor) {
+        const ctx = document.getElementById(canvasId).getContext('2d');
+        const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-secondary').trim() || '#94a3b8';
+        const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--border-color').trim() || '#334155';
+
+        const datasets = [];
+        if (activeDrivers.length <= 1) {
+            const driverName = activeDrivers[0] || (heroNames && heroNames[0]) || 'Training Time';
+            datasets.push({
+                label: driverName,
+                data: chartData.map(d => {
+                    if (activeDrivers[0]) {
+                        return getDriverTime(d, activeDrivers[0]) / 3600;
+                    }
+                    return d.total / 3600;
+                }),
+                backgroundColor: accentColor + '66',
+                borderColor: accentColor,
+                borderWidth: 1,
+                borderRadius: 4
+            });
+        } else {
+            activeDrivers.forEach((driverName, idx) => {
+                const color = palette[idx % palette.length];
+                datasets.push({
+                    label: driverName,
+                    data: chartData.map(d => getDriverTime(d, driverName) / 3600),
+                    backgroundColor: color + '66',
+                    borderColor: color,
+                    borderWidth: 1,
+                    borderRadius: 4
+                });
+            });
+        }
+
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: chartData.map(d => d[xKey]),
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        display: false // No need to duplicate the legend on plots
+                    },
+                    tooltip: {
+                        backgroundColor: '#1e293b',
+                        titleColor: '#f8fafc',
+                        bodyColor: '#f8fafc',
+                        borderColor: borderColor,
+                        borderWidth: 1,
+                        padding: 10,
+                        callbacks: {
+                            label: function(context) {
+                                const driverLabel = activeDrivers.length > 1 ? context.dataset.label + ': ' : '';
+                                return ' ' + driverLabel + formatDuration(context.raw * 3600);
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: textColor, font: { size: 10 } }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: borderColor, drawBorder: false },
+                        ticks: {
+                            color: textColor,
+                            font: { size: 10 },
+                            callback: function(value) {
+                                return formatDuration(value * 3600);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+});
+</script>
+{% endif %}
+
+
+{% if view_mode == 'by_track' %}
+<div class="grid">
+    {% for track, track_conditions in sorted_track_keys %}
+    <div class="card" style="position: relative;">
+        <a href="{{ url_for('track_sessions_view', league=league, class_name=class_name, track=track, year=selected_year) }}"
+            class="stretched-link" style="text-decoration: none;">
+            <h3 style="color: var(--accent); margin-bottom: 0.5rem;">{{ track }}</h3>
+        </a>
+        <div class="d-flex flex-wrap gap-2" style="position: relative; z-index: 2;">
+            {% set conditions_list = track_conditions.split(',') %}
+            {% for cond in conditions_list %}
+            <a href="{{ url_for('track_sessions_view', league=league, class_name=class_name, track=track, track_conditions=cond, year=selected_year) }}"
+                class="badge badge-blue" style="text-decoration: none;">{{ cond }}</a>
+            {% endfor %}
+        </div>
+        <p style="color: var(--text-secondary); font-size: 0.875rem; margin: 0;">
+            {{ track_groups[track]|length }} session{{ 's' if track_groups[track]|length != 1 else '' }}
+        </p>
+    </div>
+    {% endfor %}
+</div>
+{% elif view_mode == 'activity' %}
+    {# Handled above #}
+{% else %}
+<div class="grid">
+    {% for date, track in meeting_keys %}
+    <div class="card" style="position: relative;">
+        {% if league == 'kartsim' %}
+        <a href="{{ url_for('location.telemetry_view', league=league, class_name=class_name, date=date, track=track) }}"
+            class="stretched-link" style="text-decoration: none;">
+        {% else %}
+        <a href="{{ url_for('meeting_view', league=league, class_name=class_name, date=date, track=track) }}"
+            class="stretched-link" style="text-decoration: none;">
+        {% endif %}
+            <h3 style="color: var(--accent); margin-bottom: 0.5rem;">{{ date }}</h3>
+        </a>
+        <p style="font-weight:600; font-size: 1.125rem; margin-top: 0; margin-bottom: 0.5rem;">{{ track }}</p>
+        {% set cond_str = meeting_conditions.get((date, track), 'Unknown') %}
+        <div class="d-flex flex-wrap gap-2" style="position: relative; z-index: 2;">
+            {% set conditions_list = cond_str.split(',') %}
+            {% for cond in conditions_list %}
+            <a href="{{ url_for('track_sessions_view', league=league, class_name=class_name, track=track, track_conditions=cond, year=selected_year) }}"
+                class="badge badge-blue" style="text-decoration: none;">{{ cond }}</a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+</div>
+{% if championship %}
+<div class="container-fluid">
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/league.css') }}">
+{% endblock %}
+
+<div class="card" style="margin-top: 3rem; margin-bottom: 2rem; border-top: 4px solid var(--accent); overflow: hidden;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+        <h2 style="margin: 0; color: var(--accent);">{{ championship.championship_name }}</h2>
+        {% if championship.url %}
+        <a href="{{ championship.url }}" target="_blank" class="badge badge-blue"
+            style="text-decoration: none;">Official Standings</a>
+        {% endif %}
+    </div>
+
+    {% set ns = namespace(all_rounds=[], sub_sessions=[], subs_found=[]) %}
+    {% if championship.standings|length > 0 %}
+        {% for round_name in championship.standings[0].rounds.keys()|sort %}
+            {% set _ = ns.all_rounds.append(round_name) %}
+        {% endfor %}
+        
+        {# Identify all unique sub-session names #}
+        {% for entry in championship.standings %}
+            {% for r_name, r_data in entry.rounds.items() %}
+                {% for s_name in r_data.keys() %}
+                    {% if s_name not in ns.subs_found %}
+                        {% set _ = ns.subs_found.append(s_name) %}
+                    {% endif %}
+                {% endfor %}
+            {% endfor %}
+        {% endfor %}
+        
+        {# Order them: PF, F, BL, others #}
+        {% if 'PF' in ns.subs_found %}{% set _ = ns.sub_sessions.append('PF') %}{% endif %}
+        {% if 'F' in ns.subs_found %}{% set _ = ns.sub_sessions.append('F') %}{% endif %}
+        {% if 'BL' in ns.subs_found %}{% set _ = ns.sub_sessions.append('BL') %}{% endif %}
+        {% for s in ns.subs_found|sort %}
+            {% if s not in ['PF', 'F', 'BL'] %}
+                {% set _ = ns.sub_sessions.append(s) %}
+            {% endif %}
+        {% endfor %}
+    {% endif %}
+
+    <div class="table-container" style="border: none;">
+        <table class="standings-table">
+            <thead>
+                <tr>
+                    <th rowspan="2" class="pos-col">Pos</th>
+                    <th rowspan="2" class="driver-name">Driver</th>
+                    <th rowspan="2">Total<br><small>(to count)</small></th>
+                    {% for round in ns.all_rounds %}
+                    <th colspan="{{ ns.sub_sessions|length }}" class="round-header">{{ round }}</th>
+                    {% endfor %}
+                    <th rowspan="2">Total<br><small>(all rounds)</small></th>
+                </tr>
+                <tr>
+                    {% for round in ns.all_rounds %}
+                        {% for sub in ns.sub_sessions %}
+                        <th class="sub-header">{{ sub }}</th>
+                        {% endfor %}
+                    {% endfor %}
+                </tr>
+            </thead>
+            {% for entry in championship.standings %}
+            {% set row_podium = '' %}
+            {% if entry.pos == '1' %}{% set row_podium = 'podium-1' %}{% endif %}
+            {% if entry.pos == '2' %}{% set row_podium = 'podium-2' %}{% endif %}
+            {% if entry.pos == '3' %}{% set row_podium = 'podium-3' %}{% endif %}
+            <tbody class="driver-group {% if loop.index0 % 2 == 0 %}group-even{% else %}group-odd{% endif %}">
+                <tr>
+                    <td rowspan="2" class="pos-col {{ row_podium }}">{{ entry.pos }}</td>
+                    <td rowspan="2" class="driver-name">
+                        <a href="{{ url_for('driver_view', name=entry.name) }}"
+                            style="color: inherit; text-decoration: none;">{{ entry.name }}</a>
+                    </td>
+                    <td rowspan="2" class="total-col">{{ entry.total_to_count if entry.total_to_count != '0' else entry.total_all_rounds }}</td>
+                    
+                    {% for round_name in ns.all_rounds %}
+                        {% set round_data = entry.rounds.get(round_name, {}) %}
+                        {% set is_drop = round_name in entry.drop_rounds %}
+                        {% for sub in ns.sub_sessions %}
+                            {% set sub_data = round_data.get(sub) %}
+                            {% set cell_podium = '' %}
+                            {% if sub != 'BL' and sub_data %}
+                                {% if sub_data.get('pos') == '1' %}{% set cell_podium = 'podium-1' %}{% endif %}
+                                {% if sub_data.get('pos') == '2' %}{% set cell_podium = 'podium-2' %}{% endif %}
+                                {% if sub_data.get('pos') == '3' %}{% set cell_podium = 'podium-3' %}{% endif %}
+                            {% endif %}
+                            <td class="pts-cell {% if is_drop %}drop-round-cell{% endif %} {{ cell_podium }}">
+                                {% if sub_data and (sub_data.get('points', '') != '' or sub_data.get('pos', '') != '') %}
+                                    <span class="pts-main {% if sub_data.preliminary %}preliminary-text{% endif %}" 
+                                          {% if sub_data.preliminary %}title="Preliminary Result"{% endif %}>
+                                        {{ sub_data.get('points', '0') }}
+                                    </span>
+                                    {% if sub != 'BL' and sub_data.get('pos') %}
+                                    <span class="pts-pos {% if sub_data.preliminary %}preliminary-pos{% endif %}">{{ sub_data.pos }}</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span style="color: var(--alpha);">-</span>
+                                {% endif %}
+                            </td>
+                        {% endfor %}
+                    {% endfor %}
+
+                    <td rowspan="2" class="total-col">
+                        {% if entry.total_all_rounds_official and entry.total_all_rounds != entry.total_all_rounds_official %}
+                            {{ entry.total_all_rounds_official }}
+                            <span class="preliminary-text" style="font-size: 0.85em; font-weight: normal; margin-left: 0.2rem;" title="Including provisional results: {{ entry.total_all_rounds }}">
+                                ({{ entry.total_all_rounds }})
+                            </span>
+                        {% else %}
+                            {{ entry.total_all_rounds }}
+                        {% endif %}
+                    </td>
+                </tr>
+                <tr>
+                    {% for round_name in ns.all_rounds %}
+                        {% set is_drop = round_name in entry.drop_rounds %}
+                        <td colspan="{{ ns.sub_sessions|length }}" class="round-total-cell {% if is_drop %}drop-round-cell{% endif %}">
+                            {% if round_name in championship.past_rounds %}
+                                {% if round_name not in entry.missed_rounds %}
+                                    <span class="round-total-val">{{ entry.round_totals.get(round_name, 0) }}</span>
+                                {% endif %}
+                            {% else %}
+                                <span style="color: var(--alpha);">-</span>
+                            {% endif %}
+                        </td>
+                    {% endfor %}
+                </tr>
+            </tbody>
+            {% endfor %}
+        </table>
+    </div>
+</div>
+{% endif %}
+</div>
+{% endblock %}

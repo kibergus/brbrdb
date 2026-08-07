@@ -1,0 +1,142 @@
+/*
+ * Copyright 2026 Alexey Guseynov (kibergus). All Rights Reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ * ==============================================================================
+ */
+
+/**
+ * URL Synchronization utility for the kartsim meeting page.
+ * Synchronizes tab, selected laps, bottom plots visibility, xlim, and map center/zoom.
+ */
+import { state } from './state.js';
+
+let updateTimeout = null;
+
+/**
+ * Debounces URL updates to ensure smooth scrolling/dragging performance.
+ */
+export function debouncedUpdateURL() {
+    if (updateTimeout) clearTimeout(updateTimeout);
+    updateTimeout = setTimeout(updateURL, 200);
+}
+
+/**
+ * Updates the URL query parameters to reflect the current page state.
+ */
+export function updateURL() {
+    if (!state.mapInitialized) return;
+    try {
+        const params = new URLSearchParams(window.location.search);
+
+        // 1. Stats vs Map subtab
+        const activeTabBtn = document.querySelector('.sidebar-tab.active');
+        if (activeTabBtn) {
+            const tabId = activeTabBtn.id.replace('btn-', '');
+            params.set('tab', tabId);
+        } else {
+            params.delete('tab');
+        }
+
+        // 1b. Session ID filter
+        if (state.selectedSessionId && state.selectedSessionId !== 'all') {
+            params.set('session_id', state.selectedSessionId);
+        } else {
+            params.delete('session_id');
+        }
+
+        // 2. Group A & B Lap Selection
+        if (state.groupASelection) {
+            if (state.groupASelection.size > 0) {
+                params.set('lapsA', Array.from(state.groupASelection).join(','));
+            } else {
+                params.set('lapsA', 'none');
+            }
+        }
+        if (state.groupBSelection) {
+            if (state.groupBSelection.size > 0) {
+                params.set('lapsB', Array.from(state.groupBSelection).join(','));
+            } else {
+                params.set('lapsB', 'none');
+            }
+        }
+
+        // 3. Group A/B Visibility
+        params.set('visA', state.groupAVisible ? '1' : '0');
+        params.set('visB', state.groupBVisible ? '1' : '0');
+
+        // 4. Bottom sidebar plots (delta, speed, active plot tab)
+        params.set('delta', state.deltaPlotVisible ? '1' : '0');
+        params.set('speed', state.speedPlotVisible ? '1' : '0');
+        if (state.activePlotChannels && state.activePlotChannels.size > 0) {
+            params.set('plot', Array.from(state.activePlotChannels).join(','));
+        } else {
+            params.delete('plot');
+        }
+
+        // 4b. Right panel active tab
+        if (state.activeRightTab) {
+            params.set('rtab', state.activeRightTab);
+        } else {
+            params.delete('rtab');
+        }
+
+        // 4c. Slip angle plot color mode
+        if (state.slipAngleColorMode && state.slipAngleColorMode !== 'brake_throttle') {
+            params.set('sacol', state.slipAngleColorMode);
+        } else {
+            params.delete('sacol');
+        }
+
+        // 5. Telemetry xlim (range)
+        if (state.globalTelemetryXRange && state.globalTelemetryXRange.length === 2) {
+            params.set('xlim', `${state.globalTelemetryXRange[0].toFixed(2)},${state.globalTelemetryXRange[1].toFixed(2)}`);
+        } else {
+            params.delete('xlim');
+        }
+
+        // 6. Map zoom & position
+        if (state.map && state.mapInitialized) {
+            const center = state.map.getCenter();
+            const zoom = state.map.getZoom();
+            if (center && zoom !== undefined) {
+                params.set('map', `${zoom},${center.lat().toFixed(6)},${center.lng().toFixed(6)}`);
+            }
+        }
+
+        // 7. Sorting mode and criteria
+        if (state.sortMode && state.sortMode !== 'std') {
+            params.set('sort', state.sortMode);
+        } else {
+            params.delete('sort');
+        }
+        if (state.sortMode === 'turn' && state.currentTurnIdx !== undefined) {
+            params.set('turn', state.currentTurnIdx);
+        } else {
+            params.delete('turn');
+        }
+
+        // 8. Distance/cursor position
+        if (state.playbackDistance !== undefined && state.playbackDistance !== null && state.playbackDistance !== 0) {
+            params.set('dist', state.playbackDistance.toFixed(2));
+        } else {
+            params.delete('dist');
+        }
+
+        const newSearch = params.toString();
+        const newURL = window.location.pathname + (newSearch ? '?' + newSearch : '');
+        window.history.replaceState(null, '', newURL);
+    } catch (e) {
+        console.error("Error updating URL query parameters:", e);
+    }
+}

@@ -1,0 +1,39 @@
+{% extends "layout.html" %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a> / KartSim / Settings Required
+{% endblock %}
+
+{% block content %}
+<div style="max-width: 600px; margin: 4rem auto; text-align: center;">
+    <div class="card" style="padding: 3rem 2rem; border-top: 4px solid var(--accent); position: relative; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);">
+        <div style="font-size: 4rem; margin-bottom: 1.5rem; animation: float 3s ease-in-out infinite;">🏎️</div>
+        
+        <h2 style="font-size: 1.8rem; font-weight: 700; margin-bottom: 1rem; color: var(--text-primary);">
+            Driver Selection Required
+        </h2>
+        
+        <p style="color: var(--text-secondary); font-size: 1.05rem; line-height: 1.6; margin-bottom: 2.5rem;">
+            To view the KartSim sessions, you need to have a driver selected in settings, and that driver must have active session data. 
+            Currently, no driver is selected or no sessions were found for the selected driver(s).
+        </p>
+        
+        <div style="display: flex; gap: 1rem; justify-content: center;">
+            <a href="{{ url_for('league_list') }}" class="btn" style="background: rgba(255, 255, 255, 0.05); color: var(--text-primary); border: 1px solid var(--border-color); font-weight: 500;">
+                Back to Leagues
+            </a>
+            <a href="{{ url_for('settings', next=request.path) }}" class="btn" style="background: var(--accent); color: var(--bg-color); font-weight: 600; box-shadow: 0 4px 14px 0 rgba(56, 189, 248, 0.3);">
+                Configure settings &rarr;
+            </a>
+        </div>
+    </div>
+</div>
+
+<style>
+@keyframes float {
+    0% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+    100% { transform: translateY(0px); }
+}
+</style>
+{% endblock %}

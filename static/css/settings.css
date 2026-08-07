@@ -1,0 +1,103 @@
+.btn-icon {
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    font-size: 1.1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    flex-shrink: 0;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    color: var(--text-secondary);
+    transition: all 0.15s ease;
+}
+.btn-danger {
+    background: var(--danger) !important;
+    color: white !important;
+    border: none !important;
+}
+.btn-danger:hover {
+    filter: brightness(1.1);
+}
+.toggle-btn.active {
+    background: var(--accent) !important;
+    color: var(--bg-color) !important;
+    border-color: var(--accent) !important;
+}
+.toggle-btn.disabled .icon {
+    position: relative;
+}
+.toggle-btn.disabled .icon::after {
+    content: "/";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%) rotate(15deg);
+    font-weight: bold;
+    color: var(--danger);
+    font-size: 1.4rem;
+    opacity: 0.8;
+}
+.form-control {
+    flex: 1;
+    padding: 0.6rem;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--input-bg);
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+.disabled-input {
+    opacity: 0.6;
+}
+.pilot-item {
+    animation: fadeIn 0.2s ease-out;
+}
+button:active {
+    transform: scale(0.96);
+}
+.btn-secondary {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+    border-radius: 6px;
+}
+.btn-save {
+    background: var(--accent);
+    color: var(--bg-color);
+    border: none;
+    padding: 0.8rem;
+    border-radius: 8px;
+    font-weight: 600;
+}
+.eye-sample {
+    display: inline-flex;
+    width: 24px;
+    height: 24px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    margin: 0 2px;
+    vertical-align: middle;
+}
+.eye-sample.active {
+    background: var(--accent);
+    color: var(--bg-color);
+}
+.eye-sample.disabled {
+    position: relative;
+}
+.eye-sample.disabled::after {
+    content: "/";
+    position: absolute;
+    color: var(--danger);
+    font-weight: bold;
+}

@@ -1,0 +1,26 @@
+# Config file — never commit
+config.json
+docker_config.json
+
+# Auth keys — never commit
+keys.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+.coverage
+
+# Flask / app
+video_cache/
+*.log
+access_logger.py
+node_modules/
+tests/goldens_diff/goldens/rendered
+
+# Scratch directory
+scratch/
+tests/tmp_postgres/
+

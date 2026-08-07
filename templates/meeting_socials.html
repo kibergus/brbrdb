@@ -1,0 +1,90 @@
+{% extends "layout.html" %}
+{% from "macros.html" import selector %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/meeting_socials.css') }}">
+{% endblock %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a> /
+<a href="{{ url_for('league_view', league=league) }}">{{ get_league_name(league) }}</a> /
+<a href="{{ url_for('class_view', league=league, class_name=class_name) }}">{{get_class_info(class_name).name}}</a> /
+{% if league == 'kartsim' %}
+<a href="{{ url_for('location.telemetry_view', league=league, class_name=class_name, date=date, track=track) }}">{{ date }} - {{
+    track }}</a> /
+{% else %}
+<a href="{{ url_for('meeting_view', league=league, class_name=class_name, date=date, track=track) }}">{{ date }} - {{
+    track }}</a> /
+{% endif %}
+Social sharing
+{% endblock %}
+
+{% block content %}
+
+{% set class_items = [] %}
+{% for c in available_classes %}
+    {% set _ = class_items.append({
+        'id': c,
+        'label': get_class_info(c).name,
+        'url': url_for('meeting_socials', league=league, class_name=c, date=date, track=track)
+    }) %}
+{% endfor %}
+{% if class_items|length == 0 %}
+    {% set _ = class_items.append({
+        'id': class_name,
+        'label': get_class_info(class_name).name,
+        'url': '#'
+    }) %}
+{% endif %}
+{{ selector(class_items, class_name, prev_url=prev_meeting_url, next_url=next_meeting_url, prev_title=prev_meeting_title, next_title=next_meeting_title) }}
+
+<div id="social-plots-container">
+    {% for plot in social_plots %}
+    <div class="card" style="margin-bottom: 3rem; cursor: default; padding: 2rem;">
+        <h3
+            style="margin-bottom: 1.5rem; border-bottom: 1px solid var(--border-color); padding-bottom: 1rem; color: var(--text-secondary); font-size: 1rem; text-transform: uppercase; letter-spacing: 0.04em; display: flex; align-items: baseline; gap: 0.5rem;">
+            {% if plot.main_link %}
+                <a href="{{ plot.main_link }}" class="session-title-link" style="color: inherit; text-decoration: none; flex-grow: 1;">{{ plot.title }}</a>
+            {% else %}
+                <span style="flex-grow: 1;">{{ plot.title }}</span>
+                {% if plot.session_links %}
+                    <span style="font-size: 0.8rem; text-transform: none; font-weight: 500; color: var(--text-muted); opacity: 0.8;">
+                        [
+                        {% for link in plot.session_links %}
+                            <a href="{{ link }}" style="color: var(--accent); text-decoration: underline;">{{ loop.index }}</a>{% if not loop.last %}, {% endif %}
+                        {% endfor %}
+                        ]
+                    </span>
+                {% endif %}
+            {% endif %}
+        </h3>
+        <div class="plot-loading" id="social-loading-{{ loop.index }}">
+            <div class="spinner"></div> Generating...
+        </div>
+        <img class="social-img" id="social-img-{{ loop.index }}" src="{{ plot.url }}" alt="{{ plot.title }}"
+            data-download-name="{{ plot.download_name }}" style="display: none; width: 100%; border-radius: 8px;">
+
+        {% if 'combined_plot' in plot.url or 'gap_plot' in plot.url %}
+        <div style="margin-top: 2rem; display: flex; align-items: center; gap: 0.75rem; justify-content: flex-end;">
+            <label
+                style="color: var(--text-secondary); font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;">
+                Range Override (s):
+            </label>
+            <input type="number" step="0.5" min="0.5" placeholder="Auto" class="gap-override-input"
+                data-index="{{ loop.index }}" onchange="reloadSocialPlot({{ loop.index }})">
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+<div class="footer-actions" style="text-align: center; margin-top: 4rem; margin-bottom: 4rem;">
+    <button id="download-all-btn" class="btn" onclick="downloadAllPlots()"
+        style="padding: 0.75rem 2rem; font-size: 1rem; cursor: pointer; border: none; border-radius: 12px; font-weight: 700; transition: all 0.3s ease;">
+        Download All Plots
+    </button>
+</div>
+
+<script src="{{ url_for('static', filename='js/meeting_socials.js') }}"></script>
+
+{% endblock %}

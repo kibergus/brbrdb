@@ -1,0 +1,343 @@
+{% extends "layout.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/kartsim_meeting.css') }}">
+<script
+    src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=geometry,marker&v=beta"></script>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+{% endblock %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a> /
+<a href="{{ url_for('league_view', league=league) }}">{{ get_league_name(league) }}</a> /
+<a href="{{ url_for('class_view', league=league, class_name=class_name) }}">
+    {{get_class_info(class_name).name}}
+</a> /
+{{ date }} - {{ track }}
+{% endblock %}
+
+{% block content %}
+<div class="sidebar-layout">
+    <div class="sidebar">
+        <div class="sidebar-tab-selector">
+            <div class="sidebar-tab" id="btn-stats" onclick="showTab('stats')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 3v18h18" />
+                    <path d="M18 9l-5 5-2-2-4 4" />
+                </svg>
+                Stats
+            </div>
+            <div class="sidebar-tab active" id="btn-map" onclick="showTab('map')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" />
+                    <circle cx="12" cy="10" r="3" />
+                </svg>
+                Map
+            </div>
+        </div>
+
+        <!-- Lap Selector Section (Controlled by JS) -->
+        <div id="sidebar-map-controls" class="sidebar-section" style="display: none;">
+            <div class="sidebar-section-title"
+                style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Telemetry</span>
+                <div
+                    style="display: flex; gap: 0.6rem; align-items: center; text-transform: none; letter-spacing: normal;">
+                    <div id="btn-vis-a" onclick="toggleGroupVisibility('A')"
+                        style="cursor: pointer; display: flex; align-items: center; gap: 4px; color: #fb923c;"
+                        title="Toggle Group A Visibility">
+                        <span style="font-size: 0.7rem; font-weight: 800;">A</span>
+                        <svg class="vis-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                            <circle cx="12" cy="12" r="3" />
+                        </svg>
+                    </div>
+                    <div id="btn-vis-b" onclick="toggleGroupVisibility('B')"
+                        style="cursor: pointer; display: flex; align-items: center; gap: 4px; color: var(--accent);"
+                        title="Toggle Group B Visibility">
+                        <span style="font-size: 0.7rem; font-weight: 800;">B</span>
+                        <svg class="vis-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                            <circle cx="12" cy="12" r="3" />
+                        </svg>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-section-controls">
+                {% if telemetry_sessions and telemetry_sessions|length > 0 %}
+                <div style="padding: 0 1rem; margin-bottom: 0.5rem;" id="session-selector-container">
+                    <label style="font-size: 0.7rem; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; display: block; margin-bottom: 0.2rem;">Session</label>
+                    <select id="session-selector" onchange="onSessionChange(this.value)" style="width: 100%; background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 8px; font-size: 0.8rem; outline: none; cursor: pointer;">
+                        <option value="all" {% if not selected_session_id or selected_session_id == 'all' %}selected{% endif %}>All Sessions</option>
+                        {% for s in telemetry_sessions %}
+                        <option value="{{ s.session_id }}" {% if selected_session_id == s.session_id %}selected{% endif %}>
+                            {{ s.session_name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endif %}
+                <div
+                    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; padding: 0 1rem;">
+                    <div style="display: flex; align-items: center; gap: 0.4rem;">
+                        <input type="checkbox" id="chk-all-a">
+                        <input type="checkbox" id="chk-all-b">
+                        <label
+                            style="font-size: 0.75rem; color: var(--text-secondary); cursor: pointer; font-weight: 600; text-transform: uppercase; margin-left: 0.2rem;">All
+                            <span style="color: #fb923c;">A</span> / <span
+                                style="color: var(--accent);">B</span></label>
+                    </div>
+                    <div style="display: flex; gap: 0.25rem; align-items: center;">
+                        <button class="sort-btn" id="sort-num" onclick="setSort('num')"
+                            title="Sort by Number">#</button>
+                        <button class="sort-btn active" id="sort-time" onclick="setSort('time')"
+                            title="Sort by Time">⏱</button>
+                        <button class="sort-btn" id="sort-turn" onclick="setSort('turn')"
+                            title="Sort by Turn">⟳</button>
+                    </div>
+                </div>
+                <div style="padding: 0 1rem; margin-bottom: 0.5rem;">
+                    <select id="turn-selector" onchange="setSort('turn')" style="display: none;">
+                    </select>
+                </div>
+            </div>
+            <div id="lap-list" class="lap-list">
+                <!-- Laps populated by JS -->
+            </div>
+        </div>
+
+    </div>
+
+    <div class="main-content-full">
+
+        <!-- Map Tab -->
+        <div id="tab-map" class="tab-pane active">
+            <div class="map-main-area">
+                {% if google_maps_api_key == 'YOUR_API_KEY_HERE' %}
+                <div class="plot-card" style="padding: 4rem; text-align: center; margin: 2rem;">
+                    <h2 style="color: var(--warning);">API Key Required</h2>
+                    <p>Please provide a valid Google Maps API key in <code>config.json</code> to enable the track view.
+                    </p>
+                </div>
+                {% elif has_telemetry %}
+                <div id="map-view" class="subtab-pane active">
+                    <div id="map-overlay-controls" class="map-overlay-controls" style="display: none;">
+                        <div class="custom-selector" id="map-type-selector">
+                            <div class="selector-item" onclick="setMapType('satellite')" data-type="satellite">Satellite
+                            </div>
+                            <div class="selector-item" onclick="setMapType('kartsim')" data-type="kartsim">Track Limits
+                            </div>
+                            <div class="selector-item active" onclick="setMapType('hybrid')" data-type="hybrid">Hybrid
+                            </div>
+                        </div>
+                    </div>
+                    <div id="map">
+                        <div class="map-placeholder">
+                            <div class="spinner" style="width: 40px; height: 40px; border-width: 4px;"></div>
+                            Initializing satellite view...
+                        </div>
+                    </div>
+                </div>
+
+                <div id="stats-view" class="subtab-pane">
+                    <div class="stats-tab-bar">
+                        <button class="stats-tab-btn active" id="stats-tab-btn-overview" onclick="showStatsSubTab('overview')">Overview</button>
+                        <button class="stats-tab-btn" id="stats-tab-btn-progression" onclick="showStatsSubTab('progression')">Progression</button>
+                    </div>
+
+                    <div id="stats-subtab-overview" class="stats-subtab-pane active">
+                        <div id="stats-plots-container" style="display: flex; flex-direction: column; gap: 2rem;">
+                            <div class="plot-card"
+                                style="display: flex; gap: 2rem; align-items: flex-start; min-height: 500px; padding: 1.5rem;">
+                                <div id="stats-summary-left" style="flex: 0 0 220px; padding-top: 0.5rem;">
+                                    <h3 style="margin-bottom: 2rem; font-size: 1.1rem;">Lap Times Distribution</h3>
+                                    <div id="stats-summary-values"
+                                        style="display: flex; flex-direction: column; gap: 2rem;">
+                                        <!-- Populated by JS: Best Lap and Ideal Lap -->
+                                    </div>
+                                </div>
+                                <div id="stats-plot-lap-times" style="flex: 1; height: 500px;"></div>
+                                <div id="stats-minimap-container"
+                                    style="flex: 0 0 320px; height: 500px; display: flex; flex-direction: column; position: relative;">
+                                </div>
+                            </div>
+                            <div class="plot-card">
+                                <h3 style="margin-bottom: 1rem;">Turn Performance Gaps</h3>
+                                <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                                    Shows time lost in each of the turns by the end of the straight versus the best attempt.
+                                    Helps to focus on the spots with the most potential gain. The turn where most time can
+                                    be recovered is highlighted with orange.
+                                </p>
+                                <div id="stats-plot-turn-gaps" style="width: 100%; height: 600px;"></div>
+                            </div>
+                            <div class="plot-card">
+                                <h3 style="margin-bottom: 1rem;">Minimum Corner Speeds</h3>
+                                <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                                    Shows the minimum speed (V-min) carried through each corner for the selected laps.
+                                </p>
+                                <div id="stats-plot-apex-speeds" style="width: 100%; height: 600px;"></div>
+                            </div>
+                        </div>
+
+                        <div id="stats-no-data" style="display: none; padding: 4rem; text-align: center; opacity: 0.5;">
+                            <h2 style="color: var(--text-secondary);">No Data to Display</h2>
+                            <p>Select laps in the sidebar and ensure group visibility is on to see statistics.</p>
+                        </div>
+                    </div>
+
+                    <div id="stats-subtab-progression" class="stats-subtab-pane" style="display: none;"
+                        data-league="{{ league }}" data-class="{{ class_name }}" data-track="{{ track }}" data-date="{{ date }}">
+                        <div id="stats-progression-container" style="display: flex; flex-direction: column; gap: 2rem;">
+                            <!-- Populated dynamically by JS on first Progression tab click -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Expandable Plots Block -->
+                <div id="expandable-plots-block" class="expandable-plots-block">
+                    <div class="resizer-handle" id="plot-resizer"></div>
+                    <div class="expandable-plots-header">
+                        <div class="plot-tabs">
+                            <button class="plot-tab" data-tab="control" id="tab-btn-control">Control</button>
+                            <button class="plot-tab" data-tab="steering" id="tab-btn-steering">Steering</button>
+                            <button class="plot-tab" data-tab="rps" id="tab-btn-rps">RPS</button>
+                            <button class="plot-tab" data-tab="gforce" id="tab-btn-gforce">G-force</button>
+                            <button class="plot-tab" data-tab="slide" id="tab-btn-slide">Slide</button>
+                            <button class="plot-tab" data-tab="patch_vel" id="tab-btn-patch_vel">Patch Vel</button>
+                            <button class="plot-tab" data-tab="force" id="tab-btn-force">Force</button>
+                            <button class="plot-tab" data-tab="tyre_load" id="tab-btn-tyre_load">Tyre Load</button>
+                            <button class="plot-tab" data-tab="slip_angle" id="tab-btn-slip_angle">Slip Angle</button>
+                        </div>
+                        <button id="btn-delta" onclick="toggleDeltaPlot()" title="Toggle Delta Plot">Δ t</button>
+                        <button id="btn-speed" onclick="toggleSpeedPlot()" title="Toggle Speed Plot">V</button>
+                    </div>
+                    <div id="plot-content" class="expandable-plots-content">
+                        <div id="speed-plot-container"
+                            style="display: none; width: 100%; height: 180px; border-bottom: 1px solid var(--border-color);">
+                            <div id="plot-area-speed" class="plot-area-speed-chart" style="width: 100%; height: 100%;">
+                            </div>
+                        </div>
+                        <div id="delta-plot-container"
+                            style="display: none; width: 100%; height: 180px; border-bottom: 1px solid var(--border-color);">
+                            <div id="plot-area-delta" class="plot-area-delta-chart" style="width: 100%; height: 100%;">
+                            </div>
+                        </div>
+                        <div id="plot-area-control" class="plot-area" style="width: 100%; height: 100%; display: none;">
+                        </div>
+                        <div id="plot-area-steering" class="plot-area"
+                            style="width: 100%; height: 100%; display: none;"></div>
+                        <div id="plot-area-rps" class="plot-area" style="width: 100%; height: 100%; display: none;">
+                        </div>
+                        <div id="plot-area-gforce" class="plot-area" style="width: 100%; height: 100%; display: none;">
+                        </div>
+                        <div id="plot-area-slide" class="plot-area" style="width: 100%; height: 100%; display: none;">
+                        </div>
+                        <div id="plot-area-patch_vel" class="plot-area"
+                            style="width: 100%; height: 100%; display: none;"></div>
+                        <div id="plot-area-force" class="plot-area" style="width: 100%; height: 100%; display: none;">
+                        </div>
+                        <div id="plot-area-tyre_load" class="plot-area"
+                            style="width: 100%; height: 100%; display: none;"></div>
+                        <div id="plot-area-slip_angle" class="plot-area"
+                            style="width: 100%; height: 100%; display: none;"></div>
+                    </div>
+                </div>
+
+                <div class="map-controls-bar">
+                    <div style="position: relative;">
+                        <button id="play-pause-btn" class="play-btn" title="Play/Pause (Right-click for speed)"
+                            onclick="togglePlay()">
+                            <svg id="play-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M8 5v14l11-7z" />
+                            </svg>
+                            <svg id="pause-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"
+                                style="display: none;">
+                                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                            </svg>
+                        </button>
+                        <div id="speed-popup" class="speed-popup">
+                            <div class="speed-option active" onclick="setPlaybackSpeed(1)">1x</div>
+                            <div class="speed-option" onclick="setPlaybackSpeed(0.5)">0.5x</div>
+                            <div class="speed-option" onclick="setPlaybackSpeed(0.25)">0.25x</div>
+                            <div class="speed-option" onclick="setPlaybackSpeed(0.1)">0.1x</div>
+                        </div>
+                    </div>
+                    <div class="slider-box">
+                        <label>Distance</label>
+                        <input type="range" id="distance-slider" min="0" max="100" step="0.01" value="0">
+                        <span id="distance-display"
+                            style="font-family: monospace; font-size: 0.8rem; width: 60px;">0m</span>
+                    </div>
+                </div>
+                {% else %}
+                <div class="plot-card" style="padding: 4rem; text-align: center; margin: 2rem;">
+                    <h2 style="color: var(--text-secondary);">No Telemetry Data</h2>
+                    <p>Telemetry files could not be located for this KartSim session in the logs directory.</p>
+                </div>
+                {% endif %}
+            </div>
+            <div class="map-side-panel">
+                <div class="panel-title"
+                    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; border-bottom: none; padding-bottom: 0;">
+                    <span
+                        style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary);">Telemetry
+                        Analysis</span>
+                </div>
+                <div class="right-panel-tabs"
+                    style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+                    <button class="right-panel-tab active" id="right-tab-btn-cornering"
+                        onclick="showRightPanelTab('cornering')">Cornering</button>
+                    <button class="right-panel-tab" id="right-tab-btn-acceleration"
+                        onclick="showRightPanelTab('acceleration')">Acceleration</button>
+                    <button class="right-panel-tab" id="right-tab-btn-slip_angle"
+                        onclick="showRightPanelTab('slip_angle')">Slip Angle</button>
+                </div>
+                <div id="cornering-chart-container" class="right-panel-tab-pane active"
+                    style="flex: 1; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; position: relative; display: flex; flex-direction: column;">
+                    <div id="telemetry-chart-placeholder"
+                        style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-style: italic; font-size: 0.9rem; text-align: center; padding: 1rem;">
+                        Select laps and move distance slider<br>to see speed and braking analysis
+                    </div>
+                    <div id="telemetry-chart" style="flex: 1; width: 100%; display: none;"></div>
+                </div>
+                <div id="acceleration-chart-container" class="right-panel-tab-pane"
+                    style="flex: 1; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; position: relative; display: none; flex-direction: column;">
+                    <div id="acceleration-chart-placeholder"
+                        style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-style: italic; font-size: 0.9rem; text-align: center; padding: 1rem;">
+                        Select laps and move distance slider<br>to see acceleration vs speed
+                    </div>
+                    <div id="acceleration-chart" style="flex: 1; width: 100%; display: none;"></div>
+                </div>
+                <div id="slip_angle-chart-container" class="right-panel-tab-pane"
+                    style="flex: 1; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; position: relative; display: none; flex-direction: column;">
+                    <div id="slip_angle-color-selector-container" style="padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border-color); background: rgba(255,255,255,0.02); z-index: 10;">
+                        <label for="slip_angle-color-mode" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Color Mode:</label>
+                        <select id="slip_angle-color-mode" style="background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px; padding: 2px 6px; font-size: 0.75rem; outline: none; cursor: pointer;">
+                            <option value="brake_throttle">Brake / Throttle</option>
+                            <option value="longitudinal_accel">Longitudinal Acceleration</option>
+                            <option value="weight_transfer">Weight Transfer</option>
+                        </select>
+                    </div>
+                    <div id="slip_angle-chart-placeholder"
+                        style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-style: italic; font-size: 0.9rem; text-align: center; padding: 1rem;">
+                        Select laps and move distance slider<br>to see slip angle vs lateral force
+                    </div>
+                    <div id="slip_angle-chart" style="flex: 1; width: 100%; display: none;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.KART_CONFIG = {
+        getTrackPointsUrl: "{{ url_for('location.get_track_points', league=league, class_name=class_name, date=date, track=track) | safe }}",
+        getTrackDataUrl: "{{ url_for('location.get_track_data', track=track) | safe }}",
+        trackName: "{{ track }}",
+        sessionId: "{{ selected_session_id or '' }}"
+    };
+</script>
+<script type="module" src="{{ url_for('static', filename='js/kartsim_meeting/main.js') }}"></script>
+{% endblock %}

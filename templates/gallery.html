@@ -1,0 +1,1072 @@
+{% extends "layout.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/gallery.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/session.css') }}">
+<script src="{{ url_for('static', filename='js/video_player.js') }}"></script>
+{% endblock %}
+
+{% block container_class %}container-fluid{% endblock %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('gallery.gallery') }}">Gallery</a> /
+<a href="{{ url_for('gallery.gallery', league=league) }}">{{ get_league_name(league) }}</a> /
+{{ meeting_date }} - {{ track }}
+{% endblock %}
+
+{% block hamburger_extra %}
+{% if meeting_url or session_url %}
+{% if meeting_url %}
+<a href="{{ meeting_url }}" class="nav-dropdown-link">Meeting results</a>
+{% endif %}
+{% if session_url %}
+<a href="{{ session_url }}" class="nav-dropdown-link">Session results</a>
+{% endif %}
+<div class="nav-dropdown-divider"></div>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="gallery-filter-bar">
+    <div class="filter-group">
+        <div>
+            <label for="class-select" class="filter-label">Class</label>
+            <select id="class-select" class="filter-select" onchange="updateFilters()">
+                <option value="">All Classes</option>
+                {% for c in available_classes %}
+                <option value="{{ c }}" {% if selected_class == c %}selected{% endif %}>{{ get_class_info(c).name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div>
+            <label for="album-select" class="filter-label">Album</label>
+            <select id="album-select" class="filter-select" onchange="updateFilters()">
+                <option value="">All Albums</option>
+                {% for alb in available_albums %}
+                <option value="{{ alb }}" {% if selected_album == alb %}selected{% endif %}>{{ alb }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </div>
+
+    <div>
+        <a href="{{ url_for('gallery.gallery', league=league, meeting=meeting_date) }}" class="btn-reset">Reset Filters</a>
+    </div>
+</div>
+
+<div class="gallery-grid">
+    {% if not photos and not videos %}
+    <div class="no-media-msg">
+        <h3>No media files found</h3>
+        <p>Try adjusting your session or class filters, or check back later.</p>
+    </div>
+    {% endif %}
+
+    {# Render Photos #}
+    {% for photo in photos %}
+    {% set league_name = get_league_name(league) %}
+    {% set meeting_part = meeting_date ~ " - " ~ track %}
+    {% if photo.sessions %}
+        {% set first_session = photo.sessions[0] %}
+        {% if selected_class %}
+            {% set class_part = get_class_info(selected_class).name %}
+        {% elif first_session.class_name %}
+            {% set class_part = get_class_info(first_session.class_name).name %}
+        {% else %}
+            {% set class_part = get_class_info(available_classes[0]).name if available_classes else "Cadet" %}
+        {% endif %}
+        {% set caption = league_name ~ " / " ~ class_part ~ " / " ~ meeting_part ~ " / " ~ first_session.session_name %}
+    {% else %}
+        {% if selected_class %}
+            {% set class_part = get_class_info(selected_class).name %}
+            {% set caption = league_name ~ " / " ~ class_part ~ " / " ~ meeting_part %}
+        {% else %}
+            {% set caption = league_name ~ " / " ~ meeting_part %}
+        {% endif %}
+    {% endif %}
+    <div class="gallery-card" data-small-url="{{ photo.small_url }}" data-full-url="{{ photo.full_url }}" data-filename="{{ photo.filename }}" data-caption="{{ caption }}" data-league="{{ league }}" data-meeting-folder="{{ photo.meeting_folder }}" onclick="openLightboxFromCard(this)">
+        <div class="gallery-media-wrapper">
+            <img src="{{ photo.thumb_url }}" alt="{{ photo.filename }}" loading="lazy">
+        </div>
+        <div class="gallery-card-info">
+            <div class="gallery-card-meta">
+                {% if photo.taken_at %}
+                <span>{{ photo.taken_at.split('T')[1][:5] }}</span>
+                {% endif %}
+                {% if photo.sessions %}
+                <div class="gallery-tags">
+                    {% for s in photo.sessions %}
+                    <a href="{{ url_for('session_view', league=league, class_name=selected_class or s.class_name, date=meeting_date, track=track, session_id=s.session_id) }}" class="gallery-tag" onclick="event.stopPropagation()">
+                        {{ s.session_name }}
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    {# Render Videos #}
+    {% for video in videos %}
+    <div class="gallery-card video-card-item" data-url="{{ video.url }}" data-thumb="{{ video.thumb_url }}" data-filename="{{ video.filename }}" onclick="handleVideoCardClick(this)">
+        <script type="application/json" class="video-markers-json">{{ video.markers | tojson | safe }}</script>
+        <div class="gallery-media-wrapper">
+            <img src="{{ video.thumb_url }}" alt="{{ video.filename }}" loading="lazy">
+            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 48px; height: 48px; background: rgba(15, 23, 42, 0.85); border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"></path></svg>
+            </div>
+        </div>
+        <div class="gallery-card-info">
+            <div class="gallery-card-meta">
+                {% if video.start_time %}
+                <span>{{ video.start_time.split('T')[1][:5] }}</span>
+                {% endif %}
+                {% if video.sessions %}
+                <div class="gallery-tags">
+                    {% for s in video.sessions %}
+                    <a href="{{ url_for('session_view', league=league, class_name=selected_class or s.class_name, date=meeting_date, track=track, session_id=s.session_id) }}" class="gallery-tag" onclick="event.stopPropagation()">
+                        {{ s.session_name }}
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{# Lightbox Modal (for Photos) #}
+<div id="lightbox" class="lightbox" data-mode="view">
+    <button type="button" class="lightbox-prev" onclick="navigateLightbox(-1, event)" aria-label="Previous Photo">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+    </button>
+    <div class="lightbox-content" onclick="event.stopPropagation()">
+        <button class="lightbox-close" id="lightbox-close-btn" onclick="handleCloseClick(event)">
+            <span class="close-icon">&times;</span><span class="close-text-crop" style="display: none;"> Crop</span>
+        </button>
+        <div id="lightbox-crop-viewport" class="lightbox-crop-viewport">
+            <div class="crop-preview-pill" id="lightbox-preview-pill" style="display: none;">Low-res Preview</div>
+            <img id="lightbox-img" class="lightbox-image" src="" alt="Photo Preview" draggable="false">
+        </div>
+        <div class="lightbox-info">
+            <div class="lightbox-actions">
+                <div class="lightbox-aspect-ratios">
+                    <button type="button" class="btn-aspect" onclick="setCropRatio(4/5, this)">4:5</button>
+                    <button type="button" class="btn-aspect" onclick="setCropRatio(1/1, this)">1:1</button>
+                    <button type="button" class="btn-aspect" onclick="setCropRatio(16/9, this)">16:9</button>
+                    <button type="button" class="btn-aspect" id="lightbox-native-ratio">3:2</button>
+                </div>
+                <a id="lightbox-download-crop" class="btn-download-crop" onclick="downloadCropped(event)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    Download
+                </a>
+                <a id="lightbox-share" class="btn-share" onclick="sharePhoto(event)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
+                    Share
+                </a>
+                <a id="lightbox-more-btn" class="btn-more" href="" download onclick="handleMoreClick(event)">
+                    <span class="more-icon">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle><circle cx="5" cy="12" r="1"></circle></svg>
+                    </span>
+                    <span class="download-content">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        Download original
+                    </span>
+                </a>
+            </div>
+        </div>
+    </div>
+    <button type="button" class="lightbox-next" onclick="navigateLightbox(1, event)" aria-label="Next Photo">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+    </button>
+</div>
+
+{# Video Lightbox Modal #}
+<div id="video-lightbox" class="lightbox" onclick="closeVideoLightbox()">
+    <div class="lightbox-content video-card" id="video-card-lightbox" onclick="event.stopPropagation()" style="max-width: 800px; width: 95vw; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px; padding: 1.5rem; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);">
+        <button class="lightbox-close" onclick="closeVideoLightbox()" style="top: 0.5rem; right: 1rem; position: absolute; z-index: 1001;">&times;</button>
+        
+        <h3 id="video-lightbox-title" style="margin-top: 0; margin-bottom: 1rem; color: var(--text-primary); font-size: 1.2rem; font-weight: 600; padding-right: 2rem;"></h3>
+
+        <div class="video-container" id="container-lightbox">
+            <video src="" id="video-lightbox-el" poster="" preload="none" onclick="togglePlay('video-lightbox-el')"></video>
+            
+            <div class="video-controls-overlay">
+                <div class="progress-area" onclick="seekVideo(event, 'video-lightbox-el')">
+                    <div class="progress-bar" id="progress-lightbox"></div>
+                </div>
+                
+                <div class="controls-main">
+                    <div class="controls-left">
+                        <button class="v-btn play-pause-btn" onclick="togglePlay('video-lightbox-el')" title="Play/Pause (Space)">
+                            <svg class="play-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l14 9-14 9V3z"></path></svg>
+                            <svg class="pause-icon" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path></svg>
+                        </button>
+                        <div class="time-display" id="time-lightbox">0:00 / 0:00</div>
+                    </div>
+
+                    <div class="controls-center">
+                        <button class="v-btn" title="Step Back (,)" onclick="stepVideo('video-lightbox-el', -0.033)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="11 17 6 12 11 7"></polyline><polyline points="18 17 13 12 18 7"></polyline></svg>
+                        </button>
+                        <button class="v-btn" title="Step Forward (.)" onclick="stepVideo('video-lightbox-el', 0.033)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="13 17 18 12 13 7"></polyline><polyline points="6 17 11 12 6 7"></polyline></svg>
+                        </button>
+                    </div>
+
+                    <div class="controls-right">
+                        <select class="speed-select-mini" onchange="document.getElementById('video-lightbox-el').playbackRate = parseFloat(this.value)">
+                            <option value="1" selected>1x</option>
+                            <option value="0.1">0.1x</option>
+                            <option value="0.25">0.25x</option>
+                            <option value="0.5">0.5x</option>
+                            <option value="1.25">1.25x</option>
+                            <option value="1.5">1.5x</option>
+                            <option value="2">2x</option>
+                            <option value="4">4x</option>
+                            <option value="8">8x</option>
+                        </select>
+                        <button class="v-btn" title="Fullscreen" onclick="toggleFullscreen('video-card-lightbox')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="driver-marker-controls" style="margin-top: 1.5rem; display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <label for="driver-select-lightbox" style="font-weight: 500; font-size: 0.9rem; color: var(--text-secondary); letter-spacing: 0.05em; margin-bottom: 0;">Sync to:</label>
+                <select id="driver-select-lightbox" class="driver-marker-select" style="margin-left: 0; min-width: 150px; background: #0f172a; color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 6px; padding: 0.4rem 0.8rem; font-size: 0.9rem; outline: none; cursor: pointer;"></select>
+            </div>
+
+            <div id="markers-lightbox" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+function updateFilters() {
+    const classVal = document.getElementById('class-select').value;
+    const albumSelect = document.getElementById('album-select');
+    const albumVal = albumSelect ? albumSelect.value : '';
+    
+    const url = new URL(window.location.href);
+    if (classVal) {
+        url.searchParams.set('class', classVal);
+    } else {
+        url.searchParams.delete('class');
+    }
+    url.searchParams.delete('class_name');
+
+    if (albumVal) {
+        url.searchParams.set('album', albumVal);
+    } else {
+        url.searchParams.delete('album');
+    }
+    url.searchParams.delete('session');
+    url.searchParams.delete('session_id');
+
+    window.location.href = url.toString();
+}
+
+let currentPhotoIndex = -1;
+let photoCards = [];
+
+function openLightboxFromCard(card) {
+    photoCards = Array.from(document.querySelectorAll('.gallery-grid .gallery-card:not(.video-card-item)'));
+    currentPhotoIndex = photoCards.indexOf(card);
+    
+    openLightbox(
+        card.dataset.smallUrl,
+        card.dataset.fullUrl,
+        card.dataset.filename,
+        card.dataset.caption,
+        card.dataset.league,
+        card.dataset.meetingFolder
+    );
+}
+
+function navigateLightbox(direction, event) {
+    if (event) event.stopPropagation();
+    if (photoCards.length === 0) {
+        photoCards = Array.from(document.querySelectorAll('.gallery-grid .gallery-card:not(.video-card-item)'));
+    }
+    if (photoCards.length === 0) return;
+    
+    currentPhotoIndex = (currentPhotoIndex + direction + photoCards.length) % photoCards.length;
+    const card = photoCards[currentPhotoIndex];
+    
+    openLightbox(
+        card.dataset.smallUrl,
+        card.dataset.fullUrl,
+        card.dataset.filename,
+        card.dataset.caption,
+        card.dataset.league,
+        card.dataset.meetingFolder
+    );
+}
+
+function enterCropMode() {
+    const lightbox = document.getElementById('lightbox');
+    if (!lightbox) return;
+    lightbox.setAttribute('data-mode', 'crop');
+    
+    const closeBtnText = document.querySelector('#lightbox-close-btn .close-text-crop');
+    if (closeBtnText) closeBtnText.style.display = 'inline';
+    
+    const previewPill = document.getElementById('lightbox-preview-pill');
+    if (previewPill) previewPill.style.display = 'block';
+}
+
+function exitCropMode() {
+    const lightbox = document.getElementById('lightbox');
+    if (!lightbox) return;
+    lightbox.setAttribute('data-mode', 'view');
+    
+    const closeBtnText = document.querySelector('#lightbox-close-btn .close-text-crop');
+    if (closeBtnText) closeBtnText.style.display = 'none';
+    
+    const previewPill = document.getElementById('lightbox-preview-pill');
+    if (previewPill) previewPill.style.display = 'none';
+    
+    zoomFactor = 1.0;
+    translateX = 0;
+    translateY = 0;
+    
+    const nativeBtn = document.getElementById('lightbox-native-ratio');
+    setCropRatio(null, nativeBtn, true);
+}
+
+function handleCloseClick(event) {
+    if (event) event.stopPropagation();
+    const lightbox = document.getElementById('lightbox');
+    if (lightbox && lightbox.getAttribute('data-mode') === 'crop') {
+        exitCropMode();
+    } else {
+        closeLightbox();
+    }
+}
+
+// Crop and zoom state variables
+let currentCropRatio = null; // null means native ratio
+let zoomFactor = 1.0;
+let translateX = 0;
+let translateY = 0;
+let isDragging = false;
+let startX = 0;
+let startY = 0;
+let initialTranslateX = 0;
+let initialTranslateY = 0;
+
+let baseWidth = 0;
+let baseHeight = 0;
+let viewportWidth = 0;
+let viewportHeight = 0;
+let optimalCenter = { x: 0.5, y: 0.5 };
+let lightboxEventsInitialized = false;
+
+function gcd(a, b) {
+    return b ? gcd(b, a % b) : a;
+}
+
+function getClosestAspectRatio(width, height) {
+    if (!width || !height) return "N/A";
+    const ratio = width / height;
+    
+    const commonRatios = [
+        { w: 1, h: 1 },
+        { w: 3, h: 2 },
+        { w: 2, h: 3 },
+        { w: 4, h: 3 },
+        { w: 3, h: 4 },
+        { w: 16, h: 9 },
+        { w: 9, h: 16 },
+        { w: 5, h: 4 },
+        { w: 4, h: 5 },
+        { w: 16, h: 10 },
+        { w: 10, h: 16 }
+    ];
+    
+    let bestMatch = null;
+    let minDiff = Infinity;
+    
+    for (const r of commonRatios) {
+        const diff = Math.abs(ratio - (r.w / r.h));
+        if (diff < minDiff) {
+            minDiff = diff;
+            bestMatch = r;
+        }
+    }
+    
+    if (minDiff < 0.02) {
+        return `${bestMatch.w}:${bestMatch.h}`;
+    }
+    
+    let bestW = width;
+    let bestH = height;
+    minDiff = Infinity;
+    for (let h = 1; h <= 20; h++) {
+        const w = Math.round(ratio * h);
+        const diff = Math.abs(ratio - (w / h));
+        if (diff < minDiff) {
+            minDiff = diff;
+            bestW = w;
+            bestH = h;
+        }
+    }
+    return `${bestW}:${bestH}`;
+}
+
+function findOptimalCropCenter(imgEl, targetRatio) {
+    const size = 100;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = Math.round(size * (imgEl.naturalHeight / imgEl.naturalWidth));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return { x: 0.5, y: 0.5 };
+    
+    ctx.drawImage(imgEl, 0, 0, canvas.width, canvas.height);
+    let imgData;
+    try {
+        imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    } catch (e) {
+        return { x: 0.5, y: 0.5 };
+    }
+    const data = imgData.data;
+    const w = canvas.width;
+    const h = canvas.height;
+    
+    const edges = new Float32Array(w * h);
+    for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+            const idx = (y * w + x) * 4;
+            const val = (data[idx] + data[idx+1] + data[idx+2]) / 3;
+            
+            const idxLeft = (y * w + (x-1)) * 4;
+            const valLeft = (data[idxLeft] + data[idxLeft+1] + data[idxLeft+2]) / 3;
+            const idxRight = (y * w + (x+1)) * 4;
+            const valRight = (data[idxRight] + data[idxRight+1] + data[idxRight+2]) / 3;
+            
+            const idxTop = ((y-1) * w + x) * 4;
+            const valTop = (data[idxTop] + data[idxTop+1] + data[idxTop+2]) / 3;
+            const idxBottom = ((y+1) * w + x) * 4;
+            const valBottom = (data[idxBottom] + data[idxBottom+1] + data[idxBottom+2]) / 3;
+            
+            const gx = valRight - valLeft;
+            const gy = valBottom - valTop;
+            edges[y * w + x] = Math.sqrt(gx * gx + gy * gy);
+        }
+    }
+    
+    const imgRatio = w / h;
+    let winW, winH;
+    if (imgRatio > targetRatio) {
+        winH = h;
+        winW = Math.round(h * targetRatio);
+    } else {
+        winW = w;
+        winH = Math.round(w / targetRatio);
+    }
+    
+    let bestX = 0;
+    let bestY = 0;
+    let maxEdgeSum = -1;
+    
+    if (imgRatio > targetRatio) {
+        const maxShift = w - winW;
+        for (let s = 0; s <= 20; s++) {
+            const startX = Math.round((s / 20) * maxShift);
+            let sum = 0;
+            for (let y = 0; y < h; y++) {
+                for (let x = startX; x < startX + winW; x++) {
+                    sum += edges[y * w + x];
+                }
+            }
+            if (sum > maxEdgeSum) {
+                maxEdgeSum = sum;
+                bestX = startX + winW / 2;
+                bestY = h / 2;
+            }
+        }
+    } else {
+        const maxShift = h - winH;
+        for (let s = 0; s <= 20; s++) {
+            const startY = Math.round((s / 20) * maxShift);
+            let sum = 0;
+            for (let y = startY; y < startY + winH; y++) {
+                for (let x = 0; x < w; x++) {
+                    sum += edges[y * w + x];
+                }
+            }
+            if (sum > maxEdgeSum) {
+                maxEdgeSum = sum;
+                bestX = w / 2;
+                bestY = startY + winH / 2;
+            }
+        }
+    }
+    
+    return {
+        x: bestX / w,
+        y: bestY / h
+    };
+}
+
+function handleMoreClick(event) {
+    const btn = document.getElementById('lightbox-more-btn');
+    if (btn && !btn.classList.contains('expanded')) {
+        event.preventDefault();
+        event.stopPropagation();
+        btn.classList.add('expanded');
+    }
+}
+
+function setCropRatio(ratio, btn, isInitial = false) {
+    if (!isInitial) {
+        const lightbox = document.getElementById('lightbox');
+        if (lightbox && lightbox.getAttribute('data-mode') !== 'crop') {
+            enterCropMode();
+        }
+    }
+
+    currentCropRatio = ratio;
+    
+    const buttons = document.querySelectorAll('.btn-aspect');
+    buttons.forEach(b => b.classList.remove('active'));
+    if (btn) {
+        btn.classList.add('active');
+    }
+
+    zoomFactor = 1.0;
+    
+    const img = document.getElementById('lightbox-img');
+    if (img && img.naturalWidth && ratio !== null) {
+        optimalCenter = findOptimalCropCenter(img, ratio);
+        
+        const nativeRatio = img.naturalWidth / img.naturalHeight;
+        const targetRatio = ratio;
+        
+        const maxWidth = window.innerWidth * 0.95;
+        const maxHeight = window.innerHeight * 0.75;
+        let vW = maxWidth;
+        let vH = maxWidth / targetRatio;
+        if (vH > maxHeight) {
+            vH = maxHeight;
+            vW = maxHeight * targetRatio;
+        }
+        
+        let bW, bH;
+        if (nativeRatio > targetRatio) {
+            bH = vH;
+            bW = vH * nativeRatio;
+        } else {
+            bW = vW;
+            bH = vW / nativeRatio;
+        }
+        
+        translateX = (bW / 2 - optimalCenter.x * bW);
+        translateY = (bH / 2 - optimalCenter.y * bH);
+    } else {
+        translateX = 0;
+        translateY = 0;
+    }
+
+    updateViewport();
+}
+
+function updateViewport() {
+    const img = document.getElementById('lightbox-img');
+    const viewport = document.getElementById('lightbox-crop-viewport');
+    if (!img || !viewport || !img.naturalWidth) return;
+
+    const maxWidth = window.innerWidth * 0.95;
+    const maxHeight = window.innerHeight * 0.75;
+
+    const nativeRatio = img.naturalWidth / img.naturalHeight;
+    const targetRatio = currentCropRatio || nativeRatio;
+
+    viewportWidth = maxWidth;
+    viewportHeight = maxWidth / targetRatio;
+    if (viewportHeight > maxHeight) {
+        viewportHeight = maxHeight;
+        viewportWidth = maxHeight * targetRatio;
+    }
+
+    viewport.style.width = `${viewportWidth}px`;
+    viewport.style.height = `${viewportHeight}px`;
+
+    if (nativeRatio > targetRatio) {
+        baseHeight = viewportHeight;
+        baseWidth = viewportHeight * nativeRatio;
+    } else {
+        baseWidth = viewportWidth;
+        baseHeight = viewportWidth / nativeRatio;
+    }
+
+    img.style.width = `${baseWidth}px`;
+    img.style.height = `${baseHeight}px`;
+
+    updateTransform();
+}
+
+function updateTransform() {
+    const img = document.getElementById('lightbox-img');
+    if (!img) return;
+
+    const maxPanX = Math.max(0, (baseWidth * zoomFactor - viewportWidth) / 2);
+    const maxPanY = Math.max(0, (baseHeight * zoomFactor - viewportHeight) / 2);
+
+    translateX = Math.max(-maxPanX, Math.min(maxPanX, translateX));
+    translateY = Math.max(-maxPanY, Math.min(maxPanY, translateY));
+
+    img.style.transform = `translate(calc(-50% + ${translateX}px), calc(-50% + ${translateY}px)) scale(${zoomFactor})`;
+}
+
+function initLightboxEvents() {
+    if (lightboxEventsInitialized) return;
+    
+    const viewport = document.getElementById('lightbox-crop-viewport');
+    if (!viewport) return;
+
+    viewport.addEventListener('mousedown', (e) => {
+        const lightbox = document.getElementById('lightbox');
+        if (lightbox && lightbox.getAttribute('data-mode') !== 'crop') {
+            return;
+        }
+        if (e.button !== 0) return;
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        initialTranslateX = translateX;
+        initialTranslateY = translateY;
+        e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        const lightbox = document.getElementById('lightbox');
+        if (lightbox && lightbox.getAttribute('data-mode') !== 'crop') {
+            return;
+        }
+        if (!isDragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        translateX = initialTranslateX + dx;
+        translateY = initialTranslateY + dy;
+        updateTransform();
+    });
+
+    window.addEventListener('mouseup', () => {
+        isDragging = false;
+    });
+
+    let initialPinchDistance = null;
+    let initialZoomFactor = 1.0;
+
+    viewport.addEventListener('touchstart', (e) => {
+        const lightbox = document.getElementById('lightbox');
+        if (lightbox && lightbox.getAttribute('data-mode') !== 'crop') {
+            return;
+        }
+        e.preventDefault();
+        if (e.touches.length === 1) {
+            isDragging = true;
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+            initialTranslateX = translateX;
+            initialTranslateY = translateY;
+        } else if (e.touches.length === 2) {
+            isDragging = false;
+            initialPinchDistance = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+            );
+            initialZoomFactor = zoomFactor;
+        }
+    }, { passive: false });
+
+    viewport.addEventListener('touchmove', (e) => {
+        const lightbox = document.getElementById('lightbox');
+        if (lightbox && lightbox.getAttribute('data-mode') !== 'crop') {
+            return;
+        }
+        e.preventDefault();
+        if (e.touches.length === 1 && isDragging) {
+            const dx = e.touches[0].clientX - startX;
+            const dy = e.touches[0].clientY - startY;
+            translateX = initialTranslateX + dx;
+            translateY = initialTranslateY + dy;
+            updateTransform();
+        } else if (e.touches.length === 2 && initialPinchDistance !== null) {
+            const dist = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+            );
+            const factor = dist / initialPinchDistance;
+            zoomFactor = Math.max(1.0, Math.min(5.0, initialZoomFactor * factor));
+            updateTransform();
+        }
+    }, { passive: false });
+
+    viewport.addEventListener('touchend', () => {
+        isDragging = false;
+        initialPinchDistance = null;
+    });
+
+    viewport.addEventListener('wheel', (e) => {
+        const lightbox = document.getElementById('lightbox');
+        if (lightbox && lightbox.getAttribute('data-mode') !== 'crop') {
+            return;
+        }
+        e.preventDefault();
+        const delta = e.deltaY < 0 ? 0.15 : -0.15;
+        zoomFactor = Math.max(1.0, Math.min(5.0, zoomFactor + delta));
+        updateTransform();
+    }, { passive: false });
+
+    window.addEventListener('resize', () => {
+        const lightbox = document.getElementById('lightbox');
+        if (lightbox && lightbox.classList.contains('active')) {
+            updateViewport();
+        }
+    });
+
+    lightboxEventsInitialized = true;
+}
+
+async function downloadCropped(event) {
+    if (event) event.preventDefault();
+    const btn = document.getElementById('lightbox-download-crop');
+    const filename = btn.dataset.filename || 'photo.jpg';
+    const league = btn.dataset.league;
+    const meetingFolder = btn.dataset.meetingFolder;
+    
+    const originalHTML = btn.innerHTML;
+    btn.innerHTML = `<span class="spinner" style="width: 16px; height: 16px; border-width: 1.5px; border-top-color: var(--bg-color); display: inline-block; vertical-align: middle; margin-right: 0.5rem;"></span> Preparing...`;
+    btn.style.pointerEvents = 'none';
+
+    try {
+        const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
+        const xInScaledImage = (baseWidth * zoomFactor - viewportWidth) / 2 - translateX;
+        const yInScaledImage = (baseHeight * zoomFactor - viewportHeight) / 2 - translateY;
+
+        const normX = clamp(xInScaledImage / (baseWidth * zoomFactor), 0, 1);
+        const normY = clamp(yInScaledImage / (baseHeight * zoomFactor), 0, 1);
+        const normW = clamp(viewportWidth / (baseWidth * zoomFactor), 0, 1 - normX);
+        const normH = clamp(viewportHeight / (baseHeight * zoomFactor), 0, 1 - normY);
+
+        const cropUrl = `/photo_crop?league=${encodeURIComponent(league)}&meeting_folder=${encodeURIComponent(meetingFolder)}&filename=${encodeURIComponent(filename)}&x=${normX}&y=${normY}&w=${normW}&h=${normH}`;
+
+        const response = await fetch(cropUrl);
+        if (!response.ok) throw new Error('Failed to prepare cropped photo on backend');
+        const blob = await response.blob();
+        
+        const dotIdx = filename.lastIndexOf('.');
+        const baseName = dotIdx !== -1 ? filename.substring(0, dotIdx) : filename;
+        const ext = dotIdx !== -1 ? filename.substring(dotIdx) : '.jpg';
+        const sharedFilename = `${baseName}_cropped${ext}`;
+
+        const blobUrl = URL.createObjectURL(blob);
+        const downloadLink = document.createElement('a');
+        downloadLink.download = sharedFilename;
+        downloadLink.href = blobUrl;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        document.body.removeChild(downloadLink);
+        URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+        console.error(err);
+        alert('Failed to download photo: ' + err.message);
+    } finally {
+        btn.innerHTML = originalHTML;
+        btn.style.pointerEvents = '';
+    }
+}
+
+function openLightbox(smallUrl, fullUrl, filename, caption, league, meetingFolder) {
+    const lightbox = document.getElementById('lightbox');
+    const img = document.getElementById('lightbox-img');
+    const shareBtn = document.getElementById('lightbox-share');
+    const downloadBtn = document.getElementById('lightbox-download-crop');
+    const moreBtn = document.getElementById('lightbox-more-btn');
+    const nativeRatioBtn = document.getElementById('lightbox-native-ratio');
+
+    lightbox.setAttribute('data-mode', 'view');
+    const closeBtnText = document.querySelector('#lightbox-close-btn .close-text-crop');
+    if (closeBtnText) closeBtnText.style.display = 'none';
+    const previewPill = document.getElementById('lightbox-preview-pill');
+    if (previewPill) previewPill.style.display = 'none';
+
+    initLightboxEvents();
+
+    if (moreBtn) {
+        moreBtn.classList.remove('expanded');
+        moreBtn.href = fullUrl;
+    }
+
+    if (nativeRatioBtn) {
+        nativeRatioBtn.textContent = '...';
+        nativeRatioBtn.onclick = function() { setCropRatio(null, this); };
+    }
+
+    img.onload = function() {
+        const nativeRatio = getClosestAspectRatio(img.naturalWidth, img.naturalHeight);
+        if (nativeRatioBtn) {
+            nativeRatioBtn.textContent = nativeRatio;
+        }
+        const nativeBtn = document.getElementById('lightbox-native-ratio');
+        setCropRatio(null, nativeBtn, true);
+    };
+
+    img.src = smallUrl;
+
+    if (shareBtn) {
+        if (navigator.share) {
+            shareBtn.style.display = 'inline-flex';
+        } else {
+            shareBtn.style.display = 'none';
+        }
+        shareBtn.dataset.url = fullUrl;
+        shareBtn.dataset.filename = filename;
+        shareBtn.dataset.caption = caption;
+        shareBtn.dataset.league = league;
+        shareBtn.dataset.meetingFolder = meetingFolder;
+    }
+
+    if (downloadBtn) {
+        downloadBtn.dataset.filename = filename;
+        downloadBtn.dataset.league = league;
+        downloadBtn.dataset.meetingFolder = meetingFolder;
+    }
+
+    lightbox.classList.add('active');
+}
+
+async function sharePhoto(event) {
+    if (event) event.preventDefault();
+    const btn = document.getElementById('lightbox-share');
+    const filename = btn.dataset.filename || 'photo.jpg';
+    const caption = btn.dataset.caption || 'Karting Photo';
+    const league = btn.dataset.league;
+    const meetingFolder = btn.dataset.meetingFolder;
+    
+    const originalHTML = btn.innerHTML;
+    btn.innerHTML = `<span class="spinner" style="width: 16px; height: 16px; border-width: 1.5px; border-top-color: var(--bg-color); display: inline-block; vertical-align: middle; margin-right: 0.5rem;"></span> Preparing...`;
+    btn.style.pointerEvents = 'none';
+
+    try {
+        const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
+        const xInScaledImage = (baseWidth * zoomFactor - viewportWidth) / 2 - translateX;
+        const yInScaledImage = (baseHeight * zoomFactor - viewportHeight) / 2 - translateY;
+
+        const normX = clamp(xInScaledImage / (baseWidth * zoomFactor), 0, 1);
+        const normY = clamp(yInScaledImage / (baseHeight * zoomFactor), 0, 1);
+        const normW = clamp(viewportWidth / (baseWidth * zoomFactor), 0, 1 - normX);
+        const normH = clamp(viewportHeight / (baseHeight * zoomFactor), 0, 1 - normY);
+
+        const cropUrl = `/photo_crop?league=${encodeURIComponent(league)}&meeting_folder=${encodeURIComponent(meetingFolder)}&filename=${encodeURIComponent(filename)}&x=${normX}&y=${normY}&w=${normW}&h=${normH}`;
+
+        const response = await fetch(cropUrl);
+        if (!response.ok) throw new Error('Failed to prepare cropped photo on backend');
+        const blob = await response.blob();
+        
+        const mimeType = blob.type || 'image/jpeg';
+        const dotIdx = filename.lastIndexOf('.');
+        const baseName = dotIdx !== -1 ? filename.substring(0, dotIdx) : filename;
+        const ext = dotIdx !== -1 ? filename.substring(dotIdx) : '.jpg';
+        const sharedFilename = `${baseName}_cropped${ext}`;
+        const file = new File([blob], sharedFilename, { type: mimeType });
+
+        btn.innerHTML = originalHTML;
+        btn.style.pointerEvents = '';
+
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({
+                files: [file],
+                title: caption,
+                text: caption
+            });
+        } else {
+            const blobUrl = URL.createObjectURL(blob);
+            const downloadLink = document.createElement('a');
+            downloadLink.download = sharedFilename;
+            downloadLink.href = blobUrl;
+            document.body.appendChild(downloadLink);
+            downloadLink.click();
+            document.body.removeChild(downloadLink);
+            URL.revokeObjectURL(blobUrl);
+        }
+    } catch (err) {
+        console.error(err);
+        alert('Failed to share/download photo: ' + err.message);
+        btn.innerHTML = originalHTML;
+        btn.style.pointerEvents = '';
+    }
+}
+
+function closeLightbox() {
+    const lightbox = document.getElementById('lightbox');
+    lightbox.classList.remove('active');
+    lightbox.setAttribute('data-mode', 'view');
+    const closeBtnText = document.querySelector('#lightbox-close-btn .close-text-crop');
+    if (closeBtnText) closeBtnText.style.display = 'none';
+    const previewPill = document.getElementById('lightbox-preview-pill');
+    if (previewPill) previewPill.style.display = 'none';
+}
+
+function handleVideoCardClick(card) {
+    const url = card.dataset.url;
+    const thumbUrl = card.dataset.thumb;
+    const filename = card.dataset.filename;
+    const markersScript = card.querySelector('.video-markers-json');
+    const markers = JSON.parse(markersScript.textContent || '[]');
+    openVideoLightbox(url, thumbUrl, filename, markers);
+}
+
+function openVideoLightbox(url, thumbUrl, filename, markers) {
+    const modal = document.getElementById('video-lightbox');
+    const video = document.getElementById('video-lightbox-el');
+    const title = document.getElementById('video-lightbox-title');
+    const select = document.getElementById('driver-select-lightbox');
+    const markersContainer = document.getElementById('markers-lightbox');
+
+    video.src = url;
+    video.poster = thumbUrl;
+    title.textContent = filename;
+
+    video.load();
+
+    select.innerHTML = '';
+    markersContainer.innerHTML = '';
+
+    const drivers = [...new Set(markers.map(m => m.driver))].sort();
+
+    if (drivers.length > 0) {
+        drivers.forEach(driver => {
+            const opt = document.createElement('option');
+            opt.value = driver;
+            opt.textContent = driver;
+            select.appendChild(opt);
+        });
+
+        select.onchange = (e) => {
+            filterLightboxMarkers(e.target.value);
+        };
+
+        markers.forEach(marker => {
+            const btn = document.createElement('button');
+            btn.className = 'badge badge-grey marker-pill';
+            btn.style.cursor = 'pointer';
+            btn.style.border = 'none';
+            btn.style.margin = '0';
+            btn.dataset.driver = marker.driver;
+            btn.textContent = `L${marker.lap} (${formatTime(marker.lap_time)})`;
+            btn.onclick = () => {
+                playAtTime('video-lightbox-el', marker.video_time);
+            };
+            markersContainer.appendChild(btn);
+        });
+
+        select.value = drivers[0];
+        filterLightboxMarkers(drivers[0]);
+    } else {
+        const opt = document.createElement('option');
+        opt.textContent = 'No markers';
+        select.appendChild(opt);
+        
+        const noMsg = document.createElement('div');
+        noMsg.textContent = 'No markers for this video.';
+        noMsg.style.color = 'var(--text-secondary)';
+        noMsg.style.fontSize = '0.9rem';
+        markersContainer.appendChild(noMsg);
+    }
+
+    modal.classList.add('active');
+}
+
+function filterLightboxMarkers(selectedDriver) {
+    const markersContainer = document.getElementById('markers-lightbox');
+    const pills = markersContainer.querySelectorAll('.marker-pill');
+    pills.forEach(pill => {
+        if (pill.dataset.driver === selectedDriver) {
+            pill.style.display = 'block';
+        } else {
+            pill.style.display = 'none';
+        }
+    });
+}
+
+function closeVideoLightbox() {
+    const modal = document.getElementById('video-lightbox');
+    const video = document.getElementById('video-lightbox-el');
+    if (video) {
+        video.pause();
+    }
+    modal.classList.remove('active');
+}
+
+// Close lightboxes on Escape key, navigate on Left/Right arrows
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+        const lightbox = document.getElementById('lightbox');
+        if (lightbox && lightbox.classList.contains('active') && lightbox.getAttribute('data-mode') === 'crop') {
+            exitCropMode();
+        } else {
+            closeLightbox();
+            closeVideoLightbox();
+        }
+    } else if (event.key === 'ArrowLeft') {
+        const lightbox = document.getElementById('lightbox');
+        if (lightbox && lightbox.classList.contains('active') && lightbox.getAttribute('data-mode') !== 'crop') {
+            navigateLightbox(-1);
+        }
+    } else if (event.key === 'ArrowRight') {
+        const lightbox = document.getElementById('lightbox');
+        if (lightbox && lightbox.classList.contains('active') && lightbox.getAttribute('data-mode') !== 'crop') {
+            navigateLightbox(1);
+        }
+    }
+});
+
+let touchStartX = 0;
+let touchStartY = 0;
+let touchEndX = 0;
+let touchEndY = 0;
+
+document.addEventListener('touchstart', function(e) {
+    const lightbox = document.getElementById('lightbox');
+    if (!lightbox || !lightbox.classList.contains('active') || lightbox.getAttribute('data-mode') === 'crop') {
+        return;
+    }
+    if (e.touches.length === 1) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+    }
+}, { passive: true });
+
+document.addEventListener('touchend', function(e) {
+    const lightbox = document.getElementById('lightbox');
+    if (!lightbox || !lightbox.classList.contains('active') || lightbox.getAttribute('data-mode') === 'crop') {
+        return;
+    }
+    if (e.changedTouches.length === 1) {
+        touchEndX = e.changedTouches[0].clientX;
+        touchEndY = e.changedTouches[0].clientY;
+        
+        const diffX = touchEndX - touchStartX;
+        const diffY = touchEndY - touchStartY;
+        
+        if (Math.abs(diffX) > 50 && Math.abs(diffX) > Math.abs(diffY)) {
+            if (diffX > 0) {
+                navigateLightbox(-1);
+            } else {
+                navigateLightbox(1);
+            }
+        }
+    }
+}, { passive: true });
+</script>
+{% endblock %}

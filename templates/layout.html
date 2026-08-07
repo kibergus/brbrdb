@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Karting Results Viewer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="module" src="{{ url_for('static', filename='js/utils.js') }}"></script>
+    {% block head %}{% endblock %}
+</head>
+
+<body>
+    <nav class="navbar">
+        <div class="nav-content">
+            <div class="nav-breadcrumb">
+                <div class="nav-hamburger-menu">
+                    <button class="nav-hamburger-toggle" id="navHamburgerToggle" aria-label="Toggle Navigation" aria-expanded="false">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="3" y1="12" x2="21" y2="12"></line>
+                            <line x1="3" y1="6" x2="21" y2="6"></line>
+                            <line x1="3" y1="18" x2="21" y2="18"></line>
+                        </svg>
+                    </button>
+                    <div class="nav-hamburger-dropdown" id="navHamburgerDropdown">
+                        {% block hamburger_extra %}{% endblock %}
+                        <a href="{{ url_for('league_list') }}"
+                            class="nav-dropdown-link {% if request.endpoint == 'league_list' %}active{% endif %}">Leagues</a>
+                        <a href="{{ url_for('drivers_list') }}"
+                            class="nav-dropdown-link {% if request.endpoint == 'drivers_list' %}active{% endif %}">Drivers</a>
+                        {% if get_current_acl().get('see_gallery') %}
+                        <a href="{{ get_gallery_url() }}"
+                            class="nav-dropdown-link {% if request.endpoint and request.endpoint.startswith('gallery.') %}active{% endif %}">Gallery</a>
+                        {% endif %}
+                        <a href="{{ url_for('about') }}"
+                            class="nav-dropdown-link {% if request.endpoint == 'about' %}active{% endif %}">About</a>
+                    </div>
+                </div>
+                <span class="breadcrumb-separator">/</span>
+                <div class="breadcrumb-path">
+                    {% block breadcrumb %}
+                    <a href="{{ url_for('league_list') }}">Leagues</a>
+                    {% endblock %}
+                </div>
+                <div class="nav-settings">
+                    <a href="{{ url_for('settings', next=request.path) }}"
+                        class="nav-settings-link {% if request.endpoint == 'settings' %}active{% endif %}" title="Settings">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% block extra_navbar %}{% endblock %}
+    </nav>
+    <div class="{% block container_class %}container{% endblock %}">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const toggleBtn = document.getElementById('navHamburgerToggle');
+        const dropdown = document.getElementById('navHamburgerDropdown');
+        
+        if (toggleBtn && dropdown) {
+            toggleBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isOpen = dropdown.classList.toggle('show');
+                toggleBtn.setAttribute('aria-expanded', isOpen);
+            });
+
+            // Close menu if user clicks outside
+            document.addEventListener('click', (e) => {
+                if (!toggleBtn.contains(e.target) && !dropdown.contains(e.target)) {
+                    dropdown.classList.remove('show');
+                    toggleBtn.setAttribute('aria-expanded', 'false');
+                }
+            });
+        }
+    });
+    </script>
+</body>
+</html>

@@ -1,0 +1,188 @@
+{% extends "layout.html" %}
+{% from "macros.html" import selector %}
+
+{% block container_class %}container-fluid{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/driver.css') }}">
+{% endblock %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('drivers_list') }}">Drivers</a> / {{ name }}
+{% endblock %}
+
+{% block content %}
+<div class="container" style="margin: 0 auto 2rem auto; padding: 0 1rem;">
+    <h1 style="margin-bottom: 2rem; margin-top: 0;">{{ name }}</h1>
+
+    {% set driver_options = [
+    {'id': 'progression', 'label': 'Progression', 'url': '#progression'},
+    {'id': 'tracks', 'label': 'Tracks', 'url': '#tracks'}
+    ] %}
+    {{ selector(driver_options, 'progression') }}
+</div>
+
+<div id="tab-content-progression" class="tab-content">
+    <div class="card filter-card" id="driver-filter-card" style="padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;">
+        <div class="filter-header" style="display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; flex: 1;">
+                <div id="collapsed-pills" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;"></div>
+            </div>
+            <button id="toggle-filter-btn" class="btn-filter-toggle" style="display: inline-flex; align-items: center; gap: 0.5rem; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-primary); cursor: pointer; padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.85rem; font-weight: 600; transition: all 0.2s;">
+                <span id="toggle-filter-text">Filters</span>
+                <svg id="toggle-filter-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transition: transform 0.2s; transform: rotate(0deg);"><polyline points="18 15 12 9 6 15"></polyline></svg>
+            </button>
+        </div>
+
+        <div id="filter-expandable-content" style="margin-top: 1.25rem;">
+            <p style="color: var(--text-secondary); margin-bottom: 1.25rem; font-size: 0.9rem;">Select leagues/classes to compare the gap to the fastest driver in each session chronologically.</p>
+
+            <div id="progression-selectors"
+                style="display: flex; flex-direction: column; gap: 0rem; align-items: flex-start; margin-bottom: 1.5rem;">
+                <!-- Selectors grouped by league injected by JS -->
+            </div>
+
+            <div class="track-filter-container" style="justify-content: flex-start; margin-bottom: 0; flex-wrap: wrap; gap: 1.5rem;">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <label for="track-filter" style="color: var(--text-secondary); font-size: 0.9rem; font-weight: 600;">Filter by Track:</label>
+                    <select id="track-filter" class="track-select">
+                        <option value="all">All Tracks</option>
+                        {% for track in tracks_list %}
+                        <option value="{{ track }}">{{ track }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <label for="year-filter" style="color: var(--text-secondary); font-size: 0.9rem; font-weight: 600;">Filter by Year:</label>
+                    <select id="year-filter" class="track-select" style="min-width: 120px;">
+                        <option value="all">All Years</option>
+                        {% for year in years_list %}
+                        <option value="{{ year }}">{{ year }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card" style="padding: 2rem;">
+
+        <h2 style="margin-bottom: 1rem;">Gap to Leader</h2>
+
+        <div class="chart-scroll-container">
+            <div class="chart-container" style="position: relative; height: 800px; width: 100%; margin-top: 0;">
+                <div class="chart-y-axis-container">
+                    <canvas id="progressionChartYAxis"></canvas>
+                </div>
+                <canvas id="progressionChart"></canvas>
+            </div>
+        </div>
+
+        <h2 style="margin-bottom: 1rem;">Finishing Position</h2>
+        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem;">
+            <input type="checkbox" id="normalizePos" class="driver-checkbox" style="--check-color: var(--accent);">
+            <label for="normalizePos"
+                style="color: var(--text-secondary); cursor: pointer; font-size: 0.9rem; font-weight: 500;">Normalize by
+                the number of participants</label>
+        </div>
+        <div class="chart-scroll-container">
+            <div class="chart-container" style="position: relative; height: 800px; width: 100%; margin-top: 0;">
+                <div class="chart-y-axis-container">
+                    <canvas id="positionChartYAxis"></canvas>
+                </div>
+                <canvas id="positionChart"></canvas>
+            </div>
+        </div>
+
+        <h2>Lap Times and Performance Baseline</h2>
+
+        <div id="performance-baseline-section">
+            <p style="color: var(--text-secondary); margin-top: 1rem; margin-bottom: 2rem; font-size: 0.9rem;">Times are
+                relative to the 5th percentile of all drivers in each session, providing a stable comparison against the
+                field's top pace.</p>
+            <div class="chart-scroll-container" id="percentileScrollContainer">
+                <div style="min-height: 500px; display: flex; align-items: center;">
+                    <div class="plot-loading" id="loading-percentilePlotImg" style="display: none;">
+                        <div class="spinner"></div> 
+                        <span class="loading-text">Generating performance baseline...</span>
+                    </div>
+                    <img id="percentilePlotImg" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                        alt="Gap to 5th Percentile"
+                        style="height: 500px; width: auto; max-width: none; display: none;"
+                        onload="if (this.src.startsWith('data:')) return; this.style.display='block'; document.getElementById('loading-' + this.id).style.display='none';"
+                        onerror="if (this.src.startsWith('data:')) return; const l = document.getElementById('loading-' + this.id); if(l) { l.querySelector('.loading-text').textContent='Failed to load plot.'; l.querySelector('.spinner').style.display='none'; }">
+                </div>
+            </div>
+        </div>
+
+        <div id="violin-plot-section" style="margin-top: 2rem; display: none;">
+            <div class="chart-scroll-container" id="violinScrollContainer">
+                <div style="min-height: 500px; display: flex; align-items: center;">
+                    <div class="plot-loading" id="loading-violinPlotImg" style="display: none;">
+                        <div class="spinner"></div> 
+                        <span class="loading-text">Generating lap distributions...</span>
+                    </div>
+                    <img id="violinPlotImg" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" 
+                        alt="Lap Times Distribution"
+                        style="height: 500px; width: auto; max-width: none; display: none;"
+                        onload="if (this.src.startsWith('data:')) return; this.style.display='block'; document.getElementById('loading-' + this.id).style.display='none';"
+                        onerror="if (this.src.startsWith('data:')) return; const l = document.getElementById('loading-' + this.id); if(l) { l.querySelector('.loading-text').textContent='Failed to load plot.'; l.querySelector('.spinner').style.display='none'; }">
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="tab-content-tracks" class="tab-content" style="display: none;">
+    {% if not leagues %}
+    <div class="card">
+        <p>No history found for this driver.</p>
+    </div>
+    {% else %}
+    {% for league_id, tracks in leagues.items() %}
+    <div class="league-block">
+        <h2 class="league-title">{{ get_league_name(league_id) }}</h2>
+
+        {% for track_name, class_groups in tracks.items() %}
+        <div class="track-row" data-track="{{ track_name }}">
+            <div class="track-name">{{ track_name }}</div>
+
+            {% for group_name, entries in class_groups.items() %}
+            <div class="class-group" style="margin-top: 1rem; margin-bottom: 0.5rem;">
+                <div class="track-name" style="font-size: 0.95rem; opacity: 0.8; margin-bottom: 0.5rem;">{{ group_name
+                    }}</div>
+                <div class="history-grid">
+                    {% for entry in entries %}
+                    <div class="history-item">
+                        <div class="history-date">{{ entry.date }}</div>
+                        {% if entry.league == 'kartsim' %}
+                        <a href="{{ url_for('location.telemetry_view', league=entry.league, class_name=entry.class, date=entry.date, track=track_name) }}"
+                            class="badge badge-purple history-time">
+                        {% else %}
+                        <a href="{{ url_for('meeting_view', league=entry.league, class_name=entry.class, date=entry.date, track=track_name) }}"
+                            class="badge badge-purple history-time">
+                        {% endif %}
+                            {{ format_time(entry.best_time) }}
+                        </a>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+    {% endif %}
+</div>
+
+<script>
+    const DRIVER_CONFIG = {
+        rawProgressionData: {{ progression | tojson | default ('[]') | safe }},
+        violinPlotBaseUrl: "{{ url_for('plots.driver_plot', name=name) }}",
+        percentilePlotBaseUrl: "{{ url_for('plots.driver_percentile_plot', name=name) }}"
+    };
+</script>
+<script src="{{ url_for('static', filename='js/driver.js') }}"></script>
+
+{% endblock %}

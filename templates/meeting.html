@@ -1,0 +1,95 @@
+{% extends "layout.html" %}
+{% from "macros.html" import selector %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/meeting.css') }}">
+{% endblock %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a> /
+<a href="{{ url_for('league_view', league=league) }}">{{ get_league_name(league) }}</a> /
+<a href="{{ url_for('class_view', league=league, class_name=class_name) }}">
+    {{get_class_info(class_name).name}}
+</a> /
+{{ date }} - {{ track }}
+{% endblock %}
+
+{% block nav_links_extra %}
+{% if get_current_acl().get('see_gallery') and has_meeting_gallery(league, date) %}
+<a href="{{ get_gallery_url() }}" class="nav-link">Gallery</a>
+{% endif %}
+{% endblock %}
+
+{% block nav_mobile_extra %}
+{% if get_current_acl().get('see_gallery') and has_meeting_gallery(league, date) %}
+<a href="{{ get_gallery_url() }}" class="nav-mobile-link">Gallery</a>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+
+{% set class_items = [] %}
+{% for c in available_classes %}
+    {% set _ = class_items.append({
+        'id': c,
+        'label': get_class_info(c).name,
+        'url': url_for('meeting_view', league=league, class_name=c, date=date, track=track)
+    }) %}
+{% endfor %}
+{% if class_items|length == 0 %}
+    {% set _ = class_items.append({
+        'id': class_name,
+        'label': get_class_info(class_name).name,
+        'url': '#'
+    }) %}
+{% endif %}
+{{ selector(class_items, class_name, prev_url=prev_meeting_url, next_url=next_meeting_url, prev_title=prev_meeting_title, next_title=next_meeting_title) }}
+
+{% if plot_titles %}
+<div class="plots-section">
+    {% for session in plot_titles %}
+    <div class="plot-card" id="card-{{ session.session_id }}">
+        <h3>
+            {% if session.session_id %}
+            <a
+                href="{{ url_for('session_view', league=league, class_name=class_name, date=date, track=track, session_id=session.session_id) }}">
+                {{ session.title }}
+            </a>
+            {% else %}
+            {{ session.title }}
+            {% endif %}
+        </h3>
+
+        {% for plot_type in session.plots %}
+        {% set plot_id = (session.session_id|string) + "_" + plot_type %}
+        <div class="plot-loading" id="loading-{{ plot_id }}">
+            <div class="spinner"></div> Generating {{ plot_type }}...
+        </div>
+        {% if plot_type == 'gap' %}
+        {% set session_path = league + '/' + class_name + '/' + date + '/' + track + '/' + session.session_id %}
+        {% set plot_src = url_for('plots.gap_plot', session=session_path) %}
+        {% elif plot_type == 'combined' %}
+        {% set session_path = league + '/' + class_name + '/' + date + '/' + track + '/' + session.session_id %}
+        {% set plot_src = url_for('plots.combined_plot', session=session_path, aspect='1:1.6') %}
+        {% else %}
+        {% set plot_src = url_for('plots.violin_plot', league=league, class_name=class_name, date=date, track=track,
+        session_id=session.session_id) %}
+        {% endif %}
+        <img id="plot-img-{{ plot_id }}" src="{{ plot_src }}" alt="{{ session.title }} - {{ plot_type }}"
+            style="display: none; margin-bottom: 1rem;"
+            onload="document.getElementById('loading-{{ plot_id }}').style.display='none'; this.style.display='block';"
+            onerror="document.getElementById('loading-{{ plot_id }}').textContent='Failed to load {{ plot_type }} plot.';">
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="social-sharing-block" style="margin-top: 3rem; text-align: center; margin-bottom: 4rem;">
+    <a href="{{ url_for('meeting_socials', league=league, class_name=class_name, date=date, track=track) }}"
+        class="btn"
+        style="padding: 0.75rem 2rem; font-size: 1rem; text-decoration: none; display: inline-block; border-radius: 12px; font-weight: 700; transition: all 0.3s ease;">
+        Generate pack for socials
+    </a>
+</div>
+{% endblock %}

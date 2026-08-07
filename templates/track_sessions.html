@@ -1,0 +1,40 @@
+{% extends "layout.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/track_sessions.css') }}">
+{% endblock %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a> /
+<a href="{{ url_for('league_view', league=league) }}">{{ get_league_name(league) }}</a> /
+<a href="{{ url_for('class_view', league=league, class_name=class_name, year=selected_year, view='by_track') }}">
+    {{get_class_info(class_name).name}}
+</a> /
+{{ track }}
+{% endblock %}
+
+{% block content %}
+<div class="track-header">
+    <h2>{{ track }}</h2>
+    <span class="conditions-badge">{{ display_conditions }}</span>
+    <p class="track-summary">
+        {{ dates|length }} date{{ 's' if dates|length != 1 else '' }} &mdash;
+        Lap time consistency progression over time
+    </p>
+</div>
+
+{% if dates %}
+<div class="plot-card">
+    <div class="plot-loading" id="loading-combined">
+        <div class="spinner"></div> Generating progression plot...
+    </div>
+    <img id="plot-img-combined"
+        src="{{ url_for('plots.track_plot', league=league, class_name=class_name, track=track, track_conditions=track_conditions, year=selected_year, v=dates[-1] if dates else 0) }}"
+        alt="{{ track }} - Progression by Date" style="display: none;"
+        onload="document.getElementById('loading-combined').style.display='none'; this.style.display='block';"
+        onerror="document.getElementById('loading-combined').textContent='Failed to load plot.';">
+</div>
+{% else %}
+<p style="color: var(--text-secondary); margin-top: 2rem;">No sessions found for this track and conditions.</p>
+{% endif %}
+{% endblock %}

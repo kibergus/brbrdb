@@ -1,0 +1,30 @@
+{% extends "layout.html" %}
+
+{% block breadcrumb %}
+Leagues
+{% endblock %}
+
+{% block content %}
+<div class="leagues-container">
+    {% for group_name, leagues in grouped_leagues %}
+    <div class="grid">
+        {% for league in leagues %}
+        <div class="card league-card"
+            style="border-top: 4px solid {{ get_league_color(league) }}; display: flex; justify-content: space-between; align-items: center; position: relative;">
+            <a href="{{ url_for('league_view', league=league) }}" class="stretched-link"
+                style="text-decoration: none; color: inherit; font-weight: 700; font-size: 1.17em; margin: 0;">
+                {{ get_league_name(league) }}
+            </a>
+            <a href="{{ url_for('last_meeting_redirect', league=league) }}" class="badge badge-blue"
+                style="z-index: 2; position: relative; text-decoration: none; font-size: 0.85rem; font-weight: 600; padding: 0.35rem 0.75rem; border-radius: 8px; transition: all 0.2s;">
+                last &rarr;
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+    {% if not loop.last %}
+    <div style="height: 2rem;"></div>
+    {% endif %}
+    {% endfor %}
+</div>
+{% endblock %}

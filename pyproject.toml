@@ -1,0 +1,52 @@
+[tool.mypy]
+python_version = "3.13"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+ignore_missing_imports = false
+explicit_package_bases = true
+namespace_packages = true
+mypy_path = "."
+exclude = [
+    "venv",
+    "__pycache__",
+    "testdata",
+    "scratch",
+    "notebook"
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "sh.*",
+    "pyocr.*",
+    "pydantic.*",
+    "requests.*",
+    "pandas.*",
+    "playwright.*",
+    "evdev.*",
+    "pyautogui.*",
+    "flask.*",
+    "flask_sqlalchemy.*",
+    "plotly.*",
+    "numpy.*",
+    "scipy.*",
+    "matplotlib.*",
+    "cv2.*",
+    "google.cloud.*",
+    "google.oauth2.*",
+    "googleapiclient.*",
+    "seaborn.*",
+    "psycopg2.*",
+    "gunicorn.*"
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+pythonpath = "."
+testpaths = ["tests"]
