@@ -162,9 +162,9 @@ def get_meeting_plot_titles(df: pd.DataFrame, df_pen: pd.DataFrame) -> list[Sess
 def _get_violin_plot_bytes(
     league: str, class_name: str, date: str, track: str, session_id: str | None,
     aspect: str | None, drivers_arg: str | None, sessions_arg: str | None,
-    hero_names: tuple[str, ...] | None
+    max_y: float | None, hero_names: tuple[str, ...] | None
 ) -> bytes:
-    key = ('violin', league, class_name, date, track, session_id, aspect, drivers_arg, sessions_arg, hero_names)
+    key = ('violin', league, class_name, date, track, session_id, aspect, drivers_arg, sessions_arg, max_y, hero_names)
     cached = plot_cache.get(key)
     if cached is not None:
         return cached
@@ -187,7 +187,8 @@ def _get_violin_plot_bytes(
         if session_df.empty:
             abort(404)
         fig = plots.plot_split_violins(
-            session_df, aspect=aspect, split_drivers=None, hero_names=list(hero_names) if hero_names else None
+            session_df, max_y=max_y, aspect=aspect, split_drivers=None,
+            hero_names=list(hero_names) if hero_names else None
         )
     else:
         session_indices = None
@@ -195,7 +196,7 @@ def _get_violin_plot_bytes(
             session_indices = [int(i) for i in sessions_arg.split(',')]
 
         fig = plots.plot_violins_multisession(
-            df, session_indices=session_indices, aspect=aspect, split_drivers=None,
+            df, session_indices=session_indices, max_y=max_y, aspect=aspect, split_drivers=None,
             hero_names=list(hero_names) if hero_names else None
         )
 
@@ -216,11 +217,12 @@ def violin_plot(league: str, class_name: str, date: str, track: str, session_id:
     aspect = request.args.get('aspect')
     drivers_arg = request.args.get('drivers')
     sessions_arg = request.args.get('sessions')
+    max_y = request.args.get('maxy_violin', type=float) or request.args.get('maxy', type=float)
 
     hero_names = tuple(get_hero_names())
     try:
         png_bytes = _get_violin_plot_bytes(
-            league, class_name, date, track, session_id, aspect, drivers_arg, sessions_arg, hero_names
+            league, class_name, date, track, session_id, aspect, drivers_arg, sessions_arg, max_y, hero_names
         )
         return make_plot_response(png_bytes)
     except ValueError as e:
@@ -343,9 +345,10 @@ def gap_plot() -> Response:
 
 
 def _get_combined_plot_bytes(
-    session_params: tuple[str, ...], aspect: str | None, max_y: float | None, hero_names: tuple[str, ...] | None
+    session_params: tuple[str, ...], aspect: str | None, max_y: float | None,
+    max_y_violin: float | None, hero_names: tuple[str, ...] | None
 ) -> tuple[bytes, str]:
-    key = ('combined', session_params, aspect, max_y, hero_names)
+    key = ('combined', session_params, aspect, max_y, max_y_violin, hero_names)
     cached = plot_cache.get(key)
     if cached is not None:
         return cached
@@ -389,6 +392,7 @@ def _get_combined_plot_bytes(
             gap_dfs=gap_dfs,
             penalties_dfs=pen_dfs,
             max_y=max_y,
+            max_y_violin=max_y_violin,
             aspect=aspect,
             driver_colors=driver_colors,
             hero_names=list(hero_names) if hero_names else None,
@@ -406,9 +410,10 @@ def combined_plot() -> Response:
     session_params = request.args.getlist('session')
     aspect = request.args.get('aspect')
     max_y = request.args.get('maxy', type=float)
+    max_y_violin = request.args.get('maxy_violin', type=float)
 
     hero_names = tuple(get_hero_names())
-    png_bytes, filename = _get_combined_plot_bytes(tuple(session_params), aspect, max_y, hero_names)
+    png_bytes, filename = _get_combined_plot_bytes(tuple(session_params), aspect, max_y, max_y_violin, hero_names)
     return make_plot_response(png_bytes, filename=filename)
 
 

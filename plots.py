@@ -228,7 +228,7 @@ def _add_lap_colorbar(
     # Position "Lap:" text at fixed pixel relative to the colorbar
     if ax is None:
         cbar_x_val = (fig_w_px - 70 - cbar_width_px) / fig_w_px
-        cbar_y_val = 155 / fig_h_px
+        cbar_y_val = cbar_y
         fig.text(cbar_x_val - (12 / fig_w_px), cbar_y_val + (6 / fig_h_px), 'Lap:',
                  fontsize=10, va='center', ha='right', fontweight='bold', color=color)
     else:
@@ -608,7 +608,7 @@ def plot_violin_times(
     )
 
     _apply_categorical_padding(ax, len(sorted_drivers))
-    _add_lap_colorbar(fig, plot_df, lap_col=lap_col)
+    _add_lap_colorbar(fig, plot_df, ax=ax, lap_col=lap_col)
 
     return fig
 
@@ -690,7 +690,7 @@ def plot_split_violins(
         _apply_categorical_padding(ax_top, len(top_names))
         _apply_categorical_padding(ax_bot, len(bot_names))
 
-    _add_lap_colorbar(fig, plot_df, lap_col=lap_col)
+    _add_lap_colorbar(fig, plot_df, ax=(ax_bot if do_split else ax_top), lap_col=lap_col)
     _add_logo(fig)
     return fig
 
@@ -936,51 +936,62 @@ def _draw_gap_on_ax(
             'y_actual': row['Interval'],
             'y_display': row['Interval'],
             'name': driver,
-            'color': driver_colors[driver],
+            'color': driver_colors.get(driver, 'white'),
             'is_hero': _is_hero(driver, hero_names),
             'is_excluded': row.get('Excluded', False)
         })
 
+    y_min_bound, y_max_bound = ax.get_ylim()
+    y_bottom = max(y_min_bound, y_max_bound)
+
     if labels_data:
         labels_data.sort(key=lambda x: x['y_actual'])
-        min_dist = 0.6
+
+        # Calculate min_dist dynamically based on font height (10pt converted to y-data units)
+        dy_px = 10.0 * (ax.figure.dpi / 72.0)
+        y0_data = ax.transData.inverted().transform((0, 0))[1]
+        y1_data = ax.transData.inverted().transform((0, dy_px))[1]
+        min_dist = abs(y1_data - y0_data)
+
+        # Forward pass: prevent overlap going down
         for i in range(1, len(labels_data)):
             if labels_data[i]['y_display'] < labels_data[i - 1]['y_display'] + min_dist:
                 labels_data[i]['y_display'] = labels_data[i - 1]['y_display'] + min_dist
 
+        # Backward pass: ensure all labels stay above y_bottom (x-axis line)
+        if labels_data[-1]['y_display'] > y_bottom:
+            labels_data[-1]['y_display'] = y_bottom
+
+        for i in range(len(labels_data) - 2, -1, -1):
+            if labels_data[i]['y_display'] > labels_data[i + 1]['y_display'] - min_dist:
+                labels_data[i]['y_display'] = labels_data[i + 1]['y_display'] - min_dist
+
     # Calculate how much space names on the right need
     max_label_len = 0
-    y_min_bound, y_max_bound = ax.get_ylim()
-    # Inverted y-axis, so y_min_bound is the larger value (bottom)
     for ld in labels_data:
-        if ld['y_display'] > max(y_min_bound, y_max_bound):
-            continue
         max_label_len = max(max_label_len, len(ld['name']))
 
     for y_pos, label in lap_offsets.items():
-        if y_pos > max(y_min_bound, y_max_bound):
+        if y_pos > y_bottom:
             continue
         max_label_len = max(max_label_len, len(label))
 
-    right_margin_needed_px = int(25 + (max_label_len * 7.5))
+    right_margin_needed_px = int(50 + (max_label_len * 10.5))
     right_adjust = _get_right_margin_frac(ax.figure, right_margin_needed_px)
 
     # ACTUAL DRAWING of the labels
     for ld in labels_data:
-        if ld['y_display'] > max(y_min_bound, y_max_bound):
-            continue
-
         ax.text(label_x, ld['y_display'], ld['name'],
                 color=ld['color'], ha='left', va='center', fontsize=8,
                 fontweight=('bold' if ld['is_hero'] else 'normal'),
                 clip_on=False)
 
-        if ld['is_excluded']:
+        if ld['is_excluded'] and ld['y_actual'] <= y_bottom:
             ax.plot(max_lap_actual + 1, ld['y_actual'], 'x', color=ld['color'],
                     markersize=8, mew=2, zorder=200, clip_on=False)
 
     for y_pos, label in lap_offsets.items():
-        if y_pos > max(y_min_bound, y_max_bound):
+        if y_pos > y_bottom:
             continue
 
         ax.text(label_x, y_pos, label, color='gray', fontsize=8,
@@ -1373,8 +1384,8 @@ def plot_violins_multisession(
         left=_get_left_margin_frac(fig),
         right=_get_right_margin_frac(fig),
         top=top_margin_v,
-        bottom=_get_bottom_margin_frac(fig, 75),
-        hspace=0.25
+        bottom=_get_bottom_margin_frac(fig, 150),
+        hspace=0.3
     )
 
     return fig
@@ -1385,6 +1396,7 @@ def plot_violin_gap_combined(
     gap_dfs: list[pd.DataFrame],
     penalties_dfs: Sequence[pd.DataFrame | None] | None = None,
     max_y: float | None = None,
+    max_y_violin: float | None = None,
     aspect: str | None = None,
     driver_colors: dict[str, str | tuple[float, ...]] | None = None,
     hero_names: list[str] | None = None
@@ -1404,10 +1416,10 @@ def plot_violin_gap_combined(
     if penalties_dfs is None:
         penalties_dfs = [None] * num_g
 
-    # Height ratios: Gap plot on top and uses more space than violin plot, but less than before.
-    hratios = [2] * num_g + [1.2] * num_v
-    # Height: ~8 per gap, ~5 per violin.
-    fig_height = 8 * num_g + 5 * num_v + 1
+    # Height ratios: Gap plot on top and uses more space than violin plot.
+    hratios = [2] * num_g + [1.4] * num_v
+    # Height: ~8 per gap, ~5.5 per violin + margin.
+    fig_height = 8 * num_g + 5.5 * num_v + 1.5
     figsize = _get_figsize(10, fig_height, aspect)
     fig, axes = plt.subplots(num_total, 1, figsize=figsize, dpi=192, squeeze=False,
                              gridspec_kw={'height_ratios': hratios})
@@ -1448,7 +1460,7 @@ def plot_violin_gap_combined(
     if not all_violin_data.empty:
         plot_df_all = _prepare_plot_df(all_violin_data)
         ymin = plot_config.get_ymin(plot_df_all['LapTimeSeconds'])
-        yrange = plot_config.get_yrange(
+        yrange = max_y_violin if max_y_violin is not None else plot_config.get_yrange(
             all_violin_data.iloc[0].get('League'),
             all_violin_data.iloc[0].get('Class'),
             plot_df_all['LapTimeSeconds']
@@ -1497,7 +1509,7 @@ def plot_violin_gap_combined(
         left=_get_left_margin_frac(fig),
         right=standard_right,
         top=top_margin_v,
-        bottom=_get_bottom_margin_frac(fig, 100),
+        bottom=_get_bottom_margin_frac(fig, 175),
         hspace=0.1
     )
 
@@ -1519,7 +1531,7 @@ def plot_violin_gap_combined(
 
     # Add Lap colorbar at the bottom if we have violins
     if violin_axes and not all_violin_data.empty:
-        _add_lap_colorbar(fig, plot_df_all, lap_col='Lap', color='white')
+        _add_lap_colorbar(fig, plot_df_all, ax=violin_axes[-1], lap_col='Lap', color='white')
 
     return fig
 

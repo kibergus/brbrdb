@@ -60,6 +60,14 @@ GOLDEN_TESTS = [
     {
         'name': 'combined_default',
         'url': '/combined_plot.png?session=fat_pro/junior/2026-04-04/Shenington/16_27_final&aspect=4:5',
+    },
+    {
+        'name': 'combined_maxy5',
+        'url': (
+            '/combined_plot.png?maxy=5'
+            '&session=fat_pro/cadet/2026-08-08/Bayford Meadows/17_13_race_5_cadet_final'
+            '&aspect=4:5'
+        ),
     }
 ]
 

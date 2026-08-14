@@ -1,4 +1,5 @@
-.gap-override-input {
+.gap-override-input,
+.violin-override-input {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     color: var(--text-primary);
@@ -9,7 +10,8 @@
     transition: border-color 0.2s;
 }
 
-.gap-override-input:focus {
+.gap-override-input:focus,
+.violin-override-input:focus {
     border-color: var(--accent);
     outline: none;
 }

@@ -19,51 +19,57 @@
  * Logic for the meeting socials page.
  */
 
-document.addEventListener('DOMContentLoaded', function () {
-    const imgs = document.querySelectorAll('.social-img');
+if (typeof document !== 'undefined') {
+    document.addEventListener('DOMContentLoaded', function () {
+        const imgs = document.querySelectorAll('.social-img');
 
-    imgs.forEach((img, index) => {
-        const plotIndex = index + 1;
-        const loading = document.getElementById(`social-loading-${plotIndex}`);
-        if (!loading) return;
+        imgs.forEach((img, index) => {
+            const plotIndex = index + 1;
+            const loading = document.getElementById(`social-loading-${plotIndex}`);
+            if (!loading) return;
 
-        if (img.complete) {
-            loading.style.display = 'none';
-            img.style.display = 'block';
-        } else {
-            img.onload = function () {
+            if (img.complete) {
                 loading.style.display = 'none';
-                this.style.display = 'block';
-            };
-            img.onerror = function () {
-                loading.innerHTML = '<div style="color: var(--danger)">Failed to generate plot.</div>';
-            };
-        }
+                img.style.display = 'block';
+            } else {
+                img.onload = function () {
+                    loading.style.display = 'none';
+                    this.style.display = 'block';
+                };
+                img.onerror = function () {
+                    loading.innerHTML = '<div style="color: var(--danger)">Failed to generate plot.</div>';
+                };
+            }
+        });
     });
-});
+}
 
 function reloadSocialPlot(index) {
     const img = document.getElementById(`social-img-${index}`);
     const loading = document.getElementById(`social-loading-${index}`);
-    const input = document.querySelector(`.gap-override-input[data-index="${index}"]`);
+    const gapInput = document.querySelector(`.gap-override-input[data-index="${index}"]`);
+    const violinInput = document.querySelector(`.violin-override-input[data-index="${index}"]`);
 
     if (!img) return;
 
     img.style.display = 'none';
     if (loading) loading.style.display = 'flex';
 
-    // Keep the original data-src or just use current src but strip existing maxy/t
+    // Keep the original data-src or just use current src but strip existing maxy/maxy_violin/t
     let baseUrl = img.src.split('?')[0];
     let params = new URLSearchParams();
 
-    if (input && input.value) {
-        params.set('maxy', input.value);
+    if (gapInput && gapInput.value) {
+        params.set('maxy', gapInput.value);
+    }
+    if (violinInput && violinInput.value) {
+        params.set('maxy_violin', violinInput.value);
     }
 
-    // Always include aspect 4:5 as per original logic if not in URL already
+    // Preserve other original parameters
     const originalUrl = new URL(img.src, window.location.origin);
     originalUrl.searchParams.forEach((value, key) => {
-        if (key !== 'maxy' && key !== 't') {
+        if (key !== 'maxy' && key !== 'maxy_violin' && key !== 't') {
             params.set(key, value);
         }
     });
@@ -108,4 +114,8 @@ async function downloadAllPlots() {
     btn.disabled = false;
     btn.style.opacity = '1';
     btn.textContent = originalText;
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { reloadSocialPlot, downloadAllPlots };
 }
