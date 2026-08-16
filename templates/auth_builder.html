@@ -1,0 +1,75 @@
+{% extends "layout.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/auth_builder.css') }}">
+{% endblock %}
+
+{% block breadcrumb %}
+<span>Auth Builder</span>
+{% endblock %}
+
+{% block content %}
+<div class="builder-card">
+    <div class="builder-header">
+        <h1>Auth URL Builder</h1>
+        <p>Enter an API key and the destination page to construct a direct authentication link to share.</p>
+    </div>
+
+    <div class="builder-form">
+        <div class="form-group">
+            <label for="apiKeyInput">API Key</label>
+            <div class="input-wrapper">
+                <input type="text" id="apiKeyInput" class="font-mono" placeholder="e.g. ba9d82ef-9d53-4a46-81fa-72c6da096ba5" autocomplete="off" autofocus>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="targetInput">Destination Page</label>
+            <div class="input-wrapper">
+                <input type="text" id="targetInput" placeholder="/" value="/" autocomplete="off">
+            </div>
+            <div class="preset-chips">
+                <span class="preset-chip" data-path="/">/ (Home)</span>
+                <span class="preset-chip" data-path="/league">/league</span>
+                <span class="preset-chip" data-path="/drivers">/drivers</span>
+                <span class="preset-chip" data-path="/gallery">/gallery</span>
+                <span class="preset-chip" data-path="/settings">/settings</span>
+            </div>
+        </div>
+
+        <div class="result-section">
+            <div class="result-header">
+                <span class="result-title">Generated Shareable URL</span>
+                <span id="copyToast" class="toast">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                    Copied!
+                </span>
+            </div>
+            <div id="resultBox" class="result-box">
+                <span class="result-placeholder">Enter an API key above to generate the shareable URL...</span>
+            </div>
+            <div class="action-buttons">
+                <button type="button" id="copyBtn" class="action-btn btn-primary" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    Copy Link
+                </button>
+                <a id="openLink" class="action-btn btn-secondary disabled" target="_blank" rel="noopener noreferrer">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                        <polyline points="15 3 21 3 21 9"></polyline>
+                        <line x1="10" y1="14" x2="21" y2="3"></line>
+                    </svg>
+                    Open in New Tab
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/auth_builder.js') }}"></script>
+{% endblock %}

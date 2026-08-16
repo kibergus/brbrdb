@@ -224,6 +224,12 @@ def auth_route() -> werkzeug_wrappers.Response | str:
     return render_template('auth.html', next_url=next_url)
 
 
+@app.route('/auth_builder', endpoint='auth_builder')
+def auth_builder() -> str:
+    """Page to construct shareable authentication redirect URLs."""
+    return render_template('auth_builder.html')
+
+
 VIDEO_CACHE_DIR: str = config.get('video_cache_dir') or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), 'video_cache'
 )
