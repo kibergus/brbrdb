@@ -38,9 +38,11 @@ def _parse_lap_time(seconds: float) -> str:
     """Format seconds into M:SS.mmm format."""
     if not seconds or seconds <= 0:
         return 'Unknown'
-    m = int(seconds // 60)
-    s = int(seconds % 60)
-    ms = int(seconds % 1 * 1000)
+    total_ms = round(seconds * 1000)
+    if total_ms <= 0:
+        return 'Unknown'
+    m, rem_ms = divmod(total_ms, 60000)
+    s, ms = divmod(rem_ms, 1000)
     if m > 0:
         return f'{m}:{s:02d}.{ms:03d}'
     return f'{s}.{ms:03d}'
@@ -163,11 +165,20 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
                 continue
 
     laps_list = []
-    for lap_num, data in sorted(session_laps.items()):
+    sorted_laps = sorted(session_laps.items())
+    for i, (lap_num, data) in enumerate(sorted_laps):
         times = data['times']
         lap_time_str = 'Unknown'
-        if len(times) > 1:
+        if i < len(sorted_laps) - 1:
+            # Start-to-start duration (Method B): difference between next lap start time and current lap start time
+            duration = sorted_laps[i + 1][1]['times'][0] - times[0]
+        elif len(times) > 1:
+            # Fallback for the final lap in the session where no next lap exists
             duration = times[-1] - times[0]
+        else:
+            duration = 0.0
+
+        if duration > 0:
             lap_time_str = _parse_lap_time(duration)
 
         laps_list.append({
@@ -177,7 +188,8 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
             'start_idx': data['start_idx'],
             'end_idx': data['end_idx'],
             'dists': data['dists'],
-            'times': times
+            'times': times,
+            'duration': duration
         })
     return laps_list, columns, driver_name
 
@@ -368,7 +380,7 @@ def _compute_lap_segments(laps: list, sector_ends: list, turns: list) -> None:
                 dt = t_end - t_start
                 if dt < 0:
                     # Wrap around finish line
-                    duration = times[-1] - times[0]
+                    duration = lap.get('duration') if lap.get('duration') is not None else (times[-1] - times[0])
                     dt += duration
                 lap['turn_times'].append(round(dt, 3))
 

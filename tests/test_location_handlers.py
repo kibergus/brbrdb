@@ -265,6 +265,31 @@ Time,Latitude,Longitude,Record,Lap
     assert laps[0]['end_idx'] == 1
     assert columns == ['Time', 'Latitude', 'Longitude', 'Record', 'Lap']
 
+    # 3. Test Start-to-Start timing across adjacent laps
+    multi_lap_csv = """Format,RaceTools CSV
+Driver name,Katia
+
+Time,Latitude,Longitude,Record,Lap
+2026-08-02T12:30:00.000Z,51.0,-3.0,1,1
+2026-08-02T12:30:50.000Z,51.0,-3.0,2,1
+2026-08-02T12:30:56.000Z,51.0,-3.0,3,2
+2026-08-02T12:31:52.000Z,51.0,-3.0,4,2
+2026-08-02T12:31:52.100Z,51.0,-3.0,5,3
+"""
+    multi_file = tmp_path / "multi.csv"
+    multi_file.write_text(multi_lap_csv)
+
+    laps_multi, _, _ = location_handlers.parse_telemetry_csv(str(multi_file))
+    assert len(laps_multi) == 3
+    # Lap 1 start-to-start duration: 12:30:56.000 - 12:30:00.000 = 56.0s
+    assert laps_multi[0]['lap_time'] == "56.000"
+    assert np.isclose(laps_multi[0]['duration'], 56.0)
+    # Lap 2 start-to-start duration: 12:31:52.100 - 12:30:56.000 = 56.1s
+    assert laps_multi[1]['lap_time'] == "56.100"
+    assert np.isclose(laps_multi[1]['duration'], 56.1)
+    # Lap 3 final lap fallback duration: 12:31:52.100 - 12:31:52.100 = 0.0s (1 point)
+    assert laps_multi[2]['lap_time'] == "Unknown"
+
 
 @patch('location_handlers.db')
 def test_get_telemetry_channel_route(
