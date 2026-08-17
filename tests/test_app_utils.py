@@ -368,6 +368,21 @@ def test_resolve_car_name() -> None:
     assert aliases.get_class_name('x30_senior') == 'X30 Senior'
     assert aliases.get_class_info('x30_senior').class_type is None
 
+    assert aliases.get_class_name('sprint_lw') == 'Sprint Lightweight'
+    assert aliases.get_class_info('sprint_lw').class_type is None
+
+    assert aliases.get_class_name('sprint_middleweight') == 'Sprint Middleweight'
+    assert aliases.get_class_info('sprint_middleweight').class_type is None
+
+    assert aliases.get_class_name('experience_lw') == 'Experience Lightweight'
+    assert aliases.get_class_info('experience_lw').class_type is None
+
+    assert aliases.get_class_name('experience_junior_lw') == 'Experience Junior Lightweight'
+    assert aliases.get_class_info('experience_junior_lw').class_type == 'junior'
+
+    assert aliases.get_class_name('experience_junior_slw') == 'Experience Junior Super Lightweight'
+    assert aliases.get_class_info('experience_junior_slw').class_type == 'junior'
+
 
 def test_resolve_track_name() -> None:
     assert aliases.resolve_track_name('Dunkeswell 2026') == 'Dunkeswell'

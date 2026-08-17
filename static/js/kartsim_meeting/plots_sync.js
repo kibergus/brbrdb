@@ -34,8 +34,8 @@ const COLUMN_MAPPINGS = {
     rps_fr: ['RPS FR', 'RPS_FR', 'WheelSpd FR', 'Wheel Speed FR'],
     rps_rl: ['RPS RL', 'RPS_RL', 'WheelSpd RL', 'Wheel Speed RL'],
     rps_rr: ['RPS RR', 'RPS_RR', 'WheelSpd RR', 'Wheel Speed RR'],
-    gx: ['GForceX (g)', 'GForceX', 'G-force X', 'G-Force X (g)', 'G Long'],
-    gy: ['GForceY (g)', 'GForceY', 'G-force Y', 'G-Force Y (g)', 'G Lat'],
+    gx: ['GForceLon'],
+    gy: ['GForceLat'],
     sp_fl: ['Slide Pct FL', 'Slide Pct_FL', 'Slide Pct FL (%)'],
     sp_fr: ['Slide Pct FR', 'Slide Pct_FR', 'Slide Pct FR (%)'],
     sp_rl: ['Slide Pct RL', 'Slide Pct_RL', 'Slide Pct RL (%)'],
@@ -99,7 +99,7 @@ export function ensureChannelLoaded(channel) {
             state.allSessionsData.forEach(session => {
                 keys.forEach(key => {
                     const choices = COLUMN_MAPPINGS[key] || [key];
-                    const exactCol = session.columns ? session.columns.find(col => 
+                    const exactCol = session.columns ? session.columns.find(col =>
                         choices.some(choice => col.toLowerCase() === choice.toLowerCase())
                     ) : null;
 
@@ -120,7 +120,7 @@ export function ensureChannelLoaded(channel) {
             });
 
             const results = await Promise.all(fetchPromises);
-            
+
             const sessionData = {};
             results.forEach(res => {
                 sessionData[res.session_id] = sessionData[res.session_id] || {};
@@ -231,14 +231,14 @@ export function updateAccelerationPlot(targetDist) {
                 filteredPoints.push({ p, distDiff });
             }
         }
-        
+
         filteredPoints.sort((a, b) => a.distDiff - b.distDiff);
 
         if (filteredPoints.length > 0) {
             const x = filteredPoints.map(item => item.p.speed);
             const y = filteredPoints.map(item => item.p.acceleration || 0);
             const alpha = getLapAlpha(idx, lapsA.length);
-            
+
             data.push({
                 x: x,
                 y: y,
@@ -504,16 +504,16 @@ export function updateSlipAnglePlot(targetDist) {
         if (chartDiv) chartDiv.style.display = 'none';
 
         Promise.all(channelsToLoad.map(ch => ensureChannelLoaded(ch)))
-        .then(() => {
-            if (state.activeRightTab === 'slip_angle') {
-                updateSlipAnglePlot(targetDist);
-            }
-        }).catch(err => {
-            console.error("Error loading telemetry channels:", err);
-            if (placeholder) {
-                placeholder.innerHTML = '<div style="color: var(--warning);">Error loading telemetry data</div>';
-            }
-        });
+            .then(() => {
+                if (state.activeRightTab === 'slip_angle') {
+                    updateSlipAnglePlot(targetDist);
+                }
+            }).catch(err => {
+                console.error("Error loading telemetry channels:", err);
+                if (placeholder) {
+                    placeholder.innerHTML = '<div style="color: var(--warning);">Error loading telemetry data</div>';
+                }
+            });
         return;
     }
 
@@ -557,12 +557,12 @@ export function updateSlipAnglePlot(targetDist) {
                 filteredPoints.push({ p, distDiff });
             }
         }
-        
+
         filteredPoints.sort((a, b) => a.distDiff - b.distDiff);
 
         if (filteredPoints.length > 0) {
             const alpha = getLapAlpha(idx, lapsA.length);
-            
+
             // Front subplot
             data.push({
                 x: filteredPoints.map(item => item.p.sa_front || 0),
@@ -826,7 +826,7 @@ export function updateSlipAnglePlot(targetDist) {
                 let sumForceFront = 0;
                 let sumSaRear = 0;
                 let sumForceRear = 0;
-                
+
                 let sumThrottle = 0;
                 let sumBrake = 0;
                 let sumGx = 0;
@@ -1030,7 +1030,7 @@ export function updateSlipAnglePlot(targetDist) {
         showlegend: false,
         margin: { t: 30, b: 35, l: 45, r: 15 },
         hovermode: 'closest',
-        
+
         // Front subplot
         xaxis: {
             title: 'Front Slip Angle (deg)',
@@ -1049,7 +1049,7 @@ export function updateSlipAnglePlot(targetDist) {
             zerolinecolor: 'rgba(255,255,255,0.1)',
             domain: [0.58, 1.0]
         },
-        
+
         // Rear subplot
         xaxis2: {
             title: 'Rear Slip Angle (deg)',
@@ -1069,7 +1069,7 @@ export function updateSlipAnglePlot(targetDist) {
             zerolinecolor: 'rgba(255,255,255,0.1)',
             domain: [0.0, 0.42]
         },
-        
+
         annotations: [
             {
                 text: `Front Tyres (±20m at ${targetDist.toFixed(0)}m)`,
@@ -1450,11 +1450,11 @@ export function renderDeltaPlot() {
         const data = [];
         state.bottomPlotIndices = state.bottomPlotIndices || {};
         state.bottomPlotIndices['plot-area-delta'] = {};
-        
+
         // Use the fastest selected lap in group A as the reference lap (respects sorting criteria like turn-by-turn)
         const refLap = state.fastestGroupALap;
         const refLapId = state.fastestGroupALapId;
-        
+
         const lapsA = Array.from(state.groupASelection).map(id => {
             return { lapId: id, ...state.lapDataLookup[id] };
         }).filter(l => l && l.points && l.points.length > 0);
@@ -1488,27 +1488,27 @@ export function renderDeltaPlot() {
             const lapAtStart = getPointAtDistance(lap, startDist, 'time');
             const lapStartTime = lapAtStart ? lapAtStart.time : lap.points[0].time;
             if (lapStartTime === undefined) return;
-            
+
             let lastD = -1;
             const targetDists = [];
             const refTimes = [];
             for (let j = 0; j < refPoints.length; j += 4) {
                 const rp = refPoints[j];
                 const d = rp.dist;
-                
+
                 // Robustness checks: only plot within track limits and official lap time
                 if (d < 0) continue;
                 if (d > maxDist + 10) break; // Allow a small buffer beyond track length
                 if (d <= lastD) continue; // Avoid vertical lines if reference is stationary
                 lastD = d;
-                
+
                 const tRef = rp.time - refStartTime;
                 if (tRef > refOfficialTime + 0.5) break; // Stop if reference lap goes way beyond official time
-                
+
                 targetDists.push(d);
                 refTimes.push(tRef);
             }
-            
+
             const interpolatedPoints = getPointsAtDistancesMonotonic(lap, targetDists, 'time');
             for (let k = 0; k < targetDists.length; k++) {
                 const pLap = interpolatedPoints[k];
@@ -1594,7 +1594,7 @@ export function renderSpeedPlot() {
         const data = [];
         state.bottomPlotIndices = state.bottomPlotIndices || {};
         state.bottomPlotIndices['plot-area-speed'] = {};
-        
+
         const lapsA = Array.from(state.groupASelection).map(id => {
             return { lapId: id, ...state.lapDataLookup[id] };
         }).filter(l => l && l.points && l.points.length > 0);
@@ -1611,13 +1611,13 @@ export function renderSpeedPlot() {
             const x = [];
             const y = [];
             const points = lap.points;
-            
+
             for (let j = 0; j < points.length; j += 4) {
                 const p = points[j];
                 const d = p.dist;
                 if (d < 0) continue;
                 if (d > maxDist + 10) break;
-                
+
                 x.push(d);
                 y.push(p.speed);
             }
@@ -1761,350 +1761,350 @@ export function renderSingleChannelPlot(activeTab) {
     });
     try {
         state.bottomPlotIndices = state.bottomPlotIndices || {};
-    state.bottomPlotIndices[targetId] = {};
+        state.bottomPlotIndices[targetId] = {};
 
-    const data = [];
+        const data = [];
 
-    const lapsA = state.groupAVisibleMap ? sortLapsByTime(Array.from(state.groupASelection).map(id => {
-        const lap = state.lapDataLookup[id];
-        return lap ? { id, ...lap } : null;
-    }).filter(l => l && l.points)) : [];
+        const lapsA = state.groupAVisibleMap ? sortLapsByTime(Array.from(state.groupASelection).map(id => {
+            const lap = state.lapDataLookup[id];
+            return lap ? { id, ...lap } : null;
+        }).filter(l => l && l.points)) : [];
 
-    const lapsB = state.groupBVisibleMap ? sortLapsByTime(Array.from(state.groupBSelection).map(id => {
-        const lap = state.lapDataLookup[id];
-        return lap ? { id, ...lap } : null;
-    }).filter(l => l && l.points)) : [];
+        const lapsB = state.groupBVisibleMap ? sortLapsByTime(Array.from(state.groupBSelection).map(id => {
+            const lap = state.lapDataLookup[id];
+            return lap ? { id, ...lap } : null;
+        }).filter(l => l && l.points)) : [];
 
-    const layout = {
-        uirevision: true,
-        dragmode: 'pan',
-        margin: { t: 30, b: 25, l: 80, r: 20 },
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { color: '#94a3b8', size: 10 },
-        showlegend: false,
-        xaxis: {
-            gridcolor: 'rgba(255,255,255,0.05)',
-            zeroline: false,
-            range: state.globalTelemetryXRange,
-            fixedrange: false
-        },
-        yaxis: {
-            gridcolor: 'rgba(255,255,255,0.05)',
-            zeroline: false,
-            color: '#94a3b8',
-            fixedrange: true
-        },
-        annotations: [
-            {
-                text: 'Dist (m)', xref: 'paper', yref: 'paper', x: 0, y: 0,
-                xanchor: 'right', yanchor: 'middle', xshift: -10, yshift: -9,
-                showarrow: false, font: { size: 10, color: '#94a3b8' }
-            }
-        ]
-    };
-
-    if (state.currentActivePlotTab === 'control') {
-        layout.yaxis.title = 'Inputs (%)';
-        lapsA.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsA.length);
-            addTrace(data, lap, 'throttle', `rgba(34, 197, 94, ${alpha})`, 2);
-            addTrace(data, lap, 'brake', `rgba(239, 68, 68, ${alpha})`, 2);
-        });
-        lapsB.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsB.length, 0.8);
-            addTrace(data, lap, 'throttle', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dash');
-            addTrace(data, lap, 'brake', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash');
-        });
-    } else if (state.currentActivePlotTab === 'steering') {
-        layout.yaxis.title = 'Steering Wheel Angle (deg)';
-        lapsA.forEach((lap, i) => addTrace(data, lap, 'steering', `rgba(251, 146, 60, ${getLapAlpha(i, lapsA.length)})`, 2));
-        lapsB.forEach((lap, i) => addTrace(data, lap, 'steering', `rgba(56, 189, 248, ${getLapAlpha(i, lapsB.length, 0.8)})`, 1.5, 'dash'));
-    } else if (state.currentActivePlotTab === 'rps') {
-        layout.yaxis.title = 'Rotation Speed (RPS)';
-        layout.showlegend = true;
-        layout.legend = {
-            x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
-            bgcolor: 'rgba(15, 23, 42, 0.8)', bordercolor: 'rgba(255, 255, 255, 0.1)', borderwidth: 1,
-            font: { size: 10, color: '#94a3b8' }
-        };
-        lapsA.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsA.length);
-            addTrace(data, lap, 'rps_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL', 'y', i === 0);
-            addTrace(data, lap, 'rps_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR', 'y', i === 0);
-            addTrace(data, lap, 'rps_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL', 'y', i === 0);
-            addTrace(data, lap, 'rps_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR', 'y', i === 0);
-        });
-    } else if (state.currentActivePlotTab === 'gforce') {
-        layout.yaxis.title = 'G-Force (g)';
-        layout.showlegend = false;
-
-        if (!state.gforcePlotActiveComponents) {
-            state.gforcePlotActiveComponents = { lat: true, lon: true, tot: false };
-        }
-
-        const calcGForceTotals = (lap) => {
-            lap.points.forEach(p => {
-                const gx = parseFloat(p['gx']) || 0;
-                const gy = parseFloat(p['gy']) || 0;
-                p['gforce_tot'] = Math.sqrt(gx * gx + gy * gy);
-            });
-        };
-
-        lapsA.forEach(lap => calcGForceTotals(lap));
-        lapsB.forEach(lap => calcGForceTotals(lap));
-
-        lapsA.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsA.length);
-            if (state.gforcePlotActiveComponents.lat) addTrace(data, lap, 'gy', `rgba(236, 72, 153, ${alpha})`, 2, 'solid', 'Lat', 'y', false);
-            if (state.gforcePlotActiveComponents.lon) addTrace(data, lap, 'gx', `rgba(168, 85, 247, ${alpha})`, 2, 'solid', 'Lon', 'y', false);
-            if (state.gforcePlotActiveComponents.tot) addTrace(data, lap, 'gforce_tot', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'Total', 'y', false);
-        });
-
-        lapsB.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsB.length, 0.8);
-            if (state.gforcePlotActiveComponents.lat) addTrace(data, lap, 'gy', `rgba(236, 72, 153, ${alpha})`, 1.5, 'solid', 'Lat (B)', 'y', false);
-            if (state.gforcePlotActiveComponents.lon) addTrace(data, lap, 'gx', `rgba(168, 85, 247, ${alpha})`, 1.5, 'solid', 'Lon (B)', 'y', false);
-            if (state.gforcePlotActiveComponents.tot) addTrace(data, lap, 'gforce_tot', `rgba(251, 146, 60, ${alpha})`, 1.5, 'solid', 'Total (B)', 'y', false);
-        });
-    } else if (state.currentActivePlotTab === 'slide') {
-        layout.yaxis.title = 'Slide Pct (%)';
-        layout.showlegend = true;
-        layout.legend = {
-            x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
-            bgcolor: 'rgba(15, 23, 42, 0.8)', bordercolor: 'rgba(255, 255, 255, 0.1)', borderwidth: 1,
-            font: { size: 10, color: '#94a3b8' }
-        };
-        lapsA.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsA.length);
-            addTrace(data, lap, 'sp_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL', 'y', i === 0);
-            addTrace(data, lap, 'sp_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR', 'y', i === 0);
-            addTrace(data, lap, 'sp_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL', 'y', i === 0);
-            addTrace(data, lap, 'sp_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR', 'y', i === 0);
-        });
-        lapsB.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsB.length, 0.8);
-            addTrace(data, lap, 'sp_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dash', 'FL (B)', 'y', false);
-            addTrace(data, lap, 'sp_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dash', 'FR (B)', 'y', false);
-            addTrace(data, lap, 'sp_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash', 'RL (B)', 'y', false);
-            addTrace(data, lap, 'sp_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'dash', 'RR (B)', 'y', false);
-        });
-    } else if (state.currentActivePlotTab === 'patch_vel') {
-        layout.showlegend = true;
-        layout.legend = {
-            x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
-            bgcolor: 'rgba(15, 23, 42, 0.8)', bordercolor: 'rgba(255, 255, 255, 0.1)', borderwidth: 1,
-            font: { size: 10, color: '#94a3b8' }
-        };
-        // Top plot: Lat Patch Vel (domain: [0.53, 1])
-        layout.yaxis.title = 'Lat Patch Vel (m/s)';
-        layout.yaxis.domain = [0.53, 1];
-        
-        // Bottom plot: Lon Patch Vel (domain: [0, 0.47])
-        layout.yaxis2 = {
-            domain: [0, 0.47],
-            title: 'Lon Patch Vel (m/s)',
-            gridcolor: 'rgba(255,255,255,0.05)',
-            zeroline: false,
-            color: '#94a3b8',
-            fixedrange: true
-        };
-
-        lapsA.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsA.length);
-            // Top plot (yaxis = 'y')
-            addTrace(data, lap, 'lpv_lat_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL', 'y', i === 0);
-            addTrace(data, lap, 'lpv_lat_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR', 'y', i === 0);
-            addTrace(data, lap, 'lpv_lat_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL', 'y', i === 0);
-            addTrace(data, lap, 'lpv_lat_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR', 'y', i === 0);
-            
-            // Bottom plot (yaxis = 'y2')
-            addTrace(data, lap, 'lpv_lon_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL', 'y2', false);
-            addTrace(data, lap, 'lpv_lon_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR', 'y2', false);
-            addTrace(data, lap, 'lpv_lon_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL', 'y2', false);
-            addTrace(data, lap, 'lpv_lon_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR', 'y2', false);
-        });
-        lapsB.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsB.length, 0.8);
-            // Top plot (yaxis = 'y')
-            addTrace(data, lap, 'lpv_lat_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dash', 'FL (B)', 'y', false);
-            addTrace(data, lap, 'lpv_lat_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dash', 'FR (B)', 'y', false);
-            addTrace(data, lap, 'lpv_lat_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash', 'RL (B)', 'y', false);
-            addTrace(data, lap, 'lpv_lat_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'dash', 'RR (B)', 'y', false);
-            
-            // Bottom plot (yaxis = 'y2')
-            addTrace(data, lap, 'lpv_lon_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dash', 'FL (B)', 'y2', false);
-            addTrace(data, lap, 'lpv_lon_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dash', 'FR (B)', 'y2', false);
-            addTrace(data, lap, 'lpv_lon_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash', 'RL (B)', 'y2', false);
-            addTrace(data, lap, 'lpv_lon_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'dash', 'RR (B)', 'y2', false);
-        });
-    } else if (state.currentActivePlotTab === 'force') {
-        layout.yaxis.title = 'Force (N)';
-        layout.showlegend = false;
-
-        if (!state.forcePlotActiveWheels) {
-            state.forcePlotActiveWheels = { fl: true, fr: true, rl: true, rr: true };
-        }
-        if (!state.forcePlotActiveComponents) {
-            state.forcePlotActiveComponents = { lat: true, lon: true, tot: false };
-        }
-
-        const calcTotals = (lap) => {
-            lap.points.forEach(p => {
-                const lat_fl = parseFloat(p['lf_lat_fl']) || 0;
-                const lon_fl = parseFloat(p['lf_lon_fl']) || 0;
-                p['lf_tot_fl'] = Math.sqrt(lat_fl * lat_fl + lon_fl * lon_fl);
-
-                const lat_fr = parseFloat(p['lf_lat_fr']) || 0;
-                const lon_fr = parseFloat(p['lf_lon_fr']) || 0;
-                p['lf_tot_fr'] = Math.sqrt(lat_fr * lat_fr + lon_fr * lon_fr);
-
-                const lat_rl = parseFloat(p['lf_lat_rl']) || 0;
-                const lon_rl = parseFloat(p['lf_lon_rl']) || 0;
-                p['lf_tot_rl'] = Math.sqrt(lat_rl * lat_rl + lon_rl * lon_rl);
-
-                const lat_rr = parseFloat(p['lf_lat_rr']) || 0;
-                const lon_rr = parseFloat(p['lf_lon_rr']) || 0;
-                p['lf_tot_rr'] = Math.sqrt(lat_rr * lat_rr + lon_rr * lon_rr);
-            });
-        };
-
-        lapsA.forEach(lap => calcTotals(lap));
-        lapsB.forEach(lap => calcTotals(lap));
-
-        lapsA.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsA.length);
-            if (state.forcePlotActiveWheels.fl) {
-                if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL Lat', 'y', false);
-                if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'dot', 'FL Lon', 'y', false);
-                if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL Tot', 'y', false);
-            }
-            if (state.forcePlotActiveWheels.fr) {
-                if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR Lat', 'y', false);
-                if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'dot', 'FR Lon', 'y', false);
-                if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR Tot', 'y', false);
-            }
-            if (state.forcePlotActiveWheels.rl) {
-                if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL Lat', 'y', false);
-                if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'dot', 'RL Lon', 'y', false);
-                if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL Tot', 'y', false);
-            }
-            if (state.forcePlotActiveWheels.rr) {
-                if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR Lat', 'y', false);
-                if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'dot', 'RR Lon', 'y', false);
-                if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR Tot', 'y', false);
-            }
-        });
-
-        lapsB.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsB.length, 0.8);
-            if (state.forcePlotActiveWheels.fl) {
-                if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'solid', 'FL Lat (B)', 'y', false);
-                if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dot', 'FL Lon (B)', 'y', false);
-                if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'solid', 'FL Tot (B)', 'y', false);
-            }
-            if (state.forcePlotActiveWheels.fr) {
-                if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'solid', 'FR Lat (B)', 'y', false);
-                if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dot', 'FR Lon (B)', 'y', false);
-                if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'solid', 'FR Tot (B)', 'y', false);
-            }
-            if (state.forcePlotActiveWheels.rl) {
-                if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'solid', 'RL Lat (B)', 'y', false);
-                if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dot', 'RL Lon (B)', 'y', false);
-                if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'solid', 'RL Tot (B)', 'y', false);
-            }
-            if (state.forcePlotActiveWheels.rr) {
-                if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'solid', 'RR Lat (B)', 'y', false);
-                if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'dot', 'RR Lon (B)', 'y', false);
-                if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'solid', 'RR Tot (B)', 'y', false);
-            }
-        });
-    } else if (state.currentActivePlotTab === 'tyre_load') {
-        layout.yaxis.title = 'Tyre Load (N)';
-        layout.showlegend = true;
-        layout.legend = {
-            x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
-            bgcolor: 'rgba(15, 23, 42, 0.8)', bordercolor: 'rgba(255, 255, 255, 0.1)', borderwidth: 1,
-            font: { size: 10, color: '#94a3b8' }
-        };
-        lapsA.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsA.length);
-            addTrace(data, lap, 'tl_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL', 'y', i === 0);
-            addTrace(data, lap, 'tl_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR', 'y', i === 0);
-            addTrace(data, lap, 'tl_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL', 'y', i === 0);
-            addTrace(data, lap, 'tl_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR', 'y', i === 0);
-        });
-        lapsB.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsB.length, 0.8);
-            addTrace(data, lap, 'tl_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dash', 'FL (B)', 'y', false);
-            addTrace(data, lap, 'tl_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dash', 'FR (B)', 'y', false);
-            addTrace(data, lap, 'tl_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash', 'RL (B)', 'y', false);
-            addTrace(data, lap, 'tl_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'dash', 'RR (B)', 'y', false);
-        });
-    } else if (state.currentActivePlotTab === 'slip_angle') {
-        layout.yaxis.title = 'Slip Angle (deg)';
-        layout.showlegend = true;
-        layout.legend = {
-            x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
-            bgcolor: 'rgba(15, 23, 42, 0.8)', bordercolor: 'rgba(255, 255, 255, 0.1)', borderwidth: 1,
-            font: { size: 10, color: '#94a3b8' }
-        };
-        lapsA.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsA.length);
-            addTrace(data, lap, 'sa_front', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'Front', 'y', i === 0);
-            addTrace(data, lap, 'sa_rear', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'Rear', 'y', i === 0);
-        });
-        lapsB.forEach((lap, i) => {
-            const alpha = getLapAlpha(i, lapsB.length, 0.8);
-            addTrace(data, lap, 'sa_front', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dash', 'Front (B)', 'y', false);
-            addTrace(data, lap, 'sa_rear', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash', 'Rear (B)', 'y', false);
-        });
-    }
-
-    addCommonPlotElements(layout);
-    if (targetEl) {
-        Plotly.react(targetEl, data, layout, { responsive: true, displayModeBar: false, scrollZoom: true });
-        if (state.currentActivePlotTab === 'force' || state.currentActivePlotTab === 'gforce') {
-            renderCustomLegend(state.currentActivePlotTab, targetEl);
-        } else {
-            const existing = targetEl.querySelector('.custom-plot-legend');
-            if (existing) {
-                existing.remove();
-            }
-        }
-        updateChannelYLim(activeTab, false);
-        if (!targetEl._legendClickBound) {
-            targetEl.on('plotly_legendclick', function(eventData) {
-                const gd = targetEl;
-                const clickedTraceIndex = eventData.curveNumber;
-                const plotData = gd.data || data;
-                if (!plotData || !plotData[clickedTraceIndex]) return true;
-                
-                const clickedTrace = plotData[clickedTraceIndex];
-                const clickedName = clickedTrace.name;
-                
-                const currentVisible = clickedTrace.visible;
-                const nextVisible = (currentVisible === 'legendonly') ? true : 'legendonly';
-                
-                const updateIndices = [];
-                const updateVisible = [];
-                
-                plotData.forEach((trace, idx) => {
-                    if (trace.name === clickedName) {
-                        updateIndices.push(idx);
-                        updateVisible.push(nextVisible);
-                    }
-                });
-                
-                if (updateIndices.length > 0) {
-                    Plotly.restyle(gd, { visible: updateVisible }, updateIndices);
+        const layout = {
+            uirevision: true,
+            dragmode: 'pan',
+            margin: { t: 30, b: 25, l: 80, r: 20 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: '#94a3b8', size: 10 },
+            showlegend: false,
+            xaxis: {
+                gridcolor: 'rgba(255,255,255,0.05)',
+                zeroline: false,
+                range: state.globalTelemetryXRange,
+                fixedrange: false
+            },
+            yaxis: {
+                gridcolor: 'rgba(255,255,255,0.05)',
+                zeroline: false,
+                color: '#94a3b8',
+                fixedrange: true
+            },
+            annotations: [
+                {
+                    text: 'Dist (m)', xref: 'paper', yref: 'paper', x: 0, y: 0,
+                    xanchor: 'right', yanchor: 'middle', xshift: -10, yshift: -9,
+                    showarrow: false, font: { size: 10, color: '#94a3b8' }
                 }
-                
-                return false; // Prevent default toggle of single trace
+            ]
+        };
+
+        if (state.currentActivePlotTab === 'control') {
+            layout.yaxis.title = 'Inputs (%)';
+            lapsA.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsA.length);
+                addTrace(data, lap, 'throttle', `rgba(34, 197, 94, ${alpha})`, 2);
+                addTrace(data, lap, 'brake', `rgba(239, 68, 68, ${alpha})`, 2);
             });
-            targetEl._legendClickBound = true;
+            lapsB.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsB.length, 0.8);
+                addTrace(data, lap, 'throttle', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dash');
+                addTrace(data, lap, 'brake', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash');
+            });
+        } else if (state.currentActivePlotTab === 'steering') {
+            layout.yaxis.title = 'Steering Wheel Angle (deg)';
+            lapsA.forEach((lap, i) => addTrace(data, lap, 'steering', `rgba(251, 146, 60, ${getLapAlpha(i, lapsA.length)})`, 2));
+            lapsB.forEach((lap, i) => addTrace(data, lap, 'steering', `rgba(56, 189, 248, ${getLapAlpha(i, lapsB.length, 0.8)})`, 1.5, 'dash'));
+        } else if (state.currentActivePlotTab === 'rps') {
+            layout.yaxis.title = 'Rotation Speed (RPS)';
+            layout.showlegend = true;
+            layout.legend = {
+                x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
+                bgcolor: 'rgba(15, 23, 42, 0.8)', bordercolor: 'rgba(255, 255, 255, 0.1)', borderwidth: 1,
+                font: { size: 10, color: '#94a3b8' }
+            };
+            lapsA.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsA.length);
+                addTrace(data, lap, 'rps_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL', 'y', i === 0);
+                addTrace(data, lap, 'rps_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR', 'y', i === 0);
+                addTrace(data, lap, 'rps_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL', 'y', i === 0);
+                addTrace(data, lap, 'rps_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR', 'y', i === 0);
+            });
+        } else if (state.currentActivePlotTab === 'gforce') {
+            layout.yaxis.title = 'G-Force (g)';
+            layout.showlegend = false;
+
+            if (!state.gforcePlotActiveComponents) {
+                state.gforcePlotActiveComponents = { lat: true, lon: true, tot: false };
+            }
+
+            const calcGForceTotals = (lap) => {
+                lap.points.forEach(p => {
+                    const gx = parseFloat(p['gx']) || 0;
+                    const gy = parseFloat(p['gy']) || 0;
+                    p['gforce_tot'] = Math.sqrt(gx * gx + gy * gy);
+                });
+            };
+
+            lapsA.forEach(lap => calcGForceTotals(lap));
+            lapsB.forEach(lap => calcGForceTotals(lap));
+
+            lapsA.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsA.length);
+                if (state.gforcePlotActiveComponents.lat) addTrace(data, lap, 'gy', `rgba(236, 72, 153, ${alpha})`, 2, 'solid', 'Lat', 'y', false);
+                if (state.gforcePlotActiveComponents.lon) addTrace(data, lap, 'gx', `rgba(168, 85, 247, ${alpha})`, 2, 'solid', 'Lon', 'y', false);
+                if (state.gforcePlotActiveComponents.tot) addTrace(data, lap, 'gforce_tot', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'Total', 'y', false);
+            });
+
+            lapsB.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsB.length, 0.8);
+                if (state.gforcePlotActiveComponents.lat) addTrace(data, lap, 'gy', `rgba(236, 72, 153, ${alpha})`, 1.5, 'solid', 'Lat (B)', 'y', false);
+                if (state.gforcePlotActiveComponents.lon) addTrace(data, lap, 'gx', `rgba(168, 85, 247, ${alpha})`, 1.5, 'solid', 'Lon (B)', 'y', false);
+                if (state.gforcePlotActiveComponents.tot) addTrace(data, lap, 'gforce_tot', `rgba(251, 146, 60, ${alpha})`, 1.5, 'solid', 'Total (B)', 'y', false);
+            });
+        } else if (state.currentActivePlotTab === 'slide') {
+            layout.yaxis.title = 'Slide Pct (%)';
+            layout.showlegend = true;
+            layout.legend = {
+                x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
+                bgcolor: 'rgba(15, 23, 42, 0.8)', bordercolor: 'rgba(255, 255, 255, 0.1)', borderwidth: 1,
+                font: { size: 10, color: '#94a3b8' }
+            };
+            lapsA.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsA.length);
+                addTrace(data, lap, 'sp_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL', 'y', i === 0);
+                addTrace(data, lap, 'sp_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR', 'y', i === 0);
+                addTrace(data, lap, 'sp_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL', 'y', i === 0);
+                addTrace(data, lap, 'sp_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR', 'y', i === 0);
+            });
+            lapsB.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsB.length, 0.8);
+                addTrace(data, lap, 'sp_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dash', 'FL (B)', 'y', false);
+                addTrace(data, lap, 'sp_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dash', 'FR (B)', 'y', false);
+                addTrace(data, lap, 'sp_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash', 'RL (B)', 'y', false);
+                addTrace(data, lap, 'sp_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'dash', 'RR (B)', 'y', false);
+            });
+        } else if (state.currentActivePlotTab === 'patch_vel') {
+            layout.showlegend = true;
+            layout.legend = {
+                x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
+                bgcolor: 'rgba(15, 23, 42, 0.8)', bordercolor: 'rgba(255, 255, 255, 0.1)', borderwidth: 1,
+                font: { size: 10, color: '#94a3b8' }
+            };
+            // Top plot: Lat Patch Vel (domain: [0.53, 1])
+            layout.yaxis.title = 'Lat Patch Vel (m/s)';
+            layout.yaxis.domain = [0.53, 1];
+
+            // Bottom plot: Lon Patch Vel (domain: [0, 0.47])
+            layout.yaxis2 = {
+                domain: [0, 0.47],
+                title: 'Lon Patch Vel (m/s)',
+                gridcolor: 'rgba(255,255,255,0.05)',
+                zeroline: false,
+                color: '#94a3b8',
+                fixedrange: true
+            };
+
+            lapsA.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsA.length);
+                // Top plot (yaxis = 'y')
+                addTrace(data, lap, 'lpv_lat_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL', 'y', i === 0);
+                addTrace(data, lap, 'lpv_lat_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR', 'y', i === 0);
+                addTrace(data, lap, 'lpv_lat_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL', 'y', i === 0);
+                addTrace(data, lap, 'lpv_lat_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR', 'y', i === 0);
+
+                // Bottom plot (yaxis = 'y2')
+                addTrace(data, lap, 'lpv_lon_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL', 'y2', false);
+                addTrace(data, lap, 'lpv_lon_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR', 'y2', false);
+                addTrace(data, lap, 'lpv_lon_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL', 'y2', false);
+                addTrace(data, lap, 'lpv_lon_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR', 'y2', false);
+            });
+            lapsB.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsB.length, 0.8);
+                // Top plot (yaxis = 'y')
+                addTrace(data, lap, 'lpv_lat_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dash', 'FL (B)', 'y', false);
+                addTrace(data, lap, 'lpv_lat_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dash', 'FR (B)', 'y', false);
+                addTrace(data, lap, 'lpv_lat_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash', 'RL (B)', 'y', false);
+                addTrace(data, lap, 'lpv_lat_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'dash', 'RR (B)', 'y', false);
+
+                // Bottom plot (yaxis = 'y2')
+                addTrace(data, lap, 'lpv_lon_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dash', 'FL (B)', 'y2', false);
+                addTrace(data, lap, 'lpv_lon_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dash', 'FR (B)', 'y2', false);
+                addTrace(data, lap, 'lpv_lon_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash', 'RL (B)', 'y2', false);
+                addTrace(data, lap, 'lpv_lon_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'dash', 'RR (B)', 'y2', false);
+            });
+        } else if (state.currentActivePlotTab === 'force') {
+            layout.yaxis.title = 'Force (N)';
+            layout.showlegend = false;
+
+            if (!state.forcePlotActiveWheels) {
+                state.forcePlotActiveWheels = { fl: true, fr: true, rl: true, rr: true };
+            }
+            if (!state.forcePlotActiveComponents) {
+                state.forcePlotActiveComponents = { lat: true, lon: true, tot: false };
+            }
+
+            const calcTotals = (lap) => {
+                lap.points.forEach(p => {
+                    const lat_fl = parseFloat(p['lf_lat_fl']) || 0;
+                    const lon_fl = parseFloat(p['lf_lon_fl']) || 0;
+                    p['lf_tot_fl'] = Math.sqrt(lat_fl * lat_fl + lon_fl * lon_fl);
+
+                    const lat_fr = parseFloat(p['lf_lat_fr']) || 0;
+                    const lon_fr = parseFloat(p['lf_lon_fr']) || 0;
+                    p['lf_tot_fr'] = Math.sqrt(lat_fr * lat_fr + lon_fr * lon_fr);
+
+                    const lat_rl = parseFloat(p['lf_lat_rl']) || 0;
+                    const lon_rl = parseFloat(p['lf_lon_rl']) || 0;
+                    p['lf_tot_rl'] = Math.sqrt(lat_rl * lat_rl + lon_rl * lon_rl);
+
+                    const lat_rr = parseFloat(p['lf_lat_rr']) || 0;
+                    const lon_rr = parseFloat(p['lf_lon_rr']) || 0;
+                    p['lf_tot_rr'] = Math.sqrt(lat_rr * lat_rr + lon_rr * lon_rr);
+                });
+            };
+
+            lapsA.forEach(lap => calcTotals(lap));
+            lapsB.forEach(lap => calcTotals(lap));
+
+            lapsA.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsA.length);
+                if (state.forcePlotActiveWheels.fl) {
+                    if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL Lat', 'y', false);
+                    if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'dot', 'FL Lon', 'y', false);
+                    if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL Tot', 'y', false);
+                }
+                if (state.forcePlotActiveWheels.fr) {
+                    if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR Lat', 'y', false);
+                    if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'dot', 'FR Lon', 'y', false);
+                    if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR Tot', 'y', false);
+                }
+                if (state.forcePlotActiveWheels.rl) {
+                    if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL Lat', 'y', false);
+                    if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'dot', 'RL Lon', 'y', false);
+                    if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL Tot', 'y', false);
+                }
+                if (state.forcePlotActiveWheels.rr) {
+                    if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR Lat', 'y', false);
+                    if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'dot', 'RR Lon', 'y', false);
+                    if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR Tot', 'y', false);
+                }
+            });
+
+            lapsB.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsB.length, 0.8);
+                if (state.forcePlotActiveWheels.fl) {
+                    if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'solid', 'FL Lat (B)', 'y', false);
+                    if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dot', 'FL Lon (B)', 'y', false);
+                    if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'solid', 'FL Tot (B)', 'y', false);
+                }
+                if (state.forcePlotActiveWheels.fr) {
+                    if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'solid', 'FR Lat (B)', 'y', false);
+                    if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dot', 'FR Lon (B)', 'y', false);
+                    if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'solid', 'FR Tot (B)', 'y', false);
+                }
+                if (state.forcePlotActiveWheels.rl) {
+                    if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'solid', 'RL Lat (B)', 'y', false);
+                    if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dot', 'RL Lon (B)', 'y', false);
+                    if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'solid', 'RL Tot (B)', 'y', false);
+                }
+                if (state.forcePlotActiveWheels.rr) {
+                    if (state.forcePlotActiveComponents.lat) addTrace(data, lap, 'lf_lat_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'solid', 'RR Lat (B)', 'y', false);
+                    if (state.forcePlotActiveComponents.lon) addTrace(data, lap, 'lf_lon_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'dot', 'RR Lon (B)', 'y', false);
+                    if (state.forcePlotActiveComponents.tot) addTrace(data, lap, 'lf_tot_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'solid', 'RR Tot (B)', 'y', false);
+                }
+            });
+        } else if (state.currentActivePlotTab === 'tyre_load') {
+            layout.yaxis.title = 'Tyre Load (N)';
+            layout.showlegend = true;
+            layout.legend = {
+                x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
+                bgcolor: 'rgba(15, 23, 42, 0.8)', bordercolor: 'rgba(255, 255, 255, 0.1)', borderwidth: 1,
+                font: { size: 10, color: '#94a3b8' }
+            };
+            lapsA.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsA.length);
+                addTrace(data, lap, 'tl_fl', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'FL', 'y', i === 0);
+                addTrace(data, lap, 'tl_fr', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'FR', 'y', i === 0);
+                addTrace(data, lap, 'tl_rl', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'RL', 'y', i === 0);
+                addTrace(data, lap, 'tl_rr', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'RR', 'y', i === 0);
+            });
+            lapsB.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsB.length, 0.8);
+                addTrace(data, lap, 'tl_fl', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dash', 'FL (B)', 'y', false);
+                addTrace(data, lap, 'tl_fr', `rgba(34, 197, 94, ${alpha})`, 1.5, 'dash', 'FR (B)', 'y', false);
+                addTrace(data, lap, 'tl_rl', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash', 'RL (B)', 'y', false);
+                addTrace(data, lap, 'tl_rr', `rgba(251, 146, 60, ${alpha})`, 1.5, 'dash', 'RR (B)', 'y', false);
+            });
+        } else if (state.currentActivePlotTab === 'slip_angle') {
+            layout.yaxis.title = 'Slip Angle (deg)';
+            layout.showlegend = true;
+            layout.legend = {
+                x: 0.98, y: 0.98, xanchor: 'right', yanchor: 'top',
+                bgcolor: 'rgba(15, 23, 42, 0.8)', bordercolor: 'rgba(255, 255, 255, 0.1)', borderwidth: 1,
+                font: { size: 10, color: '#94a3b8' }
+            };
+            lapsA.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsA.length);
+                addTrace(data, lap, 'sa_front', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'Front', 'y', i === 0);
+                addTrace(data, lap, 'sa_rear', `rgba(239, 68, 68, ${alpha})`, 2, 'solid', 'Rear', 'y', i === 0);
+            });
+            lapsB.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsB.length, 0.8);
+                addTrace(data, lap, 'sa_front', `rgba(56, 189, 248, ${alpha})`, 1.5, 'dash', 'Front (B)', 'y', false);
+                addTrace(data, lap, 'sa_rear', `rgba(239, 68, 68, ${alpha})`, 1.5, 'dash', 'Rear (B)', 'y', false);
+            });
         }
-    }
+
+        addCommonPlotElements(layout);
+        if (targetEl) {
+            Plotly.react(targetEl, data, layout, { responsive: true, displayModeBar: false, scrollZoom: true });
+            if (state.currentActivePlotTab === 'force' || state.currentActivePlotTab === 'gforce') {
+                renderCustomLegend(state.currentActivePlotTab, targetEl);
+            } else {
+                const existing = targetEl.querySelector('.custom-plot-legend');
+                if (existing) {
+                    existing.remove();
+                }
+            }
+            updateChannelYLim(activeTab, false);
+            if (!targetEl._legendClickBound) {
+                targetEl.on('plotly_legendclick', function (eventData) {
+                    const gd = targetEl;
+                    const clickedTraceIndex = eventData.curveNumber;
+                    const plotData = gd.data || data;
+                    if (!plotData || !plotData[clickedTraceIndex]) return true;
+
+                    const clickedTrace = plotData[clickedTraceIndex];
+                    const clickedName = clickedTrace.name;
+
+                    const currentVisible = clickedTrace.visible;
+                    const nextVisible = (currentVisible === 'legendonly') ? true : 'legendonly';
+
+                    const updateIndices = [];
+                    const updateVisible = [];
+
+                    plotData.forEach((trace, idx) => {
+                        if (trace.name === clickedName) {
+                            updateIndices.push(idx);
+                            updateVisible.push(nextVisible);
+                        }
+                    });
+
+                    if (updateIndices.length > 0) {
+                        Plotly.restyle(gd, { visible: updateVisible }, updateIndices);
+                    }
+
+                    return false; // Prevent default toggle of single trace
+                });
+                targetEl._legendClickBound = true;
+            }
+        }
     } finally {
         Object.defineProperty(state, 'currentActivePlotTab', originalDescriptor);
     }
@@ -2123,7 +2123,7 @@ export function addTrace(data, lap, field, color, width, dash = 'solid', customN
     const plotId = 'plot-area-' + state.currentActivePlotTab;
     state.bottomPlotIndices = state.bottomPlotIndices || {};
     state.bottomPlotIndices[plotId] = state.bottomPlotIndices[plotId] || {};
-    
+
     const lapId = lap.lapId || lap.id;
     if (lapId) {
         state.bottomPlotIndices[plotId][lapId] = state.bottomPlotIndices[plotId][lapId] || [];
@@ -2173,7 +2173,7 @@ export function updateExpandablePlotsIndicator() {
         'shapes[0].x0': xPos,
         'shapes[0].x1': xPos
     };
-    
+
     if (state.activePlotChannels) {
         state.activePlotChannels.forEach(tab => {
             const id = 'plot-area-' + tab;
@@ -2238,13 +2238,13 @@ export function _syncPlotsFrame() {
     const update = { 'xaxis.range': state._syncLastRange, 'xaxis.autorange': false };
     const promises = plotIds.map(id => {
         if (id === sourceId) return Promise.resolve(); // Skip the source of the change to avoid double-application/jitter
-        
+
         const el = document.getElementById(id);
         if (!el || !el._fullLayout) return Promise.resolve();
-        
+
         const cur = el._fullLayout.xaxis.range;
         if (_rangesEqual(cur, state._syncLastRange)) return Promise.resolve();
-        
+
         return Plotly.relayout(el, update);
     });
 
@@ -2258,7 +2258,7 @@ export function _syncPlotsFrame() {
                 updateChannelYLim(tab, sourceId === 'plot-area-' + tab);
             });
         }
-        
+
         // Finalize Y limits for all plots 150ms after the last range change (e.g. scroll/zoom end)
         if (state._syncEndTimeout) {
             clearTimeout(state._syncEndTimeout);
@@ -2287,10 +2287,10 @@ export function updateDeltaYLim(skipRelayoutIfDragging = false) {
     if (!state.deltaPlotVisible) return;
     const gd = document.getElementById('plot-area-delta');
     if (!gd || !gd.data || gd.data.length === 0) return;
-    
+
     const range = state.globalTelemetryXRange;
     if (!range || range.length < 2) return;
-    
+
     let min = Infinity;
     let max = -Infinity;
     gd.data.forEach(trace => {
@@ -2306,7 +2306,7 @@ export function updateDeltaYLim(skipRelayoutIfDragging = false) {
             }
         }
     });
-    
+
     if (min !== Infinity && max !== -Infinity) {
         const span = max - min;
         const padding = Math.max(0.01, span * 0.15);
@@ -2418,10 +2418,10 @@ export function updateSpeedYLim(skipRelayoutIfDragging = false) {
     if (!state.speedPlotVisible) return;
     const gd = document.getElementById('plot-area-speed');
     if (!gd || !gd.data || gd.data.length === 0) return;
-    
+
     const range = state.globalTelemetryXRange;
     if (!range || range.length < 2) return;
-    
+
     let min = Infinity;
     let max = -Infinity;
     gd.data.forEach(trace => {
@@ -2436,7 +2436,7 @@ export function updateSpeedYLim(skipRelayoutIfDragging = false) {
             }
         }
     });
-    
+
     if (min !== Infinity && max !== -Infinity) {
         const span = max - min;
         const padding = Math.max(1, span * 0.1);
@@ -2461,10 +2461,10 @@ export function updateChannelYLim(tab, skipRelayoutIfDragging = false) {
     if (tab === 'control' || tab === 'steering') return;
     const gd = document.getElementById('plot-area-' + tab);
     if (!gd || !gd.data || gd.data.length === 0) return;
-    
+
     const range = state.globalTelemetryXRange;
     if (!range || range.length < 2) return;
-    
+
     const getMinMax = (traces) => {
         let min = Infinity;
         let max = -Infinity;
@@ -2487,18 +2487,18 @@ export function updateChannelYLim(tab, skipRelayoutIfDragging = false) {
     if (tab === 'patch_vel') {
         const latTraces = gd.data.filter(t => !t.yaxis || t.yaxis === 'y');
         const lonTraces = gd.data.filter(t => t.yaxis === 'y2');
-        
+
         const latBounds = getMinMax(latTraces);
         const lonBounds = getMinMax(lonTraces);
-        
+
         const update = {};
         let needsUpdate = false;
-        
+
         if (latBounds.min !== Infinity && latBounds.max !== -Infinity) {
             const span = latBounds.max - latBounds.min;
             const padding = Math.max(0.01, span * 0.1);
             const newRange = [latBounds.min - padding, latBounds.max + padding];
-            
+
             let cur = null;
             if (gd._fullLayout && gd._fullLayout.yaxis && gd._fullLayout.yaxis.range) {
                 cur = gd._fullLayout.yaxis.range;
@@ -2509,12 +2509,12 @@ export function updateChannelYLim(tab, skipRelayoutIfDragging = false) {
                 needsUpdate = true;
             }
         }
-        
+
         if (lonBounds.min !== Infinity && lonBounds.max !== -Infinity) {
             const span = lonBounds.max - lonBounds.min;
             const padding = Math.max(0.01, span * 0.1);
             const newRange = [lonBounds.min - padding, lonBounds.max + padding];
-            
+
             let cur = null;
             if (gd._fullLayout && gd._fullLayout.yaxis2 && gd._fullLayout.yaxis2.range) {
                 cur = gd._fullLayout.yaxis2.range;
@@ -2525,7 +2525,7 @@ export function updateChannelYLim(tab, skipRelayoutIfDragging = false) {
                 needsUpdate = true;
             }
         }
-        
+
         if (needsUpdate && !skipRelayoutIfDragging) {
             Plotly.relayout(gd, update);
         }
@@ -2535,7 +2535,7 @@ export function updateChannelYLim(tab, skipRelayoutIfDragging = false) {
             const span = bounds.max - bounds.min;
             const padding = Math.max(0.01, span * 0.1);
             const newRange = [bounds.min - padding, bounds.max + padding];
-            
+
             let cur = null;
             if (gd._fullLayout && gd._fullLayout.yaxis && gd._fullLayout.yaxis.range) {
                 cur = gd._fullLayout.yaxis.range;
@@ -2560,7 +2560,7 @@ export function updateExpandablePlotsVisibility() {
 
     if (btnDelta) btnDelta.classList.toggle('active', state.deltaPlotVisible);
     if (containerDelta) containerDelta.style.display = state.deltaPlotVisible ? 'block' : 'none';
-    
+
     if (btnSpeed) btnSpeed.classList.toggle('active', state.speedPlotVisible);
     if (containerSpeed) containerSpeed.style.display = state.speedPlotVisible ? 'block' : 'none';
 
@@ -2613,7 +2613,7 @@ export function updateExpandablePlotsVisibility() {
 function renderCustomLegend(tab, targetEl) {
     if (!targetEl) return;
     targetEl.style.position = 'relative';
-    
+
     // Remove existing legend if any
     const existing = targetEl.querySelector('.custom-plot-legend');
     if (existing) {

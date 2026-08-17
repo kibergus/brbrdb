@@ -82,7 +82,12 @@ _CLASS_NAMES = {
     'heavyweight': ClassInfo('Heavyweight', None),
     'experience_heavyweight': ClassInfo('Experience Heavyweight', None),
     'experience': ClassInfo('Experience', None),
+    'experience_lw': ClassInfo('Experience Lightweight', None),
+    'experience_junior_lw': ClassInfo('Experience Junior Lightweight', 'junior'),
+    'experience_junior_slw': ClassInfo('Experience Junior Super Lightweight', 'junior'),
     'sprint': ClassInfo('Sprint', None),
+    'sprint_lw': ClassInfo('Sprint Lightweight', None),
+    'sprint_middleweight': ClassInfo('Sprint Middleweight', None),
     'testing': ClassInfo('Testing', None),
     # KartSim and generic classes.
     'formula_210': ClassInfo('Formula 210', None),

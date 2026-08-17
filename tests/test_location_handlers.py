@@ -564,9 +564,9 @@ Time,Latitude,Longitude,Record,Lap,Steering Wheel Angle (deg)
 
 
 def test_should_smooth_channel() -> None:
-    assert location_handlers._should_smooth_channel("GForceX") is True
-    assert location_handlers._should_smooth_channel("GForceY") is True
-    assert location_handlers._should_smooth_channel("GForceZ") is True
+    assert location_handlers._should_smooth_channel("GForceLat") is True
+    assert location_handlers._should_smooth_channel("GForceLon") is True
+    assert location_handlers._should_smooth_channel("GForceVert") is True
     assert location_handlers._should_smooth_channel("Slide Pct FL") is True
     assert location_handlers._should_smooth_channel("Lat Force FL") is True
     assert location_handlers._should_smooth_channel("Tyre Load FL") is True
@@ -608,7 +608,7 @@ def test_get_telemetry_channel_smoothing(
     csv_content = """Format,RaceTools CSV
 Driver name,Alexey
 
-Time,Latitude,Longitude,Record,Lap,GForceX
+Time,Latitude,Longitude,Record,Lap,GForceLat
 2026-06-10T17:02:32.427Z,51.86439811,-1.68407354,1,1,1.0
 2026-06-10T17:02:32.436Z,51.86439811,-1.68407354,2,1,2.0
 2026-06-10T17:02:32.445Z,51.86439811,-1.68407354,3,1,3.0
@@ -626,7 +626,7 @@ Time,Latitude,Longitude,Record,Lap,GForceX
     # Case A: league is kartsim (should smooth: [2.0, 2.5, 3.0, 3.5, 4.0])
     url_smooth = (
         '/api/telemetry/channel?league=kartsim&class_name=X30'
-        '&date=2026-05-10&track=Rowrah&session_id=S1_hero_a.csv&channel=GForceX'
+        '&date=2026-05-10&track=Rowrah&session_id=S1_hero_a.csv&channel=GForceLat'
     )
     response_smooth = client.get(url_smooth)
     assert response_smooth.status_code == 200
@@ -647,7 +647,7 @@ Time,Latitude,Longitude,Record,Lap,GForceX
     # Case B: league is NOT kartsim (should NOT smooth: [1.0, 2.0, 3.0, 4.0, 5.0])
     url_no_smooth = (
         '/api/telemetry/channel?league=other_league&class_name=X30'
-        '&date=2026-05-10&track=Rowrah&session_id=S1_hero_a.csv&channel=GForceX'
+        '&date=2026-05-10&track=Rowrah&session_id=S1_hero_a.csv&channel=GForceLat'
     )
     response_no_smooth = client.get(url_no_smooth)
     assert response_no_smooth.status_code == 200

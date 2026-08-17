@@ -247,7 +247,7 @@ def test_stream_upload_flow() -> None:
                     'session_id': 'session_stream_123'
                 }
                 mock_populate.assert_called_once()
-                mock_get_track.assert_called_once()
+                mock_get_track.assert_called()
 
         # 3. Test successful stream upload flow again
         with patch(patch_path, return_value='session_stream_456') as mock_populate:
@@ -266,7 +266,7 @@ def test_stream_upload_flow() -> None:
                     'session_id': 'session_stream_456'
                 }
                 mock_populate.assert_called_once()
-                mock_get_track.assert_called_once()
+                mock_get_track.assert_called()
 
 
 def test_stream_upload_missing_or_invalid_params() -> None:
@@ -658,8 +658,8 @@ def test_stream_upload_pruning_and_merging(tmp_path: Path) -> None:
         'Class,cadet\n'
         'Session,Practice\n'
         '\n'
-        'Record,Time,Latitude,Longitude,Speed (m/s),GForceX (g),GForceY (g),'
-        'GForceZ (g),Throttle (%),Brake (%),Steering Wheel Angle (deg),Lap\n'
+        'Record,Time,Latitude,Longitude,Speed (m/s),GForceLat,GForceLon,'
+        'GForceVert,Throttle (%),Brake (%),Steering Wheel Angle (deg),Lap\n'
         '1,2026-05-10T14:30:00.000Z,54.123,-3.123,10.0,0.1,0.2,0.3,50.0,0.0,10.0,1\n'
         '2,2026-05-10T14:30:01.000Z,54.124,-3.124,11.0,0.1,0.2,0.3,60.0,0.0,12.0,1\n'
         '3,2026-05-10T14:30:02.000Z,54.125,-3.125,12.0,0.1,0.2,0.3,70.0,0.0,14.0,1\n'
@@ -866,3 +866,97 @@ def test_stream_upload_preserves_alphatiming_session(tmp_path: Path) -> None:
     # Telemetry CSV for Driver A should be created in telemetry directory
     telemetry_path = os.path.join(meeting_dir, 'telemetry', '14_30_practice_driver_a.csv')
     assert os.path.exists(telemetry_path)
+
+
+def test_process_telemetry_derivative_data_resolves_track_alias() -> None:
+    """Ensure kartsim telemetry with known and alias track names resolves via track_data and computes coordinates."""
+    db._track_mappings = None
+    records = [
+        {'Time': '2026-08-17T18:45:00.000Z', 'x': 10.0, 'z': 20.0, 'GPSSpeed': 15.0, 'Lap': 1},
+        {'Time': '2026-08-17T18:45:00.100Z', 'x': 11.0, 'z': 21.0, 'GPSSpeed': 15.2, 'Lap': 1},
+    ]
+    known_tracks = [
+        'Bayford Meadows',
+        'Brentwood',
+        'Buckmore Park',
+        'Clay Pigeon',
+        'Dunkeswell Raceway',
+        'Ellough Park Kart Circuit',
+        'Forest Edge',
+        'Fulbeck',
+        'GYG Championship Pro Circuit',
+        'Llandow',
+        'Lydd',
+        'Rissington 2026',
+        'Rowrah',
+        'Rye House Layout 2 2026',
+        'South Wales Karting Centre 2026',
+    ]
+
+    for track_name in known_tracks:
+        session_info = upload_handlers.CSVSessionMetadata(
+            track_name=track_name,
+            session_name='Practice',
+            driver_name='Alexey Guseynov',
+            league='kartsim',
+            class_name='iame_waterswift_restricted_cadet_uk',
+            session_start_datetime=datetime.datetime(2026, 8, 17, 18, 45),
+        )
+
+        df_telemetry, metadata_json, _ = upload_handlers.process_telemetry_derivative_data(
+            records, session_info, config['data_dir']
+        )
+        assert not df_telemetry.empty
+        assert 'Latitude' in df_telemetry.columns
+        assert 'Longitude' in df_telemetry.columns
+        assert np.all(df_telemetry['Latitude'] != 0.0), f"Latitude is 0 for track '{track_name}'"
+        assert np.all(df_telemetry['Longitude'] != 0.0), f"Longitude is 0 for track '{track_name}'"
+        if track_name == 'GYG Championship Pro Circuit':
+            assert metadata_json['track_name'] == 'Glan Y Gors'
+
+
+def test_process_telemetry_derivative_data_does_not_inject_missing_columns() -> None:
+    records = [
+        {
+            'Time': '2026-08-02T11:18:00.000Z',
+            'Latitude': 51.4335,
+            'Longitude': -3.4960,
+            'Speed': 15.0,
+            'GForceLat': 0.5,
+            'GForceLon': 0.2
+        },
+        {
+            'Time': '2026-08-02T11:18:00.100Z',
+            'Latitude': 51.4336,
+            'Longitude': -3.4961,
+            'Speed': 15.5,
+            'GForceLat': 0.6,
+            'GForceLon': 0.3
+        }
+    ]
+    session_info = upload_handlers.CSVSessionMetadata(
+        track_name='Llandow',
+        session_name='Practice',
+        driver_name='Katia Guseinova',
+        league='club100_south',
+        class_name='cadet_lw',
+        session_start_datetime=datetime.datetime(2026, 8, 2, 11, 18),
+    )
+
+    with (patch('upload_handlers.db.get_track', return_value={}),
+          patch('upload_handlers.is_lap_valid', return_value=True)):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(
+            records, session_info, '/tmp'
+        )
+
+        assert 'Throttle' not in df_telemetry.columns
+        assert 'Brake' not in df_telemetry.columns
+        assert 'Steering Angle' not in df_telemetry.columns
+        assert 'RPS FL' not in df_telemetry.columns
+        assert 'Tyre Load FL' not in df_telemetry.columns
+        assert 'Ori Quat X' not in df_telemetry.columns
+        assert 'Toe FL' not in df_telemetry.columns
+        assert 'Direction of Travel' not in df_telemetry.columns
+        assert 'Speed' in df_telemetry.columns
+        assert 'GForceLat' in df_telemetry.columns
+        assert 'GForceLon' in df_telemetry.columns

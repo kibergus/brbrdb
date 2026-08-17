@@ -432,7 +432,8 @@ def process_telemetry_derivative_data(
     origin = None
     league = session_info.league
     if league == 'kartsim' or 'x' in records[0]:
-        origin = rfactor.get_track_origin(track_name_raw)
+        resolved_track_name = (track_data.get('track_name') if track_data else None) or track_name_raw
+        origin = rfactor.get_track_origin(resolved_track_name)
 
     for r in records:
         lat_val = r.get('Latitude')
@@ -542,6 +543,19 @@ def process_telemetry_derivative_data(
         return (a + 180) % 360 - 180
 
     telemetry_rows = []
+    has_quat = any('Ori Quat X' in r or 'q_x' in r or 'Ori Quat W' in r for r in records)
+    has_toe = any('Toe FL' in r or 'toe_fl' in r for r in records)
+
+    sim_channels = [
+        'RPS FL', 'RPS FR', 'RPS RL', 'RPS RR',
+        'Lat Patch Vel FL', 'Lat Patch Vel FR', 'Lat Patch Vel RL', 'Lat Patch Vel RR',
+        'Long Patch Vel FL', 'Long Patch Vel FR', 'Long Patch Vel RL', 'Long Patch Vel RR',
+        'Tyre Load FL', 'Tyre Load FR', 'Tyre Load RL', 'Tyre Load RR',
+        'Lat Force FL', 'Lat Force FR', 'Lat Force RL', 'Lat Force RR',
+        'Long Force FL', 'Long Force FR', 'Long Force RL', 'Long Force RR',
+        'Slide Pct FL', 'Slide Pct FR', 'Slide Pct RL', 'Slide Pct RR'
+    ]
+
     for i in range(len(records)):
         r = records[i]
         speed_val = safe_float(r.get('Speed'), 0.0)
@@ -550,93 +564,86 @@ def process_telemetry_derivative_data(
         else:
             speed_ms = speed_val
 
-        g_x = safe_float(r.get('GForceX'), 0.0)
-        g_y = safe_float(r.get('GForceY'), 0.0)
-        g_z = safe_float(r.get('GForceZ'), 0.0)
-
-        throttle = safe_float(r.get('Throttle'), 0.0)
-        brake = safe_float(r.get('Brake'), 0.0)
-        steering = safe_float(r.get('Steering Angle'), 0.0)
-
-        toe_fl = safe_float(r.get('Toe FL'), 0.0)
-        toe_fr = safe_float(r.get('Toe FR'), 0.0)
-
-        wa_fl = math.degrees(toe_fl)
-        wa_fr = math.degrees(toe_fr)
-
-        kart_heading = wrap_360(quat_to_yaw(q_x[i], q_y[i], q_z[i], q_w[i]))
         course_val = wrap_360(course[i])
-
-        slip_front = wrap_180(course_val - (kart_heading + (wa_fl + wa_fr) / 2) + 180)
-        slip_rear = wrap_180(course_val - kart_heading + 180)
-
         time_str_point = r.get('Time') or ''
 
-        # Start with all original columns from the input record so that any
-        # extra columns reported by the client (tyre temperatures, track
-        # wetness, x/y/z coordinates, etc.) are preserved in the output.
+        # Start with all original columns from the input record
         row = dict(r)
 
-        # Overwrite / add the derived and post-processed columns.
-        row.update({
-            'Record': i + 1,
-            'Time': time_str_point,
-            'Latitude': f'{lat_arr[i]:.8f}',
-            'Longitude': f'{lon_arr[i]:.8f}',
-            'Altitude': f"{safe_float(r.get('Altitude'), 0.0):.2f}",
-            'Speed': f'{speed_ms:.5f}',
-            'GForceX': f'{g_x:.3f}',
-            'GForceY': f'{g_y:.3f}',
-            'GForceZ': f'{g_z:.3f}',
-            'Throttle': f'{throttle:.1f}',
-            'Brake': f'{brake:.1f}',
-            'Steering Angle': f'{steering:.1f}',
-            'Wheel Angle FL': f'{wa_fl:.2f}',
-            'Wheel Angle FR': f'{wa_fr:.2f}',
-            'Direction of Travel': f'{course_val:.2f}',
-            'Yaw': f'{kart_heading:.2f}',
-            'Kart Heading': f'{kart_heading:.2f}',
-            'Wheel Heading FL': f'{wrap_360(kart_heading + wa_fl):.2f}',
-            'Wheel Heading FR': f'{wrap_360(kart_heading + wa_fr):.2f}',
-            'Lap Distance': f'{lap_distance_m[i]:.2f}',
-            'RPS FL': f"{safe_float(r.get('RPS FL'), 0.0):.2f}",
-            'RPS FR': f"{safe_float(r.get('RPS FR'), 0.0):.2f}",
-            'RPS RL': f"{safe_float(r.get('RPS RL'), 0.0):.2f}",
-            'RPS RR': f"{safe_float(r.get('RPS RR'), 0.0):.2f}",
-            'Lat Patch Vel FL': f"{safe_float(r.get('Lat Patch Vel FL'), 0.0):.2f}",
-            'Lat Patch Vel FR': f"{safe_float(r.get('Lat Patch Vel FR'), 0.0):.2f}",
-            'Lat Patch Vel RL': f"{safe_float(r.get('Lat Patch Vel RL'), 0.0):.2f}",
-            'Lat Patch Vel RR': f"{safe_float(r.get('Lat Patch Vel RR'), 0.0):.2f}",
-            'Long Patch Vel FL': f"{safe_float(r.get('Long Patch Vel FL'), 0.0):.2f}",
-            'Long Patch Vel FR': f"{safe_float(r.get('Long Patch Vel FR'), 0.0):.2f}",
-            'Long Patch Vel RL': f"{safe_float(r.get('Long Patch Vel RL'), 0.0):.2f}",
-            'Long Patch Vel RR': f"{safe_float(r.get('Long Patch Vel RR'), 0.0):.2f}",
-            'Tyre Load FL': f"{safe_float(r.get('Tyre Load FL'), 0.0):.2f}",
-            'Tyre Load FR': f"{safe_float(r.get('Tyre Load FR'), 0.0):.2f}",
-            'Tyre Load RL': f"{safe_float(r.get('Tyre Load RL'), 0.0):.2f}",
-            'Tyre Load RR': f"{safe_float(r.get('Tyre Load RR'), 0.0):.2f}",
-            'Lat Force FL': f"{safe_float(r.get('Lat Force FL'), 0.0):.2f}",
-            'Lat Force FR': f"{safe_float(r.get('Lat Force FR'), 0.0):.2f}",
-            'Lat Force RL': f"{safe_float(r.get('Lat Force RL'), 0.0):.2f}",
-            'Lat Force RR': f"{safe_float(r.get('Lat Force RR'), 0.0):.2f}",
-            'Long Force FL': f"{safe_float(r.get('Long Force FL'), 0.0):.2f}",
-            'Long Force FR': f"{safe_float(r.get('Long Force FR'), 0.0):.2f}",
-            'Long Force RL': f"{safe_float(r.get('Long Force RL'), 0.0):.2f}",
-            'Long Force RR': f"{safe_float(r.get('Long Force RR'), 0.0):.2f}",
-            'Slide Pct FL': f"{safe_float(r.get('Slide Pct FL'), 0.0):.2f}",
-            'Slide Pct FR': f"{safe_float(r.get('Slide Pct FR'), 0.0):.2f}",
-            'Slide Pct RL': f"{safe_float(r.get('Slide Pct RL'), 0.0):.2f}",
-            'Slide Pct RR': f"{safe_float(r.get('Slide Pct RR'), 0.0):.2f}",
-            'Slip Angle Front': f'{slip_front:.2f}',
-            'Slip Angle Rear': f'{slip_rear:.2f}',
-            'Lap': str(lap_col[i]),
-            'Ori Quat X': f"{safe_float(r.get('Ori Quat X'), 0.0):.6f}",
-            'Ori Quat Y': f"{safe_float(r.get('Ori Quat Y'), 0.0):.6f}",
-            'Ori Quat Z': f"{safe_float(r.get('Ori Quat Z'), 0.0):.6f}",
-            'Ori Quat W': f"{safe_float(r.get('Ori Quat W'), 1.0):.6f}",
-            'Toe FL': f"{safe_float(r.get('Toe FL'), 0.0):.6f}",
-            'Toe FR': f"{safe_float(r.get('Toe FR'), 0.0):.6f}",
-        })
+        # Core and derived geo/time/speed/lap columns
+        row['Record'] = i + 1
+        row['Time'] = time_str_point
+        row['Latitude'] = f'{lat_arr[i]:.8f}'
+        row['Longitude'] = f'{lon_arr[i]:.8f}'
+        row['Speed'] = f'{speed_ms:.5f}'
+        row['Lap'] = str(lap_col[i])
+        row['Lap Distance'] = f'{lap_distance_m[i]:.2f}'
+
+        # Format optional base columns ONLY if present in input
+        if 'Direction of Travel' in r:
+            row['Direction of Travel'] = f'{course_val:.2f}'
+
+        if 'Altitude' in r:
+            row['Altitude'] = f"{safe_float(r.get('Altitude'), 0.0):.2f}"
+
+        if 'GForceLat' in r:
+            row['GForceLat'] = f"{safe_float(r.get('GForceLat'), 0.0):.3f}"
+
+        if 'GForceLon' in r:
+            row['GForceLon'] = f"{safe_float(r.get('GForceLon'), 0.0):.3f}"
+
+        if 'GForceVert' in r:
+            row['GForceVert'] = f"{safe_float(r.get('GForceVert'), 0.0):.3f}"
+
+        if 'Throttle' in r:
+            row['Throttle'] = f"{safe_float(r.get('Throttle'), 0.0):.1f}"
+
+        if 'Brake' in r:
+            row['Brake'] = f"{safe_float(r.get('Brake'), 0.0):.1f}"
+
+        if 'Steering Angle' in r:
+            row['Steering Angle'] = f"{safe_float(r.get('Steering Angle'), 0.0):.1f}"
+
+        # Orientation / Heading / Slip angles
+        if has_quat:
+            kart_heading = wrap_360(quat_to_yaw(q_x[i], q_y[i], q_z[i], q_w[i]))
+            row['Kart Heading'] = f'{kart_heading:.2f}'
+            row['Yaw'] = f'{kart_heading:.2f}'
+            row['Ori Quat X'] = f"{q_x[i]:.6f}"
+            row['Ori Quat Y'] = f"{q_y[i]:.6f}"
+            row['Ori Quat Z'] = f"{q_z[i]:.6f}"
+            row['Ori Quat W'] = f"{q_w[i]:.6f}"
+
+            if has_toe:
+                toe_fl = safe_float(r.get('Toe FL', r.get('toe_fl')), 0.0)
+                toe_fr = safe_float(r.get('Toe FR', r.get('toe_fr')), 0.0)
+                wa_fl = math.degrees(toe_fl)
+                wa_fr = math.degrees(toe_fr)
+                slip_front = wrap_180(course_val - (kart_heading + (wa_fl + wa_fr) / 2) + 180)
+                slip_rear = wrap_180(course_val - kart_heading + 180)
+
+                row['Toe FL'] = f"{toe_fl:.6f}"
+                row['Toe FR'] = f"{toe_fr:.6f}"
+                row['Wheel Angle FL'] = f'{wa_fl:.2f}'
+                row['Wheel Angle FR'] = f'{wa_fr:.2f}'
+                row['Wheel Heading FL'] = f'{wrap_360(kart_heading + wa_fl):.2f}'
+                row['Wheel Heading FR'] = f'{wrap_360(kart_heading + wa_fr):.2f}'
+                row['Slip Angle Front'] = f'{slip_front:.2f}'
+                row['Slip Angle Rear'] = f'{slip_rear:.2f}'
+            else:
+                slip_rear = wrap_180(course_val - kart_heading + 180)
+                row['Slip Angle Rear'] = f'{slip_rear:.2f}'
+        else:
+            if 'Kart Heading' in r:
+                row['Kart Heading'] = f"{safe_float(r.get('Kart Heading'), 0.0):.2f}"
+            if 'Yaw' in r:
+                row['Yaw'] = f"{safe_float(r.get('Yaw'), 0.0):.2f}"
+
+        # Optional simulation physics channels
+        for ch in sim_channels:
+            if ch in r:
+                row[ch] = f"{safe_float(r.get(ch), 0.0):.2f}"
+
         telemetry_rows.append(row)
 
     df_telemetry = pd.DataFrame(telemetry_rows)
@@ -687,11 +694,16 @@ def process_telemetry_derivative_data(
             if not weather:
                 weather = inferred
 
+    canonical_track_name = (
+        (track_data.get('track_name') if track_data else None)
+        or sanitize.humanize_track_name(track_name_raw)
+    )
+
     metadata_json = {
         'alphatiming_url': '',
         'session_start_datetime': dt.strftime('%Y-%m-%d %H:%M'),
-        'track_name': sanitize.humanize_track_name(track_name_raw),
-        'meeting_name': sanitize.humanize_track_name(track_name_raw),
+        'track_name': canonical_track_name,
+        'meeting_name': canonical_track_name,
         'league': session_info.league,
         'class_name': session_info.class_name,
         'session_name': session_info.session_name,
@@ -746,6 +758,9 @@ def stream_upload() -> Any:
     # Resolve any car/class name aliases
     metadata.class_name = aliases.resolve_car_name(metadata.class_name)
     metadata.track_name = aliases.resolve_track_name(metadata.track_name)
+    track_data = db.get_track(metadata.track_name)
+    if track_data and track_data.get('track_name'):
+        metadata.track_name = track_data['track_name']
 
     # Prepare directories and file paths
     time_str = metadata.session_start_datetime.strftime('%H_%M')
@@ -985,6 +1000,9 @@ def files_upload() -> Any:
 
     # Resolve any track name aliases
     track_name = aliases.resolve_track_name(track_name)
+    track_data = db.get_track(track_name)
+    if track_data and track_data.get('track_name'):
+        track_name = track_data['track_name']
     meta['track_name'] = track_name
 
     # ACL Check for league

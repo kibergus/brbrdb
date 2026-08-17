@@ -190,9 +190,9 @@ Following the metadata block, the CSV must contain a header row containing `Reco
 | `x` | `pos_x`, `GPS Longitude` | No* | Local Cartesian coordinate X (if GPS is not present). |
 | `z` | `pos_y`, `pos_z`, `y`, `GPS Latitude` | No* | Local Cartesian coordinate Z (if GPS is not present). |
 | `Speed` | `speed`, `Ground Speed`| **Yes** | Velocity of the kart/vehicle in m/s. |
-| `GForceX` | `g_x`, `G Force Lat` | **Yes** | Lateral G-force acceleration. |
-| `GForceY` | `g_y`, `G Force Long`| **Yes** | Longitudinal G-force acceleration. |
-| `GForceZ` | `g_z`, `G Force Vert`| **Yes** | Vertical G-force acceleration. |
+| `GForceLat` | `gforcelat` | **Yes** | Lateral G-force acceleration (positive to the right). |
+| `GForceLon` | `gforcelon` | **Yes** | Longitudinal G-force acceleration (positive forward). |
+| `GForceVert` | `gforcevert` | **Yes** | Vertical G-force acceleration. |
 | `Throttle` | `throttle`, `Throttle Pos` | **Yes** | Throttle application percentage (`0.0` to `100.0`). |
 | `Brake` | `brake`, `Brake Pos` | **Yes** | Brake application percentage (`0.0` to `100.0`). |
 | `Steering` | `steering` | **Yes** | Steering wheel rotation angle in degrees. |

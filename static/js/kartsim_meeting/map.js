@@ -59,7 +59,7 @@ export function interpolateMultiStopColor(u, stops) {
     return `rgb(${lastColor[0]}, ${lastColor[1]}, ${lastColor[2]})`;
 }
 
-export function calculateSegmentColor(p1, lapId, mode = 'pedals', maxSpeed = 100) {
+export function calculateSegmentColor(p1, lapId, mode, maxSpeed = 100) {
     if (!p1) return '#ffffff';
 
     const currentMode = mode || state.trajectoryColorMode || 'pedals';
@@ -215,7 +215,7 @@ export function setTrajectoryColorMode(mode) {
 export function loadBaseColumnsForSessions(sessionsData) {
     const fetchSessionBase = async (session) => {
         const session_id = session.session_id;
-        
+
         const findCol = (choices) => {
             return session.columns.find(col => choices.some(choice => col.toLowerCase() === choice.toLowerCase()));
         };
@@ -227,8 +227,8 @@ export function loadBaseColumnsForSessions(sessionsData) {
         const speedCol = findCol(['Speed (m/s)', 'Speed']);
         const throttleCol = findCol(['Throttle (%)', 'Throttle']);
         const brakeCol = findCol(['Brake (%)', 'Brake']);
-        const gxCol = findCol(['GForceX (g)', 'GForceX', 'G-force X', 'G-Force X (g)', 'G Long', 'g_x']);
-        const gyCol = findCol(['GForceY (g)', 'GForceY', 'G-force Y', 'G-Force Y (g)', 'G Lat', 'g_y']);
+        const gxCol = findCol(['GForceLon']);
+        const gyCol = findCol(['GForceLat']);
 
         const colsToFetch = {
             lat: latCol,
@@ -276,6 +276,15 @@ export function loadBaseColumnsForSessions(sessionsData) {
     };
 
     return Promise.all(sessionsData.map(fetchSessionBase)).then(() => sessionsData);
+}
+
+export function hasBrakeChannel(sessionsData) {
+    if (!Array.isArray(sessionsData)) return false;
+    const brakeNames = ['brake (%)', 'brake'];
+    return sessionsData.some(session => {
+        if (!session || !Array.isArray(session.columns)) return false;
+        return session.columns.some(col => brakeNames.includes(col.toLowerCase()));
+    });
 }
 
 export const SolidBackgroundMapType = function () {
@@ -341,10 +350,19 @@ export function loadTrackPoints(overrideSessionId) {
             if (lapList) lapList.innerHTML = '';
             const bounds = new google.maps.LatLngBounds();
 
+            const params = new URLSearchParams(window.location.search);
+            const hasExplicitTcol = params.has('tcol');
+            if (!hasExplicitTcol) {
+                if (!hasBrakeChannel(sessionsData)) {
+                    setTrajectoryColorMode('accel');
+                } else {
+                    setTrajectoryColorMode('pedals');
+                }
+            }
+
             state.groupASelection.clear();
             state.groupBSelection.clear();
 
-            const params = new URLSearchParams(window.location.search);
             const urlLapsA = params.get('lapsA');
             const urlLapsB = params.get('lapsB');
             let hasCustomLapsA = params.has('lapsA');
@@ -485,7 +503,7 @@ export function loadTrackPoints(overrideSessionId) {
 
             import('./lap_selection.js').then(ui => {
                 ui.updateVisibilityIcons();
-                
+
                 const params = new URLSearchParams(window.location.search);
                 const urlSort = params.get('sort');
                 if (urlSort) {
@@ -493,7 +511,7 @@ export function loadTrackPoints(overrideSessionId) {
                 } else {
                     ui.renderLapList();
                 }
-                
+
                 // Re-apply custom xlim if present, so it overrides any sort-based default range resets
                 const xlimParam = params.get('xlim');
                 if (xlimParam) {
@@ -506,7 +524,7 @@ export function loadTrackPoints(overrideSessionId) {
                         }
                     }
                 }
-                
+
                 ui.updateFastestSelectedLap();
                 import('./stats_plots.js').then(stats => stats.renderStatsPlots());
                 import('./plots_sync.js').then(plots => plots.renderExpandablePlots());
@@ -782,7 +800,7 @@ export function initTrackMarkers() {
                         opt.textContent = turn.name || `Turn ${idx + 1}`;
                         turnSelector.appendChild(opt);
                     });
-                    
+
                     const params = new URLSearchParams(window.location.search);
                     const urlTurn = params.get('turn');
                     if (urlTurn !== null) {
@@ -842,6 +860,10 @@ export function updateDistanceMarker(targetDist) {
     } else {
         p1 = points[0];
         p2 = points[1];
+    }
+
+    if (!p1 || !p2 || p1.dist === undefined || p2.dist === undefined || p1.dist === null || p2.dist === null) {
+        return;
     }
 
     const fraction = (targetDist - p1.dist) / (p2.dist - p1.dist || 0.0001);

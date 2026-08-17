@@ -474,7 +474,7 @@ def _should_smooth_channel(channel: str) -> bool:
     """
     smooth_columns = {
         # g-force
-        "gforcex", "gforcey", "gforcez",
+        "gforcelat", "gforcelon", "gforcevert",
         # slide
         "slide pct fl", "slide pct fr", "slide pct rl", "slide pct rr",
         # force
