@@ -295,7 +295,8 @@ def get_pace_summary(
 def get_trajectory_plot(
     laps: list[tuple[str, str, str, int] | list[Any] | dict[str, Any]],
     start_m: float | None = None,
-    end_m: float | None = None
+    end_m: float | None = None,
+    color_mode: str = "lap"
 ) -> Image:
     """
     Renders GPS (X/Z) trajectories for one or more laps overlaid on the full track outline.
@@ -312,6 +313,8 @@ def get_trajectory_plot(
     - laps: List of (date, track, session_id, lap_number) tuples or lists.
     - start_m: Start distance for crop (omit for full lap)
     - end_m: End distance for crop (omit for full lap)
+    - color_mode: Color scheme mode: 'lap' (default, solid color per lap), 'pedals' (green throttle /
+      red brake), 'accel' (green accel / red decel), or 'speed' (multi-stop speed heatmap).
 
     Returns Image object containing PNG trajectory plot data.
     """
@@ -321,7 +324,8 @@ def get_trajectory_plot(
     b64_image = image_tools.render_trajectory_plot(
         laps=laps,
         start_m=start_m,
-        end_m=end_m
+        end_m=end_m,
+        color_mode=color_mode
     )
     return Image(data=base64.b64decode(b64_image), format="png")
 

@@ -171,10 +171,14 @@ def test_get_pace_summary() -> None:
 
 
 def test_get_trajectory_plot() -> None:
-    res = server.get_trajectory_plot(laps=[("2026-07-12", "Lydd", "18_54_practice", 23)])
-    assert isinstance(res, Image)
-    img_bytes = res.data
-    assert img_bytes is not None and img_bytes.startswith(b'\x89PNG\r\n\x1a\n')
+    for mode in ["lap", "pedals", "accel", "speed"]:
+        res = server.get_trajectory_plot(
+            laps=[("2026-07-12", "Lydd", "18_54_practice", 23)],
+            color_mode=mode
+        )
+        assert isinstance(res, Image)
+        img_bytes = res.data
+        assert img_bytes is not None and img_bytes.startswith(b'\x89PNG\r\n\x1a\n')
 
 
 def test_get_session_consistency_image() -> None:

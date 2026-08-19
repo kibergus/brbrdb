@@ -61,7 +61,8 @@ Launch a dedicated sub-agent focusing exclusively on that turn index $N$ ($Turn\
    - Apex maximum steering angle ($deg$)
 3. Inspect internal plot images:
    - Call `get_telemetry_plot(laps=[(date, track, session_id, lap_num), ...], start_m=..., end_m=..., channels=["Speed", "Brake", "Throttle", "Steering Angle", "delta_time"])`.
-   - Call `get_trajectory_plot(laps=[(date, track, session_id, lap_num), ...], start_m=..., end_m=...)`.
+   - Call `get_trajectory_plot(laps=[(date, track, session_id, lap_num), ...], start_m=..., end_m=..., color_mode="lap")`.
+     - `color_mode`: Can be `"lap"` (default, solid color per lap for line comparison), `"pedals"` (pedal inputs: green throttle / red brake / white coasting), `"accel"` (longitudinal acceleration: green accel / red decel), or `"speed"` (velocity heatmap). Sub-agents can use `"pedals"` or `"accel"` to visually inspect braking zones and throttle pickup points along the racing line.
 4. Diagnose driver root cause actions (linking driver control inputs directly to chosen trajectory line geometry):
    - **Line Geometry & Trajectory**: Wide vs tight entry approach, apex clipping distance, mid-corner trajectory arc, and exit line width.
    - **Throttle Pickup & Lift Offs**: How entry line angle and apex trajectory dictate when full throttle can be picked up, or force mid-corner throttle chops/lifting.

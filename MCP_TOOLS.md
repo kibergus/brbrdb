@@ -251,6 +251,7 @@ Renders GPS (X/Z) trajectories for one or more laps overlaid on the full track o
 | `laps` | list[tuple] | yes | List of `(date, track, session_id, lap_number)` tuples/lists |
 | `start_m` | float | no | Start distance for the crop (omit for full lap) |
 | `end_m` | float | no | End distance for the crop (omit for full lap) |
+| `color_mode` | str | no | Color mode: `'lap'` (default), `'pedals'`, `'accel'`, or `'speed'` |
 
 **Returns:** `{ "image_base64": "..." }`
 

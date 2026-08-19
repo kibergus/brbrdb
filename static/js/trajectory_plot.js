@@ -56,7 +56,8 @@ export class TrajectoryPlot {
             width: options.width || '100%',
             height: options.height || '400px',
             map_type: options.map_type || 'satellite',
-            theme: options.theme || 'dark'
+            theme: options.theme || 'dark',
+            color_mode: options.color_mode || 'lap'
         };
 
         this.map = null;
@@ -150,13 +151,19 @@ export class TrajectoryPlot {
                 const distCol = this._findCol(cols, ['Lap Distance (m)', 'Lap Distance', 'LapDistance']);
                 const timeCol = this._findCol(cols, ['Time']);
                 const speedCol = this._findCol(cols, ['Speed', 'Speed (km/h)']);
+                const throttleCol = this._findCol(cols, ['Throttle (%)', 'Throttle', 'throttle']);
+                const brakeCol = this._findCol(cols, ['Brake (%)', 'Brake', 'brake']);
+                const glonCol = this._findCol(cols, ['GForceLon', 'gforcelon']);
 
-                const [xArr, yArr, distArr, timeArr, speedArr] = await Promise.all([
+                const [xArr, yArr, distArr, timeArr, speedArr, throttleArr, brakeArr, glonArr] = await Promise.all([
                     this._fetchChannel(csvFilename, xCol),
                     this._fetchChannel(csvFilename, yCol),
                     this._fetchChannel(csvFilename, distCol),
                     this._fetchChannel(csvFilename, timeCol),
-                    this._fetchChannel(csvFilename, speedCol)
+                    this._fetchChannel(csvFilename, speedCol),
+                    this._fetchChannel(csvFilename, throttleCol),
+                    this._fetchChannel(csvFilename, brakeCol),
+                    this._fetchChannel(csvFilename, glonCol)
                 ]);
 
                 if (!xArr || !yArr) continue;
@@ -171,12 +178,29 @@ export class TrajectoryPlot {
 
                     for (let i = startIdx; i <= endIdx && i < xArr.length; i++) {
                         if (xArr[i] !== null && yArr[i] !== null && !isNaN(xArr[i]) && !isNaN(yArr[i])) {
+                            const speedVal = speedArr && speedArr[i] !== null ? speedArr[i] : 0;
+                            const timeVal = timeArr && timeArr[i] !== null ? timeArr[i] : 0;
+                            const glonVal = glonArr && glonArr[i] !== null ? glonArr[i] : null;
+
+                            let accVal = 0;
+                            if (glonVal !== null) {
+                                accVal = glonVal * 9.81;
+                            } else if (i > startIdx && timeArr && speedArr) {
+                                const dt = (timeVal - timeArr[i - 1]) / 1000.0;
+                                const dv = (speedVal - speedArr[i - 1]) / 3.6;
+                                accVal = dt > 0.001 ? dv / dt : 0;
+                            }
+
                             pts.push({
                                 x: xArr[i],
                                 y: yArr[i],
                                 dist: distArr && distArr[i] !== null ? distArr[i] : i,
-                                time: timeArr && timeArr[i] !== null ? timeArr[i] : 0,
-                                speed: speedArr && speedArr[i] !== null ? speedArr[i] : 0
+                                time: timeVal,
+                                speed: speedVal,
+                                throttle: throttleArr && throttleArr[i] !== null ? throttleArr[i] : 0,
+                                brake: brakeArr && brakeArr[i] !== null ? brakeArr[i] : 0,
+                                g_lon: glonVal,
+                                acc: accVal
                             });
                         }
                     }
@@ -404,6 +428,20 @@ export class TrajectoryPlot {
 
         const bounds = new google.maps.LatLngBounds();
         const legendItems = [];
+        const colorMode = (this.options.color_mode || 'lap').toLowerCase();
+
+        // Calculate global speed min/max
+        let minSpeed = Infinity;
+        let maxSpeed = -Infinity;
+        this.lapsData.forEach(lap => {
+            const croppedPts = this._cropPoints(lap.points);
+            croppedPts.forEach(p => {
+                const s = p.speed || 0;
+                if (s < minSpeed) minSpeed = s;
+                if (s > maxSpeed) maxSpeed = s;
+            });
+        });
+        if (minSpeed === Infinity) { minSpeed = 0; maxSpeed = 100; }
 
         this.lapsData.forEach((lap, idx) => {
             const lapNum = lap.lap_num;
@@ -414,21 +452,39 @@ export class TrajectoryPlot {
 
             const croppedPts = this._cropPoints(lap.points);
             if (croppedPts.length > 0) {
-                const path = croppedPts.map(p => {
-                    const latLng = { lat: p.y, lng: p.x };
-                    bounds.extend(latLng);
-                    return latLng;
+                croppedPts.forEach(p => {
+                    bounds.extend({ lat: p.y, lng: p.x });
                 });
 
-                const polyline = new google.maps.Polyline({
-                    path: path,
-                    geodesic: true,
-                    strokeColor: color,
-                    strokeOpacity: 0.95,
-                    strokeWeight: strokeWidth,
-                    map: this.map
-                });
-                this.polylines.push(polyline);
+                if (colorMode === 'lap' || croppedPts.length < 2) {
+                    const path = croppedPts.map(p => ({ lat: p.y, lng: p.x }));
+                    const polyline = new google.maps.Polyline({
+                        path: path,
+                        geodesic: true,
+                        strokeColor: color,
+                        strokeOpacity: 0.95,
+                        strokeWeight: strokeWidth,
+                        map: this.map
+                    });
+                    this.polylines.push(polyline);
+                } else {
+                    // Segment-based coloring (pedals, accel, speed)
+                    for (let i = 0; i < croppedPts.length - 1; i++) {
+                        const p1 = croppedPts[i];
+                        const p2 = croppedPts[i + 1];
+                        const segColor = this._calculateSegmentColor(p1, color, colorMode, maxSpeed, minSpeed);
+
+                        const segmentPolyline = new google.maps.Polyline({
+                            path: [{ lat: p1.y, lng: p1.x }, { lat: p2.y, lng: p2.x }],
+                            geodesic: true,
+                            strokeColor: segColor,
+                            strokeOpacity: 0.95,
+                            strokeWeight: strokeWidth,
+                            map: this.map
+                        });
+                        this.polylines.push(segmentPolyline);
+                    }
+                }
 
                 legendItems.push({ color, label });
             }
@@ -440,6 +496,84 @@ export class TrajectoryPlot {
 
         this._renderMarkers();
         this._renderLegend(wrapper, legendItems);
+    }
+
+    _interpolateMultiStopColor(val, stops) {
+        val = Math.max(0, Math.min(1, val));
+        if (val <= stops[0][0]) {
+            const c = stops[0][1];
+            return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+        }
+        for (let i = 0; i < stops.length - 1; i++) {
+            const u1 = stops[i][0];
+            const c1 = stops[i][1];
+            const u2 = stops[i + 1][0];
+            const c2 = stops[i + 1][1];
+            if (val >= u1 && val <= u2) {
+                const f = (val - u1) / (u2 - u1 || 1);
+                const r = Math.round(c1[0] + f * (c2[0] - c1[0]));
+                const g = Math.round(c1[1] + f * (c2[1] - c1[1]));
+                const b = Math.round(c1[2] + f * (c2[2] - c1[2]));
+                return `rgb(${r}, ${g}, ${b})`;
+            }
+        }
+        const lastColor = stops[stops.length - 1][1];
+        return `rgb(${lastColor[0]}, ${lastColor[1]}, ${lastColor[2]})`;
+    }
+
+    _calculateSegmentColor(p, defaultColor, mode, maxSpeed = 100, minSpeed = 0) {
+        if (!p) return defaultColor || '#ffffff';
+        const currentMode = mode || this.options.color_mode || 'lap';
+
+        const SPEED_STOPS = [
+            [0.00, [40, 20, 180]],   // Apex / Minimum speed: Deep Navy/Violet
+            [0.25, [0, 200, 255]],   // Low speed / Corner exit: Cyan
+            [0.55, [255, 30, 60]],   // Mid speed / Acceleration: Crimson Red
+            [0.80, [255, 200, 0]],   // High speed straight: Gold Yellow
+            [1.00, [0, 255, 80]]     // Top speed: Neon Green
+        ];
+
+        if (currentMode === 'speed') {
+            const v = p.speed || 0;
+            const range = maxSpeed - minSpeed;
+            const u = range > 0 ? Math.max(0, Math.min(1, (v - minSpeed) / range)) : 0.5;
+            return this._interpolateMultiStopColor(u, SPEED_STOPS);
+        }
+
+        if (currentMode === 'accel') {
+            const acc = p.acc !== undefined && p.acc !== null ? p.acc : (p.g_lon !== undefined && p.g_lon !== null ? p.g_lon * 9.81 : 0);
+            if (acc < 0) {
+                const factor = Math.min(1, Math.abs(acc) / 4.0);
+                const intensity = Math.pow(factor, 0.5);
+                const gb = Math.round(255 * (1 - intensity));
+                return `rgb(255, ${gb}, ${gb})`;
+            } else if (acc > 0) {
+                const factor = Math.min(1, acc / 2.5);
+                const intensity = Math.pow(factor, 0.5);
+                const rb = Math.round(255 * (1 - intensity));
+                return `rgb(${rb}, 255, ${rb})`;
+            }
+            return '#ffffff';
+        }
+
+        if (currentMode === 'pedals') {
+            const brake = p.brake || 0;
+            const throttle = p.throttle || 0;
+            if (brake > 1.0) {
+                const factor = Math.min(1, brake / 100.0);
+                const intensity = Math.pow(factor, 0.5);
+                const gb = Math.round(255 * (1 - intensity));
+                return `rgb(255, ${gb}, ${gb})`;
+            } else if (throttle > 1.0) {
+                const factor = Math.min(1, throttle / 100.0);
+                const intensity = Math.pow(factor, 0.5);
+                const rb = Math.round(255 * (1 - intensity));
+                return `rgb(${rb}, 255, ${rb})`;
+            }
+            return '#ffffff';
+        }
+
+        return defaultColor || '#10b981';
     }
 
     _renderMarkers() {

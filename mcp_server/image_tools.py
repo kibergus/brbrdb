@@ -236,14 +236,89 @@ def parse_lap_spec(spec: Any) -> tuple[str, str, str, int]:
     raise ValueError(f"Lap specification must be a tuple of (date, track, session_id, lap) or dict. Got: {spec!r}")
 
 
+from matplotlib.collections import LineCollection  # noqa: E402
+
+SPEED_COLOR_STOPS = [
+    (0.00, (40, 20, 180)),   # Apex / Min speed: Deep Navy/Violet
+    (0.25, (0, 200, 255)),   # Low speed / Exit: Cyan
+    (0.55, (255, 30, 60)),   # Mid speed / Accel: Crimson Red
+    (0.80, (255, 200, 0)),   # High speed: Gold Yellow
+    (1.00, (0, 255, 80))     # Top speed: Neon Green
+]
+
+
+def _interpolate_speed_color(val: float) -> tuple[float, float, float, float]:
+    val = max(0.0, min(1.0, float(val)))
+    if val <= SPEED_COLOR_STOPS[0][0]:
+        c = SPEED_COLOR_STOPS[0][1]
+        return (c[0] / 255.0, c[1] / 255.0, c[2] / 255.0, 1.0)
+    for i in range(len(SPEED_COLOR_STOPS) - 1):
+        u1, c1 = SPEED_COLOR_STOPS[i]
+        u2, c2 = SPEED_COLOR_STOPS[i + 1]
+        if u1 <= val <= u2:
+            f = (val - u1) / (u2 - u1 or 1.0)
+            r = c1[0] + f * (c2[0] - c1[0])
+            g = c1[1] + f * (c2[1] - c1[1])
+            b = c1[2] + f * (c2[2] - c1[2])
+            return (r / 255.0, g / 255.0, b / 255.0, 1.0)
+    c = SPEED_COLOR_STOPS[-1][1]
+    return (c[0] / 255.0, c[1] / 255.0, c[2] / 255.0, 1.0)
+
+
+def _get_segment_color(
+    mode: str,
+    speed: float,
+    acc: float,
+    throttle: float,
+    brake: float,
+    min_speed: float,
+    max_speed: float,
+    lap_color: str
+) -> tuple[float, float, float, float] | str:
+    if mode == 'speed':
+        rng = max_speed - min_speed
+        u = (speed - min_speed) / rng if rng > 0 else 0.5
+        return _interpolate_speed_color(u)
+    elif mode == 'accel':
+        if acc < 0:
+            factor = min(1.0, abs(acc) / 4.0)
+            intensity = factor ** 0.5
+            gb = 1.0 - intensity
+            return (1.0, gb, gb, 1.0)
+        elif acc > 0:
+            factor = min(1.0, acc / 2.5)
+            intensity = factor ** 0.5
+            rb = 1.0 - intensity
+            return (rb, 1.0, rb, 1.0)
+        return (1.0, 1.0, 1.0, 1.0)
+    elif mode == 'pedals':
+        if brake > 1.0:
+            factor = min(1.0, brake / 100.0)
+            intensity = factor ** 0.5
+            gb = 1.0 - intensity
+            return (1.0, gb, gb, 1.0)
+        elif throttle > 1.0:
+            factor = min(1.0, throttle / 100.0)
+            intensity = factor ** 0.5
+            rb = 1.0 - intensity
+            return (rb, 1.0, rb, 1.0)
+        return (1.0, 1.0, 1.0, 1.0)
+    return lap_color
+
+
 def render_trajectory_plot(
     laps: list[tuple[str, str, str, int] | list[Any] | dict[str, Any]],
     start_m: float | None = None,
-    end_m: float | None = None
+    end_m: float | None = None,
+    color_mode: str = "lap"
 ) -> str:
     """Render matplotlib trajectory comparison plot (GPS or X/Z) for lap tuples (date, track, session_id, lap)."""
     if not laps:
         raise ValueError("laps parameter cannot be empty")
+
+    color_mode = (color_mode or "lap").lower()
+    if color_mode not in ("lap", "pedals", "accel", "speed"):
+        color_mode = "lap"
 
     parsed_laps = [parse_lap_spec(item) for item in laps]
     first_date, first_track, first_sid, _ = parsed_laps[0]
@@ -253,6 +328,7 @@ def render_trajectory_plot(
     colors = ['#10b981', '#f43f5e', '#38bdf8', '#f59e0b', '#a855f7', '#ec4899']
 
     full_track_rendered = False
+    all_lap_pts = []
 
     for idx_l, (date, track, session_id, lap_num) in enumerate(parsed_laps):
         csv_path = find_telemetry_csv(session_id, track, date)
@@ -292,11 +368,40 @@ def render_trajectory_plot(
                 y_idx = header.index(col_name)
                 break
 
+        speed_idx = -1
+        for col_name in ['Speed', 'speed', 'Ground Speed']:
+            if col_name in header:
+                speed_idx = header.index(col_name)
+                break
+
+        throttle_idx = -1
+        for col_name in ['Throttle', 'Throttle (%)', 'throttle']:
+            if col_name in header:
+                throttle_idx = header.index(col_name)
+                break
+
+        brake_idx = -1
+        for col_name in ['Brake', 'Brake (%)', 'brake']:
+            if col_name in header:
+                brake_idx = header.index(col_name)
+                break
+
+        glon_idx = -1
+        for col_name in ['GForceLon', 'gforcelon']:
+            if col_name in header:
+                glon_idx = header.index(col_name)
+                break
+
+        time_idx = header.index('Time') if 'Time' in header else -1
+
         if lap_idx == -1 or dist_idx == -1 or x_idx == -1 or y_idx == -1:
             raise ValueError(f"Trajectory coordinates missing in {csv_path}")
 
         full_track_pts: list[tuple[float, float]] = []
-        lap_pts: list[tuple[float, float, float]] = []
+        lap_pts: list[dict[str, float]] = []
+
+        prev_speed = 0.0
+        prev_time = 0.0
 
         for row in data_rows:
             if not row or len(row) < len(header):
@@ -306,6 +411,25 @@ def render_trajectory_plot(
                 d_val = float(row[dist_idx])
                 x_val = float(row[x_idx])
                 y_val = float(row[y_idx])
+
+                speed_val = float(row[speed_idx]) if speed_idx != -1 else 0.0
+                if speed_val <= 50.0 and speed_val > 0.0:
+                    speed_kmh = speed_val * 3.6
+                else:
+                    speed_kmh = speed_val
+
+                throttle_val = float(row[throttle_idx]) if throttle_idx != -1 else 0.0
+                brake_val = float(row[brake_idx]) if brake_idx != -1 else 0.0
+
+                if glon_idx != -1:
+                    acc_val = float(row[glon_idx]) * 9.81
+                else:
+                    t_sec = _parse_time_seconds(row[time_idx]) if time_idx != -1 else 0.0
+                    dt = t_sec - prev_time
+                    dv = (speed_kmh / 3.6) - (prev_speed / 3.6)
+                    acc_val = dv / dt if dt > 0.001 else 0.0
+                    prev_speed = speed_kmh
+                    prev_time = t_sec
 
                 if not full_track_rendered:
                     full_track_pts.append((x_val, y_val))
@@ -323,7 +447,15 @@ def render_trajectory_plot(
                     elif end_m is not None and d_val > end_m:
                         continue
 
-                    lap_pts.append((x_val, y_val, d_val))
+                    lap_pts.append({
+                        'x': x_val,
+                        'y': y_val,
+                        'd': d_val,
+                        'speed': speed_kmh,
+                        'acc': acc_val,
+                        'throttle': throttle_val,
+                        'brake': brake_val
+                    })
             except (ValueError, IndexError):
                 continue
 
@@ -333,18 +465,49 @@ def render_trajectory_plot(
             ax.plot(fx, fy, color='#334155', linestyle='--', linewidth=1.5, alpha=0.6, label="Full Track")
             full_track_rendered = True
 
-        if lap_pts:
-            color = colors[idx_l % len(colors)]
-            lx = [p[0] for p in lap_pts]
-            ly = [p[1] for p in lap_pts]
-            lap_label = f"Lap {lap_num} ({session_id})"
-            ax.plot(lx, ly, color=color, linewidth=2.5, label=lap_label)
-            ax.plot(lx[0], ly[0], marker='o', color=color, markersize=6)
-            ax.plot(lx[-1], ly[-1], marker='s', color=color, markersize=6)
+        all_lap_pts.append((lap_num, session_id, colors[idx_l % len(colors)], lap_pts))
+
+    # Global min/max speed across all rendered lap points
+    speeds = [p['speed'] for _, _, _, pts in all_lap_pts for p in pts]
+    min_speed = min(speeds) if speeds else 0.0
+    max_speed = max(speeds) if speeds else 100.0
+
+    for lap_num, session_id, lap_color, lap_pts in all_lap_pts:
+        if not lap_pts:
+            continue
+
+        lx = [p['x'] for p in lap_pts]
+        ly = [p['y'] for p in lap_pts]
+        lap_label = f"Lap {lap_num} ({session_id})"
+
+        if color_mode == 'lap' or len(lap_pts) < 2:
+            ax.plot(lx, ly, color=lap_color, linewidth=2.5, label=lap_label)
+        else:
+            segments = []
+            segment_colors = []
+            for i in range(len(lap_pts) - 1):
+                p1 = lap_pts[i]
+                p2 = lap_pts[i + 1]
+                segments.append([[p1['x'], p1['y']], [p2['x'], p2['y']]])
+                col = _get_segment_color(
+                    color_mode, p1['speed'], p1['acc'], p1['throttle'], p1['brake'],
+                    min_speed, max_speed, lap_color
+                )
+                segment_colors.append(col)
+
+            lc = LineCollection(segments, colors=segment_colors, linewidths=2.5)
+            ax.add_collection(lc)
+            # Dummy line for legend entry
+            ax.plot([], [], color=lap_color, linewidth=2.5, label=lap_label)
+
+        # Start and end markers
+        ax.plot(lx[0], ly[0], marker='o', color=lap_color, markersize=6)
+        ax.plot(lx[-1], ly[-1], marker='s', color=lap_color, markersize=6)
 
     ax.set_aspect('equal', adjustable='datalim')
     ax.grid(True, linestyle='--', alpha=0.3)
-    ax.set_title(f"Trajectory Comparison ({first_track})", fontsize=12, fontweight='bold')
+    title_suffix = f" [{color_mode.capitalize()} Mode]" if color_mode != 'lap' else ""
+    ax.set_title(f"Trajectory Comparison ({first_track}){title_suffix}", fontsize=12, fontweight='bold')
     ax.legend(loc='upper right', frameon=True, facecolor='#18181b', edgecolor='#27272a')
 
     fig.tight_layout()
