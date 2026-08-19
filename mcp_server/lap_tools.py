@@ -21,6 +21,7 @@ import numpy as np
 
 from database import db
 import location_handlers
+from upload_handlers import is_lap_valid
 from mcp_server import image_tools
 
 
@@ -38,10 +39,12 @@ def _load_all_telemetry_laps(
     )
 
     track_info = db.get_track(track) or {}
+    lap_length = float(track_info.get('lap_length', 0.0))
     sector_ends = track_info.get('sector_end', [])
     turns_def = track_info.get('turns', [])
 
     all_laps_data: list[dict[str, Any]] = []
+    seen_csv_paths: set[str] = set()
 
     for s in raw_sessions:
         tel_dir = os.path.join(s.meeting_dir, 'telemetry') if s.meeting_dir else ''
@@ -57,6 +60,10 @@ def _load_all_telemetry_laps(
                 continue
 
             csv_path = os.path.join(tel_dir, csv_file)
+            if csv_path in seen_csv_paths:
+                continue
+            seen_csv_paths.add(csv_path)
+
             laps, columns, csv_driver = location_handlers.parse_telemetry_csv(csv_path)
 
             if not laps:
@@ -101,7 +108,8 @@ def _load_all_telemetry_laps(
                 l_num = l_item['lap_num']
                 dists = l_item.get('dists', [])
                 times = l_item.get('times', [])
-                if len(dists) < 2 or len(times) < 2:
+
+                if not is_lap_valid(np.array(dists), turns_def, lap_length):
                     continue
 
                 duration = times[-1] - times[0]
@@ -198,6 +206,10 @@ def get_stats_impl(
             t_end_m = float(t_def.get('end', t_start_m + 50.0))
             next_t_start_m = float(next_t_def.get('start', t_end_m + 50.0))
 
+            t_time = lap_item['turn_times'][t_idx] if t_idx < len(lap_item['turn_times']) else 0.0
+            if t_time <= 0.0:
+                continue
+
             entry_sp = float(np.interp(t_start_m, dists, speeds))
             exit_sp = float(np.interp(t_end_m, dists, speeds))
             straight_exit_sp = float(np.interp(next_t_start_m, dists, speeds))
@@ -224,8 +236,6 @@ def get_stats_impl(
                     "min_speed_kmh": round(min_sp, 1),
                     "max_steering_deg": round(max_st, 1)
                 })
-
-            t_time = lap_item['turn_times'][t_idx] if t_idx < len(lap_item['turn_times']) else 0.0
 
             results.append({
                 "session_id": lap_item['session_id'],
@@ -296,7 +306,11 @@ def get_aggregates_impl(
         if not t_name.startswith("Turn"):
             t_name = f"Turn {t_name}"
 
-        t_times = [lap_item['turn_times'][idx_t] for lap_item in laps_data if idx_t < len(lap_item['turn_times'])]
+        t_times = [
+            lap_item['turn_times'][idx_t]
+            for lap_item in laps_data
+            if idx_t < len(lap_item['turn_times']) and lap_item['turn_times'][idx_t] > 0.0
+        ]
         if not t_times:
             continue
 
@@ -331,7 +345,7 @@ def get_pace_summary_impl(
     """Returns a structured summary of theoretical vs actual best lap and per-turn improvement priority."""
     laps_data = _load_all_telemetry_laps(track, date, session_id, driver_name)
     if not laps_data:
-        raise ValueError(f"No telemetry data found for track={track!r}, date={date!r}")
+        raise ValueError(f"No valid telemetry data found for track={track!r}, date={date!r}")
 
     laps_data.sort(key=lambda lap_item: lap_item['time_s'])
     best_lap_obj = laps_data[0]
@@ -355,10 +369,13 @@ def get_pace_summary_impl(
         for lap_item in laps_data:
             if idx_t < len(lap_item['turn_times']):
                 tt = lap_item['turn_times'][idx_t]
-                if tt < min_t_time:
+                if tt > 0.0 and tt < min_t_time:
                     min_t_time = tt
                     best_l_num = lap_item['lap']
                     best_sess = lap_item['session_id']
+
+        if min_t_time == float('inf'):
+            min_t_time = actual_t_time
 
         delta_s = round(max(0.0, actual_t_time - min_t_time), 3)
 

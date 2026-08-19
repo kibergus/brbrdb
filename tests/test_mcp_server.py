@@ -13,13 +13,14 @@
 # limitations under the License.
 # ==============================================================================
 
+import json
 import pytest
 from mcp.server.fastmcp import Image
 from mcp_server import server
 
 
 def test_list_sessions_all() -> None:
-    sessions = server.list_sessions()
+    sessions = json.loads(server.list_sessions())
     assert isinstance(sessions, list)
     if sessions:
         s = sessions[0]
@@ -33,7 +34,7 @@ def test_list_sessions_all() -> None:
 
 
 def test_list_sessions_filtered_by_track() -> None:
-    sessions = server.list_sessions(track="Lydd")
+    sessions = json.loads(server.list_sessions(track="Lydd"))
     assert isinstance(sessions, list)
     assert len(sessions) > 0
     for s in sessions:
@@ -41,7 +42,7 @@ def test_list_sessions_filtered_by_track() -> None:
 
 
 def test_list_sessions_filtered_by_driver() -> None:
-    sessions = server.list_sessions(driver_name="Alice")
+    sessions = json.loads(server.list_sessions(driver_name="Alice"))
     assert isinstance(sessions, list)
     for s in sessions:
         assert any("alice" in d.lower() for d in s["driver_names"])
@@ -130,7 +131,7 @@ async def test_fastmcp_tool_registration() -> None:
 
 
 def test_get_stats_whole_lap() -> None:
-    stats = server.get_stats(track="Lydd", date="2026-07-12")
+    stats = json.loads(server.get_stats(track="Lydd", date="2026-07-12"))
     assert isinstance(stats, list)
     if stats:
         st = stats[0]
@@ -142,7 +143,7 @@ def test_get_stats_whole_lap() -> None:
 
 
 def test_get_stats_turn_index() -> None:
-    stats = server.get_stats(track="Lydd", date="2026-07-12", turn_index=1)
+    stats = json.loads(server.get_stats(track="Lydd", date="2026-07-12", turn_index=1))
     assert isinstance(stats, list)
     if stats:
         st = stats[0]

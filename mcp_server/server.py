@@ -17,6 +17,7 @@
 from __future__ import annotations
 import base64
 import csv
+import json
 import os
 from typing import Any
 
@@ -68,18 +69,18 @@ def list_sessions(
     driver_name: str | None = None,
     league: str | None = None,
     class_name: str | None = None
-) -> list[dict[str, Any]]:
+) -> str:
     """
-    List recorded sessions matching a set of optional filters.
+    Lists recorded sessions matching the given filters.
 
     Parameters:
-    - track: Track name, e.g. "Lydd" or "Lydd Karting 2026"
-    - date: ISO date "2026-07-12" — omit to list all
-    - driver_name: Filter by driver name (case-insensitive substring match)
+    - track: Filter by track name (substring match)
+    - date: Filter by ISO date string (YYYY-MM-DD)
+    - driver_name: Filter by driver name (substring match)
     - league: e.g. "kartsim"
     - class_name: e.g. "iame_waterswift_restricted_cadet_uk"
 
-    Returns array of session descriptors.
+    Returns JSON array string of session descriptors.
     """
     raw_sessions = db.find_sessions(
         leagues=league,
@@ -118,7 +119,7 @@ def list_sessions(
             "telemetry_channels": telemetry_channels
         })
 
-    return results
+    return json.dumps(results, indent=2)
 
 
 @mcp.tool()
@@ -207,7 +208,7 @@ def get_stats(
     turn_index: int | None = None,
     percentile_center: float | None = None,
     percentile_half_width: float = 5.0
-) -> list[dict[str, Any]]:
+) -> str:
     """
     Combined lap and per-turn stats tool. Returns one row per lap for every session matching the
     filters. Per-turn stats follow the track config apex definitions.
@@ -221,9 +222,9 @@ def get_stats(
     - percentile_center: Return laps within ±percentile_half_width of this percentile (0-100)
     - percentile_half_width: Half-width of percentile band (default 5.0)
 
-    Returns array of lap or turn records.
+    Returns JSON array string of lap or turn records.
     """
-    return lap_tools.get_stats_impl(
+    stats = lap_tools.get_stats_impl(
         track=track,
         date=date,
         session_id=session_id,
@@ -232,6 +233,7 @@ def get_stats(
         percentile_center=percentile_center,
         percentile_half_width=percentile_half_width
     )
+    return json.dumps(stats, indent=2)
 
 
 @mcp.tool()

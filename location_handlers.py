@@ -374,6 +374,17 @@ def _compute_lap_segments(laps: list, sector_ends: list, turns: list) -> None:
                 turn_start = turn.get('start', prev_turn['end'])
                 next_turn_start = next_turn.get('start', turn['end'])
 
+                # Verify lap points actually cover the turn boundaries
+                if next_turn_start > turn_start:
+                    if dists[0] > turn_start + 5.0 or dists[-1] < next_turn_start - 5.0:
+                        lap['turn_times'].append(0.0)
+                        continue
+                else:
+                    # Wrap around finish line
+                    if dists[-1] < turn_start - 5.0 or dists[0] > next_turn_start + 5.0:
+                        lap['turn_times'].append(0.0)
+                        continue
+
                 t_start = float(np.interp(turn_start, dists, times))
                 t_end = float(np.interp(next_turn_start, dists, times))
 
