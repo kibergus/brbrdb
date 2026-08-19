@@ -113,10 +113,50 @@ ALL coaching text, explanations, and report summaries MUST be tailored for **you
 Generate a standalone HTML file in the reports directory at `<DATA_DIR>/reports/<filename>.html` (e.g., `<DATA_DIR>/reports/bayford_meadows_turn2_telemetry_report.html`). The report will be served through the main site under the `/reports/` path (e.g., `/reports/<filename>.html`).
 
 ### Mandated HTML Requirements:
-- **Same-Origin External Stylesheet**: HTML reports MUST link the main site stylesheet (`<link rel="stylesheet" href="/static/css/telemetry_report.css">`).
-- **Actual Telemetry Display**: ALL telemetry plots in the report MUST be rendered using the project's `TelemetryPlot.js` library (`<script src="/static/js/telemetry_plot.js"></script>`) paired with Plotly (`<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>`). Because reports are served on the main site under `/reports/`, API requests automatically execute same-origin with standard authenticated session cookies.
+- **Same-Origin External Stylesheet & JavaScript Libraries**: HTML reports MUST link:
+  - Main stylesheet: `<link rel="stylesheet" href="/static/css/telemetry_report.css">`
+  - Plotly: `<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>`
+  - Stats & Minimap Library: `<script type="module" src="/static/js/stats_plots.js"></script>`
+  - TelemetryPlot Library: `<script src="/static/js/telemetry_plot.js"></script>`
+  - TrajectoryPlot Module: `<script type="module" src="/static/js/trajectory_plot.js"></script>`
 
-- **Interactive Widgets**: Each turn section MUST contain a `<div class="telemetry-widget-container" id="telemetry-widget-turn-N"></div>` element populated via:
+- **No Hardcoded Plot Data (Anti-Hallucination & Clean Architecture)**:
+  - Reports MUST NEVER hardcode raw arrays of lap times or plot data in scripts.
+  - All distribution plots and minimaps MUST be rendered using the reusable building bricks in `stats_plots.js` (`StatsPlot` and `TrackMinimap`), which fetch live, authenticated data directly from `/api/telemetry` and `/api/track_data`.
+
+- **Distribution Chart Building Brick (`StatsPlot.renderTurnViolin`)**:
+  ```html
+  <script>
+    StatsPlot.renderTurnViolin('#distribution-chart', {
+      league: "club100_south",
+      class_name: "cadet_lw",
+      track: "Llandow",
+      date: "2026-08-02",
+      turn_name: "The Dell", // or turn_index: 5
+      highlight_laps: [
+        { session_id: "12_30_race_5_qualifying", lap: 11, label: "Benchmark (14.075s)", color: "#10b981", size: 11 },
+        { session_id: "12_30_race_5_qualifying", lap: 5, label: "Median (14.409s)", color: "#f59e0b", size: 10 }
+      ]
+    });
+  </script>
+  ```
+
+- **Track Minimap Building Brick with Time Loss Color Coding (`TrackMinimap.render`)**:
+  Placed directly in the report header alongside the distribution chart to visually display the track layout, the highlighted target corner, and color-code all corners based on time lost across laps (green/yellow/red gradient scale):
+  ```html
+  <script>
+    TrackMinimap.render('#track-minimap-header', {
+      league: "club100_south",
+      class_name: "cadet_lw",
+      track: "Llandow",
+      date: "2026-08-02",
+      highlight_turn: "The Dell",
+      padding: 12
+    });
+  </script>
+  ```
+
+- **Multi-Channel Telemetry Widget (`TelemetryPlot.render`)**:
   ```html
   <script>
     TelemetryPlot.render('#telemetry-widget-turn-1', {
@@ -149,11 +189,11 @@ Generate a standalone HTML file in the reports directory at `<DATA_DIR>/reports/
 - **Report Structure & Layout Requirements**:
   1. **Header & Executive Summary Grid**:
      - **Left Side**: Executive summary text. Driver name MUST be highlighted as a clickable link to their brbrdb driver page (`https://brbrdb.brbrkitten.com/drivers/<driver_name>`). Track and turn names MUST be highlighted with `.highlight-badge`. Session names MUST be highlighted as clickable links to session pages (`https://brbrdb.brbrkitten.com/telemetry/<league>/<class_name>/<date>/<track>/`).
-     - **Right Side**: Interactive turn/lap time distribution chart (Plotly violin/scatter plot) showing time spread across laps and highlighting the selected analysis laps on the curve.
+     - **Right Side**: Interactive turn/lap time distribution chart rendered via `StatsPlot.renderTurnViolin`.
   2. **Selected Analysis Laps Table**:
      - Placed immediately below the summary header grid. Contains columns: Lap Role (pill badge), Session & Date (with session link), Lap #, Turn/Lap Time, Time Delta, and Selection Rationale & Focus. Highlights *why* each lap was selected for analysis. No telemetry plot widgets in this section.
   3. **Coaching Actions & Detailed Turn Breakdown**:
-     - Detailed turn breakdown cards containing interactive multi-channel `TelemetryPlot.js` widgets, spatial `TrajectoryPlot.js` line overlays, telemetry metrics tables, and coach's action items for the driver.
+     - Detailed turn breakdown cards containing track minimap (`TrackMinimap.render`), interactive multi-channel `TelemetryPlot.js` widgets, spatial `TrajectoryPlot.js` line overlays, telemetry metrics tables, and coach's action items for the driver.
 
 ---
 

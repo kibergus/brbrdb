@@ -159,7 +159,8 @@ def interpolate_lap_channels(
         l_time = l_time - l_time[0]
 
         interp_time = np.interp(dists_grid, l_dist, l_time)
-        interp_lap_data[l_num] = {'time': interp_time}
+        interp_segment_time = interp_time - interp_time[0]
+        interp_lap_data[l_num] = {'time': interp_segment_time}
 
         for ch in channels:
             if ch != 'delta_time':
@@ -207,6 +208,14 @@ def render_stacked_telemetry_plot(
             if not lap_lbl:
                 lap_lbl = f"Lap {l_num}" if (isinstance(l_num, int) or str(l_num).isdigit()) else str(l_num)
             ax.plot(dists_grid, y_vals, color=color, linewidth=2, label=lap_lbl)
+
+        if 'speed' in ch.lower():
+            all_s = [interp_lap_data[l][ch] for l in laps if ch in interp_lap_data[l]]
+            if all_s:
+                min_s = float(np.nanmin([np.nanmin(s) for s in all_s]))
+                max_s = float(np.nanmax([np.nanmax(s) for s in all_s]))
+                pad = max(1.0, (max_s - min_s) * 0.1)
+                ax.set_ylim(min_s - pad, max_s + pad)
 
         ax.set_ylabel(ch, fontsize=10)
         ax.grid(True, linestyle='--', alpha=0.3)

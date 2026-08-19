@@ -422,8 +422,29 @@
           // Laps to render (in exact order returned by fetchData)
           var lapsToRender = sessionData.laps || [];
 
+          function interpolateTimeAtDist(pts, targetDist) {
+            if (!pts || pts.length === 0) return 0;
+            if (targetDist <= pts[0].dist) return pts[0].time;
+            if (targetDist >= pts[pts.length - 1].dist) return pts[pts.length - 1].time;
+            for (var i = 0; i < pts.length - 1; i++) {
+              if (pts[i].dist <= targetDist && pts[i + 1].dist >= targetDist) {
+                var dSpan = pts[i + 1].dist - pts[i].dist;
+                var frac = dSpan > 0.0001 ? (targetDist - pts[i].dist) / dSpan : 0;
+                return pts[i].time + frac * (pts[i + 1].time - pts[i].time);
+              }
+            }
+            return pts[pts.length - 1].time;
+          }
+
+          var channelMinMax = {};
+          channels.forEach(function(ch) {
+            channelMinMax[ch.toLowerCase()] = { min: Infinity, max: -Infinity };
+          });
+
           // Reference lap for delta_time (first lap in lapsToRender)
           var refLapObj = lapsToRender.length > 0 ? lapsToRender[0] : null;
+          var refPoints = (refLapObj && refLapObj.points) ? refLapObj.points : [];
+          var refT_at_start = interpolateTimeAtDist(refPoints, startM);
 
           // Build time and channel series per lap
           lapsToRender.forEach(function(lap, lapIdx) {
@@ -460,6 +481,8 @@
               }
             }
 
+            var lapT_at_start = interpolateTimeAtDist(points, startM);
+
             // Create subplots for channels
             channels.forEach(function(ch, chIdx) {
               var normCh = ch.toLowerCase();
@@ -467,23 +490,19 @@
               var yData = lapChannels[normCh] || [];
 
               if (normCh === 'delta_time') {
-                var refPoints = (refLapObj && refLapObj.points) ? refLapObj.points : [];
-                yData = lapDists.map(function(d, dIdx) {
-                  var currentLapSegmentTime = (lapTimes[dIdx] || 0) - (lapTimes[0] || 0);
-                  var refT0 = refPoints.length > 0 ? refPoints[0].time : 0;
-                  var refSegTime = 0;
-                  if (refPoints.length > 0) {
-                    for (var r = 0; r < refPoints.length - 1; r++) {
-                      if (refPoints[r].dist <= d && refPoints[r + 1].dist >= d) {
-                        var frac = (d - refPoints[r].dist) / ((refPoints[r + 1].dist - refPoints[r].dist) || 0.001);
-                        refSegTime = (refPoints[r].time - refT0) + frac * (refPoints[r + 1].time - refPoints[r].time);
-                        break;
-                      }
-                    }
-                  }
-                  return currentLapSegmentTime - refSegTime;
+                yData = lapDists.map(function(d) {
+                  var currentLapSegTime = interpolateTimeAtDist(points, d) - lapT_at_start;
+                  var refSegTime = interpolateTimeAtDist(refPoints, d) - refT_at_start;
+                  return Math.round((currentLapSegTime - refSegTime) * 1000) / 1000;
                 });
               }
+
+              yData.forEach(function(v) {
+                if (v !== null && v !== undefined && !isNaN(v)) {
+                  if (v < channelMinMax[normCh].min) channelMinMax[normCh].min = v;
+                  if (v > channelMinMax[normCh].max) channelMinMax[normCh].max = v;
+                }
+              });
 
               traces.push({
                 x: lapDists,
@@ -496,7 +515,7 @@
                 type: 'scatter',
                 mode: 'lines',
                 line: lineConfig,
-                hovertemplate: ch.toUpperCase() + ': %{y:.1f}<br>Dist: %{x:.1f}m<extra>' + lapLabel + '</extra>'
+                hovertemplate: ch.toUpperCase() + ': %{y:.2f}<br>Dist: %{x:.1f}m<extra>' + lapLabel + '</extra>'
               });
             });
           });
@@ -549,18 +568,35 @@
           // Y-Axes configuration
           channels.forEach(function(ch, chIdx) {
             var yKey = chIdx === 0 ? 'yaxis' : 'yaxis' + (chIdx + 1);
+            var normCh = ch.toLowerCase();
             var titleText = ch.toUpperCase();
-            if (ch.toLowerCase() === 'speed') titleText = 'Speed (km/h)';
-            if (ch.toLowerCase() === 'brake') titleText = 'Brake (%)';
-            if (ch.toLowerCase() === 'throttle') titleText = 'Throttle (%)';
-            if (ch.toLowerCase() === 'steering') titleText = 'Steering (deg)';
-            if (ch.toLowerCase() === 'delta_time') titleText = 'Delta (s)';
+            if (normCh === 'speed') titleText = 'Speed (km/h)';
+            if (normCh === 'brake') titleText = 'Brake (%)';
+            if (normCh === 'throttle') titleText = 'Throttle (%)';
+            if (normCh === 'steering') titleText = 'Steering (deg)';
+            if (normCh === 'delta_time') titleText = 'Delta (s)';
 
-            layout[yKey] = {
+            var mm = channelMinMax[normCh];
+            var yConfig = {
               title: { text: titleText, font: { size: 10, color: '#cbd5e1' } },
               gridcolor: '#1e293b',
               zerolinecolor: '#334155'
             };
+
+            if (normCh === 'speed' && mm && isFinite(mm.min) && isFinite(mm.max)) {
+              var span = mm.max - mm.min;
+              var pad = Math.max(1.0, span * 0.1);
+              yConfig.range = [Math.floor(mm.min - pad), Math.ceil(mm.max + pad)];
+              yConfig.autorange = false;
+            } else if (normCh === 'delta_time' && mm && isFinite(mm.min) && isFinite(mm.max)) {
+              var dtMin = Math.min(0, mm.min);
+              var dtMax = Math.max(0.05, mm.max);
+              var pad = (dtMax - dtMin) * 0.15;
+              yConfig.range = [dtMin - pad, dtMax + pad];
+              yConfig.autorange = false;
+            }
+
+            layout[yKey] = yConfig;
           });
 
           var config = {

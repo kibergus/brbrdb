@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/static/css/telemetry_report.css">
   <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
   <script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=geometry,marker"></script>
+  <script type="module" src="/static/js/stats_plots.js"></script>
   <script src="/static/js/telemetry_plot.js"></script>
   <script type="module" src="/static/js/trajectory_plot.js"></script>
 </head>
@@ -18,7 +19,7 @@
     <header>
       <h1 class="header-title">Karting Telemetry Coaching Report: {{ turn_name_or_scope }}</h1>
       
-      <div class="summary-grid">
+      <div class="summary-grid" style="grid-template-columns: 1.2fr 1fr 1fr; gap: 1.25rem;">
         <div class="summary-text-card">
           <p class="summary-paragraph">
             This telemetry coaching report analyzes driver 
@@ -39,7 +40,11 @@
 
         <div class="summary-chart-card">
           <div class="chart-card-title">{{ distribution_chart_title }}</div>
-          <div id="distribution-chart" style="width: 100%; height: 210px;"></div>
+          <div id="distribution-chart" style="width: 100%; height: 215px;"></div>
+        </div>
+
+        <div class="summary-chart-card" style="display: flex; align-items: center; justify-content: center;">
+          <div id="track-minimap-header" style="width: 100%; height: 100%;"></div>
         </div>
       </div>
     </header>
@@ -147,5 +152,43 @@
       </div>
     </section>
   </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // 1. Render Distribution Chart from real DB data via StatsPlot building brick
+      StatsPlot.renderTurnViolin('#distribution-chart', {
+        league: "{{ league }}",
+        class_name: "{{ class_name }}",
+        track: "{{ track_name }}",
+        date: "{{ date }}",
+        turn_name: "{{ turn_name_or_scope }}",
+        highlight_laps: [
+          { session_id: "{{ benchmark_session_id }}", lap: {{ benchmark_lap_num }}, label: "Benchmark Lap {{ benchmark_lap_num }}", color: "#10b981", size: 11 },
+          { session_id: "{{ median_session_id }}", lap: {{ median_lap_num }}, label: "Median Lap {{ median_lap_num }}", color: "#f59e0b", size: 10 }
+        ]
+      });
+
+      // 2. Render Header Track Minimap with Time Loss Color Coding
+      TrackMinimap.render('#track-minimap-header', {
+        league: "{{ league }}",
+        class_name: "{{ class_name }}",
+        track: "{{ track_name }}",
+        date: "{{ date }}",
+        highlight_turn: "{{ turn_name_or_scope }}",
+        padding: 12
+      });
+
+      // 3. Render Telemetry Plot
+      TelemetryPlot.render('#telemetry-widget-turn-1', {
+        session_id: "{{ session_id }}",
+        track: "{{ track_name }}",
+        date: "{{ date }}",
+        laps: [{{ benchmark_lap_num }}, {{ median_lap_num }}],
+        start_m: {{ turn_start_m }},
+        end_m: {{ turn_end_m }},
+        channels: ["speed", "brake", "throttle", "steering", "delta_time"]
+      });
+    });
+  </script>
 </body>
 </html>

@@ -343,7 +343,9 @@ function findFirstIndexGe(points, targetDist) {
 }
 
 export function getMinSpeedInRange(lap, startDist, endDist, fallbackApex) {
-    if (!lap.points || lap.points.length === 0) return null;
+    if (!lap) return null;
+    const points = Array.isArray(lap) ? lap : lap.points;
+    if (!points || points.length === 0) return null;
 
     let start = startDist;
     let end = endDist;
@@ -357,7 +359,6 @@ export function getMinSpeedInRange(lap, startDist, endDist, fallbackApex) {
         }
     }
 
-    const points = lap.points;
     const lapLength = (state.trackData && state.trackData.lap_length) || (points.length > 0 ? points[points.length - 1].dist : 0);
 
     if (lapLength > 0) {
