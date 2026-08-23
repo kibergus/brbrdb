@@ -22,6 +22,8 @@
 export const state = {
     map: null,
     mapInitialized: false,
+    defaultMapZoom: null,
+    trackBounds: null,
     lapPolylines: {}, // lapId -> polyline
     lapColorsForId: {}, // lapId -> color
     allSessionsData: [],
@@ -33,7 +35,7 @@ export const state = {
     groupBVisibleMap: false,
     groupAVisibleStats: true,
     groupBVisibleStats: true,
-    activeTab: 'map',
+    activeTab: 'stats',
     selectedSessionId: null,
     groupASelection: new Set(),
     groupBSelection: new Set(),

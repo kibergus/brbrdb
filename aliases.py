@@ -37,7 +37,7 @@ _LEAGUE_NAMES = {
     'club100_north': 'Club 100 North',
     'club100_south': 'Club 100 South',
     'kartsim': 'KartSim',
-    'fat': 'FAT',
+    'fat': 'FAT Testing',
     'fat_pro': 'FAT Pro',
     'fat_regional': 'FAT Regional',
     'fat_world_finals': 'FAT World Finals',
@@ -138,6 +138,8 @@ def get_league_group(league_id: str) -> str:
         return 'club100'
     if league_id in ('fat_us_ca', 'fat_us_mw'):
         return 'fat_us'
+    if league_id == 'fat_world_finals':
+        return 'fat_world_finals'
     if league_id.startswith('fat'):
         return 'fat'
     return 'other'
@@ -150,6 +152,7 @@ def group_leagues(leagues: list[str]) -> list[tuple[str, list[str]]]:
         'club100': [],
         'fat': [],
         'fat_us': [],
+        'fat_world_finals': [],
         'other': []
     }
     for league_id in leagues:
@@ -160,12 +163,12 @@ def group_leagues(leagues: list[str]) -> list[tuple[str, list[str]]]:
         groups[g].sort(key=get_league_name)
 
     # Convert to list of (group_name, list_of_leagues) for stable iteration
-    # Ordered as: kartsim, club100, fat, other
     grouped_list = [
         ('kartsim', groups['kartsim']),
         ('club100', groups['club100']),
         ('fat', groups['fat']),
         ('fat_us', groups['fat_us']),
+        ('fat_world_finals', groups['fat_world_finals']),
         ('other', groups['other'])
     ]
     # Filter empty groups

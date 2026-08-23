@@ -515,6 +515,10 @@ body {
     background: linear-gradient(135deg, #ef4444 50%, #22c55e 50%);
 }
 
+.item-color-dot.mode-delta-t {
+    background: linear-gradient(135deg, #00ff00 0%, #ffff00 50%, #ff0000 100%);
+}
+
 .item-color-dot.mode-speed {
     background: linear-gradient(135deg, rgb(40,20,180), rgb(0,200,255), rgb(255,30,60), rgb(255,200,0), rgb(0,255,80));
 }
@@ -691,6 +695,18 @@ body {
     color: var(--accent);
     border-bottom-color: var(--accent);
     background: rgba(255, 255, 255, 0.08);
+}
+
+#stats-plot-turn-gaps .xaxislayer-above,
+#stats-plot-turn-gaps .xtick,
+#stats-plot-turn-gaps .xtick text,
+#stats-plot-turn-gaps .xtick tspan,
+#stats-plot-apex-speeds .xaxislayer-above,
+#stats-plot-apex-speeds .xtick,
+#stats-plot-apex-speeds .xtick text,
+#stats-plot-apex-speeds .xtick tspan {
+    pointer-events: all !important;
+    cursor: pointer !important;
 }
 
 

@@ -107,7 +107,15 @@ export function updateURL() {
 
         // 5. Telemetry xlim (range)
         if (state.globalTelemetryXRange && state.globalTelemetryXRange.length === 2) {
-            params.set('xlim', `${state.globalTelemetryXRange[0].toFixed(2)},${state.globalTelemetryXRange[1].toFixed(2)}`);
+            if (state.trackData && state.trackData.lap_length &&
+                Math.abs(state.globalTelemetryXRange[0] - 0) < 1 &&
+                Math.abs(state.globalTelemetryXRange[1] - state.trackData.lap_length) < 1) {
+                params.delete('xlim');
+            } else if (state.globalTelemetryXRange[0] === 0 && state.globalTelemetryXRange[1] === 100) {
+                params.delete('xlim');
+            } else {
+                params.set('xlim', `${state.globalTelemetryXRange[0].toFixed(2)},${state.globalTelemetryXRange[1].toFixed(2)}`);
+            }
         } else {
             params.delete('xlim');
         }

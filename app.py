@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import urlparse, urljoin
 from flask import (
     Flask, render_template, render_template_string, abort, url_for, redirect,
-    request, make_response, Response, g
+    request, make_response, Response, g, send_from_directory
 )
 from werkzeug import wrappers as werkzeug_wrappers
 
@@ -79,6 +79,16 @@ def serve_report(filename: str) -> Response:
     return Response(rendered, mimetype='text/html')
 
 
+@app.route('/favicon.ico')
+def favicon() -> Response:
+    """Serve favicon.png for /favicon.ico requests."""
+    return send_from_directory(
+        os.path.join(app.root_path, 'static'),
+        'favicon.png',
+        mimetype='image/png',
+    )
+
+
 @app.teardown_request
 def teardown_db(exception: Any = None) -> None:
     """Ensure any uncommitted database transactions are rolled back and connection is returned to the pool."""
@@ -88,7 +98,7 @@ def teardown_db(exception: Any = None) -> None:
 @app.before_request
 def _require_login() -> werkzeug_wrappers.Response | tuple[str, int] | None:
     """Global auth gate — skipped for localhost, static files, auth, about, and gallery endpoints."""
-    if request.endpoint in ('auth', 'static', 'about') or (
+    if request.endpoint in ('auth', 'static', 'about', 'favicon') or (
         request.endpoint and request.endpoint.startswith('gallery.')
     ):
         return None
@@ -641,9 +651,13 @@ def last_meeting_redirect(league: str) -> werkzeug_wrappers.Response | str:
 
 @app.route('/league/<league>')
 def league_view(league: str) -> str:
-    hero_names = plot_handlers.get_hero_names() if league == 'kartsim' else None
-    if hero_names:
+    if league == 'kartsim':
+        hero_names = plot_handlers.get_hero_names()
+        if not hero_names:
+            return render_template('suggest_hero.html')
         meetings = db.list_meetings(league, driver_names=hero_names)
+        if not meetings:
+            return render_template('suggest_hero.html')
     else:
         meetings = db.list_meetings(league)
 
@@ -654,14 +668,17 @@ def league_view(league: str) -> str:
 
 @app.route('/league/<league>/<class_name>')
 def class_view(league: str, class_name: str) -> str:
-    years = db.list_years(league, class_name)
-
     if league == 'kartsim':
         hero_names = plot_handlers.get_hero_names()
-        if hero_names:
-            # We filter years by checking which years have sessions for the hero driver
-            df_hero_all = db.load(leagues=league, classes=class_name, driver_names=tuple(hero_names))
-            years = sorted(set(row['Date'].split('-')[0] for _, row in df_hero_all.iterrows()), reverse=True)
+        if not hero_names:
+            return render_template('suggest_hero.html')
+        # We filter years by checking which years have sessions for the hero driver
+        df_hero_all = db.load(leagues=league, classes=class_name, driver_names=tuple(hero_names))
+        if df_hero_all.empty:
+            return render_template('suggest_hero.html')
+        years = sorted(set(row['Date'].split('-')[0] for _, row in df_hero_all.iterrows()), reverse=True)
+    else:
+        years = db.list_years(league, class_name)
 
     # Get selected year from query param, default to latest year
     selected_year = request.args.get('year')
@@ -672,12 +689,10 @@ def class_view(league: str, class_name: str) -> str:
     class_meetings = db.list_meetings(league, year=selected_year, class_name=class_name)
 
     if league == 'kartsim':
-        hero_names = plot_handlers.get_hero_names()
-        if hero_names:
-            df_hero = db.load(leagues=league, classes=class_name, year=selected_year, driver_names=tuple(hero_names))
-            # Use meeting keys (date, track) to filter the meeting list
-            hero_meeting_keys = set((row['Date'], row['TrackName']) for _, row in df_hero.iterrows())
-            class_meetings = [m for m in class_meetings if (m[1], m[2]) in hero_meeting_keys]
+        df_hero = db.load(leagues=league, classes=class_name, year=selected_year, driver_names=tuple(hero_names))
+        # Use meeting keys (date, track) to filter the meeting list
+        hero_meeting_keys = set((row['Date'], row['TrackName']) for _, row in df_hero.iterrows())
+        class_meetings = [m for m in class_meetings if (m[1], m[2]) in hero_meeting_keys]
 
     # View mode: 'by_date' (default) or 'by_track' or 'activity'
     is_kartsim = (league == 'kartsim')
@@ -1208,14 +1223,17 @@ def track_sessions_view(league: str, class_name: str, track: str, track_conditio
 
     if league == 'kartsim':
         hero_names = plot_handlers.get_hero_names()
-        if hero_names:
-            df_hero = db.load(
-                leagues=league, classes=class_name, track=track,
-                year=selected_year, track_conditions=cond_query,
-                driver_names=tuple(hero_names)
-            )
-            hero_session_ids = set(df_hero['SessionID'].unique())
-            all_sessions = [s for s in all_sessions if s.session_id in hero_session_ids]
+        if not hero_names:
+            return render_template('suggest_hero.html')
+        df_hero = db.load(
+            leagues=league, classes=class_name, track=track,
+            year=selected_year, track_conditions=cond_query,
+            driver_names=tuple(hero_names)
+        )
+        if df_hero.empty:
+            return render_template('suggest_hero.html')
+        hero_session_ids = set(df_hero['SessionID'].unique())
+        all_sessions = [s for s in all_sessions if s.session_id in hero_session_ids]
 
     # Group sessions by date
     dates = sorted(set(s.date for s in all_sessions))

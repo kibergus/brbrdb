@@ -20,14 +20,14 @@
 <div class="sidebar-layout">
     <div class="sidebar">
         <div class="sidebar-tab-selector">
-            <div class="sidebar-tab" id="btn-stats" onclick="showTab('stats')">
+            <div class="sidebar-tab active" id="btn-stats" onclick="showTab('stats')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 3v18h18" />
                     <path d="M18 9l-5 5-2-2-4 4" />
                 </svg>
                 Stats
             </div>
-            <div class="sidebar-tab active" id="btn-map" onclick="showTab('map')">
+            <div class="sidebar-tab" id="btn-map" onclick="showTab('map')">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" />
                     <circle cx="12" cy="10" r="3" />
@@ -122,7 +122,7 @@
                     </p>
                 </div>
                 {% elif has_telemetry %}
-                <div id="map-view" class="subtab-pane active">
+                <div id="map-view" class="subtab-pane">
                     <div id="map-overlay-controls" class="map-overlay-controls" style="display: none;">
                         <div class="custom-selector" id="map-type-selector">
                             <div class="selector-item" onclick="setMapType('satellite')" data-type="satellite">Satellite
@@ -152,6 +152,10 @@
                                 <div class="dropdown-item active" onclick="setTrajectoryColorMode('pedals')" data-mode="pedals">
                                     <span class="item-color-dot mode-pedals"></span>
                                     <span>Brake/Throttle</span>
+                                </div>
+                                <div class="dropdown-item" onclick="setTrajectoryColorMode('delta_t')" data-mode="delta_t">
+                                    <span class="item-color-dot mode-delta-t"></span>
+                                    <span>Δ t</span>
                                 </div>
                                 <div class="dropdown-item" onclick="setTrajectoryColorMode('speed')" data-mode="speed">
                                     <span class="item-color-dot mode-speed"></span>
@@ -184,16 +188,16 @@
                     </div>
                 </div>
 
-                <div id="stats-view" class="subtab-pane">
+                <div id="stats-view" class="subtab-pane active">
                     <div class="stats-tab-bar">
                         <button class="stats-tab-btn active" id="stats-tab-btn-overview" onclick="showStatsSubTab('overview')">Overview</button>
                         <button class="stats-tab-btn" id="stats-tab-btn-progression" onclick="showStatsSubTab('progression')">Progression</button>
                     </div>
 
                     <div id="stats-subtab-overview" class="stats-subtab-pane active">
-                        <div id="stats-plots-container" style="display: flex; flex-direction: column; gap: 2rem;">
+                        <div id="stats-plots-container" style="display: flex; flex-direction: column;">
                             <div class="plot-card"
-                                style="display: flex; gap: 2rem; align-items: flex-start; min-height: 500px; padding: 1.5rem;">
+                                style="display: flex; gap: 2rem; align-items: flex-start; min-height: 400px; padding: 0;">
                                 <div id="stats-summary-left" style="flex: 0 0 220px; padding-top: 0.5rem;">
                                     <h3 style="margin-bottom: 2rem; font-size: 1.1rem;">Lap Times Distribution</h3>
                                     <div id="stats-summary-values"
@@ -201,26 +205,24 @@
                                         <!-- Populated by JS: Best Lap and Ideal Lap -->
                                     </div>
                                 </div>
-                                <div id="stats-plot-lap-times" style="flex: 1; height: 500px;"></div>
+                                <div id="stats-plot-lap-times" style="flex: 1; height: 400px;"></div>
                                 <div id="stats-minimap-container"
-                                    style="flex: 0 0 320px; height: 500px; display: flex; flex-direction: column; position: relative;">
+                                    style="flex: 0 0 320px; height: 400px; display: flex; flex-direction: column; position: relative;">
                                 </div>
                             </div>
                             <div class="plot-card">
-                                <h3 style="margin-bottom: 1rem;">Turn Performance Gaps</h3>
-                                <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                                <div id="stats-plot-turn-gaps" style="width: 100%; height: 600px;"></div>
+                                <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 1rem;">
                                     Shows time lost in each of the turns by the end of the straight versus the best attempt.
                                     Helps to focus on the spots with the most potential gain. The turn where most time can
                                     be recovered is highlighted with orange.
                                 </p>
-                                <div id="stats-plot-turn-gaps" style="width: 100%; height: 600px;"></div>
                             </div>
                             <div class="plot-card">
-                                <h3 style="margin-bottom: 1rem;">Minimum Corner Speeds</h3>
-                                <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                                <div id="stats-plot-apex-speeds" style="width: 100%; height: 600px;"></div>
+                                <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 1rem;">
                                     Shows the minimum speed (V-min) carried through each corner for the selected laps.
                                 </p>
-                                <div id="stats-plot-apex-speeds" style="width: 100%; height: 600px;"></div>
                             </div>
                         </div>
 
@@ -239,7 +241,7 @@
                 </div>
 
                 <!-- Expandable Plots Block -->
-                <div id="expandable-plots-block" class="expandable-plots-block">
+                <div id="expandable-plots-block" class="expandable-plots-block" style="display: none;">
                     <div class="resizer-handle" id="plot-resizer"></div>
                     <div class="expandable-plots-header">
                         <div class="plot-tabs">
@@ -288,7 +290,7 @@
                     </div>
                 </div>
 
-                <div class="map-controls-bar">
+                <div class="map-controls-bar" style="display: none;">
                     <div style="position: relative;">
                         <button id="play-pause-btn" class="play-btn" title="Play/Pause (Right-click for speed)"
                             onclick="togglePlay()">
@@ -321,7 +323,7 @@
                 </div>
                 {% endif %}
             </div>
-            <div class="map-side-panel">
+            <div class="map-side-panel" style="display: none;">
                 <div class="panel-title"
                     style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; border-bottom: none; padding-bottom: 0;">
                     <span

@@ -62,7 +62,7 @@ Launch a dedicated sub-agent focusing exclusively on that turn index $N$ ($Turn\
 3. Inspect internal plot images:
    - Call `get_telemetry_plot(laps=[(date, track, session_id, lap_num), ...], start_m=..., end_m=..., channels=["Speed", "Brake", "Throttle", "Steering Angle", "delta_time"])`.
    - Call `get_trajectory_plot(laps=[(date, track, session_id, lap_num), ...], start_m=..., end_m=..., color_mode="lap")`.
-     - `color_mode`: Can be `"lap"` (default, solid color per lap for line comparison), `"pedals"` (pedal inputs: green throttle / red brake / white coasting), `"accel"` (longitudinal acceleration: green accel / red decel), or `"speed"` (velocity heatmap). Sub-agents can use `"pedals"` or `"accel"` to visually inspect braking zones and throttle pickup points along the racing line.
+     - `color_mode`: Can be `"lap"` (default, solid color per lap for line comparison), `"delta_t"` (reference lap in white, other laps green/yellow/red rate of time gained/lost), `"pedals"` (pedal inputs: green throttle / red brake / white coasting), `"accel"` (longitudinal acceleration: green accel / red decel), or `"speed"` (velocity heatmap). Sub-agents can use `"delta_t"` to visually inspect exactly where on the line the driver is losing time.
 4. Diagnose driver root cause actions (linking driver control inputs directly to chosen trajectory line geometry):
    - **Line Geometry & Trajectory**: Wide vs tight entry approach, apex clipping distance, mid-corner trajectory arc, and exit line width.
    - **Throttle Pickup & Lift Offs**: How entry line angle and apex trajectory dictate when full throttle can be picked up, or force mid-corner throttle chops/lifting.
@@ -180,9 +180,26 @@ Generate a standalone HTML file in the reports directory at `<DATA_DIR>/reports/
     });
   </script>
   ```
+
+- **Interactive GPS Trajectory Widget (`TrajectoryPlot.render`)**:
+  ```html
+  <script type="module">
+    import { TrajectoryPlot } from '/static/js/trajectory_plot.js';
+    TrajectoryPlot.render('#trajectory-widget-turn-1', {
+      session_id: "...",
+      track: "...",
+      date: "...",
+      laps: [23, 15],
+      start_m: 12.0,
+      end_m: 120.0,
+      color_mode: "delta_t", // "delta_t" (reference lap in white, other laps green/yellow/red pace delta), "speed", "accel", "pedals", or "lap"
+      markers: [{ distance_m: 65.0, label: "Apex T1", color: "#38bdf8" }]
+    });
+  </script>
+  ```
 - **Time Delta Calculation**: Time deltas in report tables and annotations MUST always be calculated relative to the fastest lap present on the plot/report (the reference lap with delta = 0.000s).
 - **Cross-Session Benchmark Laps**: When selecting the fastest reference lap for a corner, ALWAYS scan across ALL sessions available for that date (e.g. morning practice, afternoon practice, heat/race sessions) so the benchmark represents the driver's absolute best performance of the day.
-- **GPS Coordinates for Trajectory Plots**: Spatial trajectory plots (`TrajectoryPlot.js` / `get_trajectory_plot`) MUST ALWAYS use `Longitude` and `Latitude` GPS coordinates (in degrees) as the primary spatial channels.
+- **GPS Coordinates for Trajectory Plots**: Spatial trajectory plots (`TrajectoryPlot.js` / `get_trajectory_plot`) MUST ALWAYS use `Longitude` and `Latitude` GPS coordinates (in degrees) as the primary spatial channels. Supports `color_mode: "delta_t"` to visually display time gained (green) or lost (red) relative to the reference lap.
 - **Trajectory-Driven Input Analysis**: Driver inputs (throttle modulation, throttle chops/lifting, steering snaps, oversteer corrections, and brake duration) MUST be analyzed as direct consequences of the driver's chosen racing line geometry (entry width, turn-in angle, apex proximity/clipping, mid-corner arc, and exit positioning).
 - **Dual Visualizations**: Reports MUST include both channel telemetry (`TelemetryPlot.js`) and spatial GPS trajectory visuals (`TrajectoryPlot.js`) for the distance crop.
 - **Color-Coded Lap Numbers in Text**: Whenever lap numbers are mentioned in text (body paragraphs, executive summary, coaching takeaways, coach summary boxes, or table cells), they MUST be styled using CSS classes matching their telemetry plot trace colors: `.lap_ref` for the benchmark reference lap (e.g. `<span class="lap_ref">Lap X</span>`), and `.lap_1`, `.lap_2`, ..., `.lap_10` for target laps in sequential plot order (e.g. `<span class="lap_1">Lap Y</span>`, `<span class="lap_2">Lap Z</span>`).

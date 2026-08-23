@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import csv
 import io
+import math
 import os
 from typing import Any
 import matplotlib
@@ -255,6 +256,34 @@ SPEED_COLOR_STOPS = [
     (1.00, (0, 255, 80))     # Top speed: Neon Green
 ]
 
+DELTA_T_COLOR_STOPS = [
+    (0.0, (0, 255, 0)),     # -max_rate (gaining time): Pure Green
+    (0.5, (255, 255, 0)),   # 0.0 (equal pace): Pure Yellow
+    (1.0, (255, 0, 0))      # +max_rate (losing time): Pure Red
+]
+
+
+def _interpolate_delta_t_color(rate: float) -> tuple[float, float, float, float]:
+    max_rate = 0.25
+    s0 = 0.025
+    asinh_max = math.asinh(max_rate / s0)
+    norm_rate = max(-1.0, min(1.0, math.asinh(rate / s0) / asinh_max))
+    val = 0.5 + 0.5 * norm_rate
+    if val <= DELTA_T_COLOR_STOPS[0][0]:
+        c = DELTA_T_COLOR_STOPS[0][1]
+        return (c[0] / 255.0, c[1] / 255.0, c[2] / 255.0, 1.0)
+    for i in range(len(DELTA_T_COLOR_STOPS) - 1):
+        u1, c1 = DELTA_T_COLOR_STOPS[i]
+        u2, c2 = DELTA_T_COLOR_STOPS[i + 1]
+        if u1 <= val <= u2:
+            f = (val - u1) / (u2 - u1 or 1.0)
+            r = c1[0] + f * (c2[0] - c1[0])
+            g = c1[1] + f * (c2[1] - c1[1])
+            b = c1[2] + f * (c2[2] - c1[2])
+            return (r / 255.0, g / 255.0, b / 255.0, 1.0)
+    c = DELTA_T_COLOR_STOPS[-1][1]
+    return (c[0] / 255.0, c[1] / 255.0, c[2] / 255.0, 1.0)
+
 
 def _interpolate_speed_color(val: float) -> tuple[float, float, float, float]:
     val = max(0.0, min(1.0, float(val)))
@@ -326,7 +355,7 @@ def render_trajectory_plot(
         raise ValueError("laps parameter cannot be empty")
 
     color_mode = (color_mode or "lap").lower()
-    if color_mode not in ("lap", "pedals", "accel", "speed"):
+    if color_mode not in ("lap", "pedals", "accel", "speed", "delta_t"):
         color_mode = "lap"
 
     parsed_laps = [parse_lap_spec(item) for item in laps]
@@ -430,10 +459,10 @@ def render_trajectory_plot(
                 throttle_val = float(row[throttle_idx]) if throttle_idx != -1 else 0.0
                 brake_val = float(row[brake_idx]) if brake_idx != -1 else 0.0
 
+                t_sec = _parse_time_seconds(row[time_idx]) if time_idx != -1 else 0.0
                 if glon_idx != -1:
                     acc_val = float(row[glon_idx]) * 9.81
                 else:
-                    t_sec = _parse_time_seconds(row[time_idx]) if time_idx != -1 else 0.0
                     dt = t_sec - prev_time
                     dv = (speed_kmh / 3.6) - (prev_speed / 3.6)
                     acc_val = dv / dt if dt > 0.001 else 0.0
@@ -460,6 +489,7 @@ def render_trajectory_plot(
                         'x': x_val,
                         'y': y_val,
                         'd': d_val,
+                        'time': t_sec,
                         'speed': speed_kmh,
                         'acc': acc_val,
                         'throttle': throttle_val,
@@ -481,37 +511,70 @@ def render_trajectory_plot(
     min_speed = min(speeds) if speeds else 0.0
     max_speed = max(speeds) if speeds else 100.0
 
-    for lap_num, session_id, lap_color, lap_pts in all_lap_pts:
+    ref_lap_pts = all_lap_pts[0][3] if all_lap_pts else []
+    ref_dists = [p['d'] for p in ref_lap_pts]
+    ref_times = [p['time'] for p in ref_lap_pts]
+
+    for idx_l, (lap_num, session_id, lap_color, lap_pts) in enumerate(all_lap_pts):
         if not lap_pts:
             continue
 
         lx = [p['x'] for p in lap_pts]
         ly = [p['y'] for p in lap_pts]
-        lap_label = f"Lap {lap_num} ({session_id})"
+        is_ref = (idx_l == 0)
+        lap_label = f"Lap {lap_num} ({session_id})" + (" [Ref]" if (color_mode == 'delta_t' and is_ref) else "")
 
         if color_mode == 'lap' or len(lap_pts) < 2:
             ax.plot(lx, ly, color=lap_color, linewidth=2.5, label=lap_label)
         else:
             segments = []
-            segment_colors = []
+            segment_colors: list[tuple[float, float, float, float] | str] = []
+            lap_dists = [p['d'] for p in lap_pts]
+            lap_times = [p['time'] for p in lap_pts]
+
             for i in range(len(lap_pts) - 1):
                 p1 = lap_pts[i]
                 p2 = lap_pts[i + 1]
                 segments.append([[p1['x'], p1['y']], [p2['x'], p2['y']]])
-                col = _get_segment_color(
-                    color_mode, p1['speed'], p1['acc'], p1['throttle'], p1['brake'],
-                    min_speed, max_speed, lap_color
-                )
+
+                col: tuple[float, float, float, float] | str
+                if color_mode == 'delta_t':
+                    if is_ref:
+                        col = (1.0, 1.0, 1.0, 1.0)
+                    else:
+                        s_mid = (p1['d'] + p2['d']) / 2.0
+                        w_start = max(0.0, s_mid - 5.0)
+                        w_end = s_mid + 5.0
+                        t_lap1 = float(np.interp(w_start, lap_dists, lap_times))
+                        t_lap2 = float(np.interp(w_end, lap_dists, lap_times))
+                        t_ref1 = float(np.interp(w_start, ref_dists, ref_times))
+                        t_ref2 = float(np.interp(w_end, ref_dists, ref_times))
+                        dt_lap = t_lap2 - t_lap1
+                        dt_ref = t_ref2 - t_ref1
+                        if dt_ref > 0.0 and dt_lap > 0.0:
+                            rate = (dt_lap - dt_ref) / dt_ref
+                        else:
+                            ref_s = float(np.interp(s_mid, ref_dists, [p['speed'] for p in ref_lap_pts]))
+                            rate = (ref_s - p1['speed']) / p1['speed'] if p1['speed'] > 0 else 0.0
+                        col = _interpolate_delta_t_color(rate)
+                else:
+                    col = _get_segment_color(
+                        color_mode, p1['speed'], p1['acc'], p1['throttle'], p1['brake'],
+                        min_speed, max_speed, lap_color
+                    )
                 segment_colors.append(col)
 
-            lc = LineCollection(segments, colors=segment_colors, linewidths=2.5)
+            lc_z = 1 if (color_mode == 'delta_t' and is_ref) else 2
+            lc = LineCollection(segments, colors=segment_colors, linewidths=2.5, zorder=lc_z)
             ax.add_collection(lc)
             # Dummy line for legend entry
-            ax.plot([], [], color=lap_color, linewidth=2.5, label=lap_label)
+            legend_col = '#ffffff' if (color_mode == 'delta_t' and is_ref) else lap_color
+            ax.plot([], [], color=legend_col, linewidth=2.5, label=lap_label)
 
         # Start and end markers
-        ax.plot(lx[0], ly[0], marker='o', color=lap_color, markersize=6)
-        ax.plot(lx[-1], ly[-1], marker='s', color=lap_color, markersize=6)
+        marker_col = '#ffffff' if (color_mode == 'delta_t' and is_ref) else lap_color
+        ax.plot(lx[0], ly[0], marker='o', color=marker_col, markersize=6)
+        ax.plot(lx[-1], ly[-1], marker='s', color=marker_col, markersize=6)
 
     ax.set_aspect('equal', adjustable='datalim')
     ax.grid(True, linestyle='--', alpha=0.3)

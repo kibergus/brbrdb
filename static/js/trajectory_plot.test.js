@@ -195,18 +195,18 @@ describe('TrajectoryPlot.js', () => {
         expect(plot.options.markers[0].label).toBe('Updated Marker');
     });
 
-    it('supports coloring tracks by pedals, accel, and speed', async () => {
-        for (const mode of ['pedals', 'accel', 'speed']) {
+    it('supports coloring tracks by pedals, accel, speed, and delta_t', async () => {
+        for (const mode of ['pedals', 'accel', 'speed', 'delta_t']) {
             global.google.maps.Polyline.mockClear();
             const plot = await TrajectoryPlot.render(mockContainer, {
                 data: mockTelemetryData,
-                laps: [1],
+                laps: [1, 2],
                 color_mode: mode
             });
 
             expect(plot.options.color_mode).toBe(mode);
-            // In segment mode with 5 points, it should create 4 segment polylines
-            expect(global.google.maps.Polyline).toHaveBeenCalledTimes(4);
+            // In segment mode with two 5-point laps, it should create 8 segment polylines (4 per lap)
+            expect(global.google.maps.Polyline).toHaveBeenCalledTimes(8);
         }
     });
 });

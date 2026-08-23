@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { getTurnDiffColor, getRedThreshold, computeGroupBTurnDiffs, renderStatsMinimap } from './stats_plots.js';
+import { getTurnDiffColor, getRedThreshold, computeGroupBTurnDiffs, renderStatsMinimap, renderTurnGapsPlot } from './stats_plots.js';
 import { state } from './state.js';
 
 // Mock Plotly to prevent canvas/layout errors in tests
@@ -155,6 +155,70 @@ describe('stats_plots.js', () => {
             expect(container.innerHTML).toContain('minimap-labels');
             expect(container.innerHTML).toContain('Turn 1');
             expect(container.innerHTML).toContain('Turn 2');
+        });
+    });
+
+    describe('renderTurnGapsPlot dynamic y-axis scaling', () => {
+        let mockContainer;
+        let mockPlotlyReact;
+
+        beforeEach(() => {
+            mockContainer = { id: 'stats-plot-turn-gaps' };
+            mockPlotlyReact = vi.fn();
+            global.Plotly = { react: mockPlotlyReact, Plots: { resize: vi.fn() } };
+            global.document = { getElementById: (id) => id === 'stats-plot-turn-gaps' ? mockContainer : null };
+
+            state.trackData = {
+                turns: [
+                    { name: 'Turn 1', start: 10, end: 30 },
+                    { name: 'Turn 2', start: 60, end: 80 }
+                ]
+            };
+        });
+
+        it('scales y-axis tightly when all gaps are small (< 0.4s)', () => {
+            const laps = [
+                { group: 'A', is_valid: true, turn_times: [10.0, 15.0], lapId: 'l1', lap_num: 1 },
+                { group: 'A', is_valid: true, turn_times: [10.25, 15.15], lapId: 'l2', lap_num: 2 }
+            ];
+
+            renderTurnGapsPlot(laps);
+
+            expect(mockPlotlyReact).toHaveBeenCalled();
+            const layout = mockPlotlyReact.mock.calls[0][2];
+            expect(layout.yaxis.range[1]).toBeLessThanOrEqual(0.5);
+            expect(layout.yaxis.tickvals).toContain(0.3);
+            expect(layout.yaxis.tickvals).not.toContain(2.0);
+        });
+
+        it('caps y-axis at 2.0s when data has larger spread (< 2.0s)', () => {
+            const laps = [
+                { group: 'A', is_valid: true, turn_times: [10.0, 15.0], lapId: 'l1', lap_num: 1 },
+                { group: 'A', is_valid: true, turn_times: [11.8, 16.5], lapId: 'l2', lap_num: 2 }
+            ];
+
+            renderTurnGapsPlot(laps);
+
+            expect(mockPlotlyReact).toHaveBeenCalled();
+            const layout = mockPlotlyReact.mock.calls[0][2];
+            expect(layout.yaxis.range[1]).toBeCloseTo(2.12, 1);
+            expect(layout.yaxis.tickvals).toEqual([0, 0.5, 1.0, 1.5, 2.0]);
+        });
+
+        it('plots outliers (> 2.0s) and keeps 2.0s + outlier range', () => {
+            const laps = [
+                { group: 'A', is_valid: true, turn_times: [10.0, 15.0], lapId: 'l1', lap_num: 1 },
+                { group: 'A', is_valid: true, turn_times: [14.5, 15.1], lapId: 'l2', lap_num: 2 } // Turn 1 gap is 4.5s (outlier)
+            ];
+
+            renderTurnGapsPlot(laps);
+
+            expect(mockPlotlyReact).toHaveBeenCalled();
+            const data = mockPlotlyReact.mock.calls[0][1];
+            const layout = mockPlotlyReact.mock.calls[0][2];
+            expect(data.some(d => d.type === 'scatter')).toBe(true);
+            expect(layout.yaxis.range[1]).toBeCloseTo(2.12, 1);
+            expect(layout.yaxis.tickvals).toEqual([0, 0.5, 1.0, 1.5, 2.0]);
         });
     });
 });

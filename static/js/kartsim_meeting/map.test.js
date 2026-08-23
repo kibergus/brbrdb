@@ -225,22 +225,121 @@ describe('calculateSegmentColor', () => {
         state.lapColorsForId['lap-1'] = LAP_PALETTE[2];
         expect(calculateSegmentColor({}, 'lap-1', 'lap')).toBe(LAP_PALETTE[2]);
     });
+
+    it('calculates colors for delta_t mode: fastest is white, negative rate is green, positive rate is red, zero rate is yellow', () => {
+        const refLap = {
+            lapId: 'lap-ref',
+            lap_time: '1:00.000',
+            points: [
+                { dist: 0, time: 0, speed: 100 },
+                { dist: 100, time: 5, speed: 100 },
+                { dist: 200, time: 10, speed: 100 }
+            ]
+        };
+        const otherLap = {
+            lapId: 'lap-other',
+            lap_time: '1:01.000',
+            points: [
+                { dist: 0, time: 100, speed: 100 },
+                { dist: 100, time: 105, speed: 100 },
+                { dist: 200, time: 111, speed: 80 }
+            ]
+        };
+        state.fastestSelectedLap = refLap;
+        state.fastestSelectedLapId = 'lap-ref';
+        state.fastestGroupALap = refLap;
+        state.fastestGroupALapId = 'lap-ref';
+        state.lapDataLookup = {
+            'lap-ref': refLap,
+            'lap-other': otherLap
+        };
+
+        // Reference lap is white
+        expect(calculateSegmentColor({ dist: 50, time: 2.5, speed: 100 }, 'lap-ref', 'delta_t')).toBe('#ffffff');
+
+        // Other lap at dist 50 has equal pace -> rate = 0 (yellow)
+        expect(calculateSegmentColor({ dist: 50, time: 102.5, speed: 100 }, 'lap-other', 'delta_t')).toBe('rgb(255, 255, 0)');
+
+        // Other lap at dist 150 has slower pace (6s/100m vs 5s/100m -> rate = +0.20 -> reddish)
+        const posColor = calculateSegmentColor({ dist: 150, time: 108, speed: 80 }, 'lap-other', 'delta_t');
+        expect(posColor).toBe('rgb(255, 19, 0)');
+
+        // Lap faster than ref (4s/100m vs 5s/100m -> rate = -0.20 -> greenish)
+        const fastLap = {
+            lapId: 'lap-fast',
+            lap_time: '59.000',
+            points: [
+                { dist: 0, time: 0, speed: 125 },
+                { dist: 100, time: 4, speed: 125 }
+            ]
+        };
+        state.lapDataLookup['lap-fast'] = fastLap;
+        expect(calculateSegmentColor({ dist: 50, time: 2, speed: 125 }, 'lap-fast', 'delta_t')).toBe('rgb(19, 255, 0)');
+    });
+
+    it('uses first lap in group A as reference even if group B has a faster lap', () => {
+        const groupALap = {
+            lapId: 'lap-group-a',
+            lap_time: '1:02.000',
+            points: [
+                { dist: 0, time: 0, speed: 90 },
+                { dist: 100, time: 5, speed: 90 }
+            ]
+        };
+        const fasterGroupBLap = {
+            lapId: 'lap-group-b',
+            lap_time: '1:00.000',
+            points: [
+                { dist: 0, time: 0, speed: 100 },
+                { dist: 100, time: 4.5, speed: 100 }
+            ]
+        };
+        state.fastestGroupALap = groupALap;
+        state.fastestGroupALapId = 'lap-group-a';
+        state.fastestSelectedLap = fasterGroupBLap;
+        state.fastestSelectedLapId = 'lap-group-b';
+        state.lapDataLookup = {
+            'lap-group-a': groupALap,
+            'lap-group-b': fasterGroupBLap
+        };
+
+        // Group A lap is the reference -> rendered in white
+        expect(calculateSegmentColor({ dist: 100, time: 5, speed: 90 }, 'lap-group-a', 'delta_t')).toBe('#ffffff');
+        // Group B lap is faster than reference -> rate < 0 (green / lime green)
+        expect(calculateSegmentColor({ dist: 100, time: 4.5, speed: 100 }, 'lap-group-b', 'delta_t')).toBe('rgb(77, 255, 0)');
+    });
 });
 
 describe('setTrajectoryColorMode', () => {
-    it('updates state.trajectoryColorMode and polyline colors', () => {
-        const poly1 = new google.maps.Polyline({ strokeColor: '#ffffff' });
+    it('updates state.trajectoryColorMode and polyline colors/zIndex', () => {
+        const poly1 = new google.maps.Polyline({ strokeColor: '#ffffff', zIndex: 1 });
+        const poly2 = new google.maps.Polyline({ strokeColor: '#ffffff', zIndex: 1 });
+        poly1.setOptions = function(opts) { Object.assign(this.opts, opts); };
+        poly2.setOptions = function(opts) { Object.assign(this.opts, opts); };
+
+        state.fastestGroupALapId = 's1-1';
+        state.fastestSelectedLapId = 's1-1';
         state.lapPolylines = {
-            's1-1': [poly1]
+            's1-1': [poly1],
+            's1-2': [poly2]
         };
         state.lapDataLookup = {
-            's1-1': { points: [{ speed: 0 }, { speed: 10 }] }
+            's1-1': { points: [{ speed: 0 }, { speed: 10 }] },
+            's1-2': { points: [{ speed: 0 }, { speed: 10 }] }
         };
+        state.fastestGroupALap = state.lapDataLookup['s1-1'];
         state.globalMaxSpeed = 100;
 
         setTrajectoryColorMode('speed');
         expect(state.trajectoryColorMode).toBe('speed');
         expect(poly1.opts.strokeColor).toBe('rgb(40, 20, 180)');
+        expect(poly1.opts.zIndex).toBe(1);
+
+        setTrajectoryColorMode('delta_t');
+        expect(state.trajectoryColorMode).toBe('delta_t');
+        // Fastest lap has zIndex 1, other lap has higher zIndex 5
+        expect(poly1.opts.zIndex).toBe(1);
+        expect(poly2.opts.zIndex).toBe(5);
     });
 });
 

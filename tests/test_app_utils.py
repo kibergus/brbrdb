@@ -461,3 +461,41 @@ def test_augment_championship_data_drop_rounds() -> None:
         drop_rounds_list = driver_a.get('drop_rounds')
         assert isinstance(drop_rounds_list, list)
         assert set(drop_rounds_list) == {'R3', 'R2'}
+
+
+def test_kartsim_class_view_no_hero() -> None:
+    client = app.app.test_client()
+    with patch('plot_handlers.get_hero_names', return_value=[]):
+        resp = client.get('/league/kartsim/iame_waterswift_restricted_cadet_uk')
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert 'Driver Selection Required' in html
+        assert 'Back to Leagues' in html
+
+
+def test_kartsim_class_view_hero_no_sessions() -> None:
+    client = app.app.test_client()
+    with patch('plot_handlers.get_hero_names', return_value=['Test Driver']):
+        with patch('app.db.load', return_value=pd.DataFrame()):
+            resp = client.get('/league/kartsim/iame_waterswift_restricted_cadet_uk')
+            assert resp.status_code == 200
+            html = resp.get_data(as_text=True)
+            assert 'Driver Selection Required' in html
+
+
+def test_kartsim_league_view_no_hero() -> None:
+    client = app.app.test_client()
+    with patch('plot_handlers.get_hero_names', return_value=[]):
+        resp = client.get('/league/kartsim')
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert 'Driver Selection Required' in html
+
+
+def test_kartsim_track_sessions_view_no_hero() -> None:
+    client = app.app.test_client()
+    with patch('plot_handlers.get_hero_names', return_value=[]):
+        resp = client.get('/track_sessions/kartsim/iame_waterswift_restricted_cadet_uk/Llandow/Dry')
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert 'Driver Selection Required' in html

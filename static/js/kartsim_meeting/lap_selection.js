@@ -23,7 +23,7 @@ import { parseLapTime } from '../utils.js';
 import { getTurnTime, animateSlider, getPointAtDistance } from './telemetry.js';
 import { updateTelemetryPlots, updateAccelerationPlot, updateSlipAnglePlot, renderExpandablePlots, updateExpandablePlotsVisibility } from './plots_sync.js';
 import { renderStatsPlots } from './stats_plots.js';
-import { initMap, loadTrackPoints } from './map.js';
+import { initMap, loadTrackPoints, calculateBoundsZoom, updateAllPolylineColors, getReferenceLap } from './map.js';
 import { debouncedUpdateURL } from './url_sync.js';
 
 export function showRightPanelTab(tabId) {
@@ -214,14 +214,29 @@ export function showTab(tabId) {
                 sidePanel.style.display = (tabId === 'stats') ? 'none' : 'flex';
             }
 
+            // Automatically hide/show bottom plots and map controls bar (slider)
+            const expandablePlots = document.getElementById('expandable-plots-block');
+            if (expandablePlots) {
+                expandablePlots.style.display = (tabId === 'stats') ? 'none' : 'flex';
+            }
+            const mapControlsBar = document.querySelector('.map-controls-bar');
+            if (mapControlsBar) {
+                mapControlsBar.style.display = (tabId === 'stats') ? 'none' : 'flex';
+            }
+
             // Update group visibility icons for the active tab
             updateVisibilityIcons();
 
             if (tabId === 'map') {
+                if ((!state.globalTelemetryXRange || state.globalTelemetryXRange.length !== 2) && state.trackData && state.trackData.lap_length) {
+                    state.globalTelemetryXRange = [0, state.trackData.lap_length];
+                }
                 // Update map polylines for the Map tab
                 Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
                 // Refresh bottom plots to respect Map tab's visibility settings
                 renderExpandablePlots();
+                // Ensure right panel chart is refreshed and resized
+                showRightPanelTab(state.activeRightTab || 'cornering');
             }
 
             document.querySelectorAll('.subtab-pane').forEach(p => p.classList.remove('active'));
@@ -235,7 +250,41 @@ export function showTab(tabId) {
                         const ids = ['stats-plot-lap-times', 'stats-plot-turn-gaps', 'stats-plot-apex-speeds'];
                         ids.forEach(id => {
                             const gd = document.getElementById(id);
-                            if (gd) Plotly.Plots.resize(gd);
+                            if (gd && window.Plotly && window.Plotly.Plots) Plotly.Plots.resize(gd);
+                        });
+                    }, 100);
+                } else if (tabId === 'map') {
+                    if (state.map && typeof window !== 'undefined' && window.google && window.google.maps) {
+                        google.maps.event.trigger(state.map, 'resize');
+                    }
+                    if (state.sortMode === 'turn') {
+                        focusMapOnTurn(state.currentTurnIdx);
+                    } else if (!state.hasCustomMapSet && state.trackBounds && !state.defaultMapZoom) {
+                        if (state.map && typeof state.map.fitBounds === 'function') {
+                            state.map.fitBounds(state.trackBounds);
+                            if (window.google && window.google.maps && google.maps.event) {
+                                google.maps.event.addListenerOnce(state.map, 'idle', () => {
+                                    if (state.map && typeof state.map.getZoom === 'function') {
+                                        const z = state.map.getZoom();
+                                        if (z && z > 5) state.defaultMapZoom = z;
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    setTimeout(() => {
+                        const ids = [
+                            'telemetry-chart', 'acceleration-chart', 'slip_angle-chart',
+                            'plot-area-speed', 'plot-area-delta',
+                            'plot-area-control', 'plot-area-steering', 'plot-area-rps',
+                            'plot-area-gforce', 'plot-area-slide', 'plot-area-patch_vel',
+                            'plot-area-force', 'plot-area-tyre_load', 'plot-area-slip_angle'
+                        ];
+                        ids.forEach(id => {
+                            const gd = document.getElementById(id);
+                            if (gd && gd.offsetParent !== null && window.Plotly && window.Plotly.Plots) {
+                                Plotly.Plots.resize(gd);
+                            }
                         });
                     }, 100);
                 }
@@ -260,6 +309,170 @@ export function showTab(tabId) {
     }
 }
 
+export function getTurnBounds(turn) {
+    if (!turn || !state.trackData || !state.trackData.center_line || state.trackData.center_line.length === 0) {
+        return null;
+    }
+    const points = state.trackData.center_line;
+    const lapLength = state.trackData.lap_length || Infinity;
+
+    const startDist = (turn.start !== undefined && turn.start !== null) ? turn.start : 0;
+    const endDist = (turn.end !== undefined && turn.end !== null) ? turn.end : startDist;
+
+    const margin = 15;
+    const s = Math.max(0, startDist - margin);
+    const e = endDist + margin;
+
+    const turnPoints = [];
+
+    if (startDist <= endDist) {
+        points.forEach(p => {
+            if (p.dist >= s && p.dist <= e) {
+                turnPoints.push(p);
+            }
+        });
+    } else {
+        points.forEach(p => {
+            if (p.dist >= s || p.dist <= (e % lapLength)) {
+                turnPoints.push(p);
+            }
+        });
+    }
+
+    const ptStart = getPointAtDistance({ points }, startDist, ['lat', 'lng']);
+    if (ptStart && ptStart.lat !== undefined && ptStart.lng !== undefined) {
+        turnPoints.push(ptStart);
+    }
+    const ptEnd = getPointAtDistance({ points }, endDist, ['lat', 'lng']);
+    if (ptEnd && ptEnd.lat !== undefined && ptEnd.lng !== undefined) {
+        turnPoints.push(ptEnd);
+    }
+
+    if (turnPoints.length === 0) return null;
+
+    if (typeof window !== 'undefined' && window.google && window.google.maps && google.maps.LatLngBounds) {
+        const bounds = new google.maps.LatLngBounds();
+        turnPoints.forEach(p => bounds.extend({ lat: p.lat, lng: p.lng }));
+        return bounds;
+    }
+
+    let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+    turnPoints.forEach(p => {
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lat > maxLat) maxLat = p.lat;
+        if (p.lng < minLng) minLng = p.lng;
+        if (p.lng > maxLng) maxLng = p.lng;
+    });
+    return {
+        getNorthEast: () => ({ lat: () => maxLat, lng: () => maxLng }),
+        getSouthWest: () => ({ lat: () => minLat, lng: () => minLng }),
+        getCenter: () => ({ lat: () => (minLat + maxLat) / 2, lng: () => (minLng + maxLng) / 2 }),
+        isEmpty: () => false
+    };
+}
+
+export function focusMapOnTurn(turnIdx) {
+    if (!state.map || !state.trackData || !state.trackData.turns) return;
+    const turn = state.trackData.turns[turnIdx];
+    if (!turn) return;
+
+    const bounds = getTurnBounds(turn);
+
+    let apexDist = null;
+    if (turn.apex !== undefined && turn.apex !== null) {
+        const apexes = Array.isArray(turn.apex) ? turn.apex : [turn.apex];
+        if (apexes.length > 0 && !isNaN(apexes[0])) {
+            apexDist = apexes.reduce((sum, val) => sum + val, 0) / apexes.length;
+        }
+    } else if (turn.apexes_m && Array.isArray(turn.apexes_m) && turn.apexes_m.length > 0) {
+        apexDist = turn.apexes_m.reduce((sum, val) => sum + val, 0) / turn.apexes_m.length;
+    } else if (turn.start !== undefined && turn.end !== undefined) {
+        apexDist = (turn.start + turn.end) / 2;
+    }
+
+    let centerCoord = null;
+    if (apexDist !== null && state.trackData.center_line) {
+        const points = state.trackData.center_line;
+        if (points && points.length > 0) {
+            const pt = getPointAtDistance({ points: points }, apexDist, ['lat', 'lng']);
+            if (pt && pt.lat !== undefined && pt.lng !== undefined) {
+                centerCoord = { lat: pt.lat, lng: pt.lng };
+            }
+        }
+    }
+
+    const apply = () => {
+        if (!state.map) return;
+        if (bounds && typeof state.map.fitBounds === 'function') {
+            state.map.fitBounds(bounds, 50);
+        } else if (centerCoord) {
+            if (typeof state.map.setCenter === 'function') state.map.setCenter(centerCoord);
+            if (typeof state.map.panTo === 'function') state.map.panTo(centerCoord);
+        }
+    };
+
+    apply();
+    if (typeof setTimeout === 'function') {
+        setTimeout(apply, 50);
+        setTimeout(apply, 150);
+        setTimeout(apply, 300);
+    }
+}
+
+export function selectTurnAndSwitchToMap(turnIdx) {
+    if (turnIdx === undefined || turnIdx === null || isNaN(turnIdx)) return;
+    const turns = state.trackData && state.trackData.turns ? state.trackData.turns : [];
+    if (turnIdx < 0 || turnIdx >= turns.length) return;
+
+    state.currentTurnIdx = turnIdx;
+    const turnSelector = document.getElementById('turn-selector');
+    if (turnSelector) {
+        turnSelector.value = turnIdx;
+    }
+
+    // Collect all valid laps in that turn across all sessions
+    const turnLaps = [];
+    if (state.allSessionsData) {
+        state.allSessionsData.forEach(session => {
+            if (!session.laps) return;
+            session.laps.forEach(lap => {
+                if (lap.is_valid === false) return;
+                const t = getTurnTime(lap, turnIdx);
+                if (t !== null && t !== undefined && t > 0.5 && !isNaN(t)) {
+                    turnLaps.push({
+                        lapId: `${session.session_id}-${lap.lap_num}`,
+                        time: t
+                    });
+                }
+            });
+        });
+    }
+
+    turnLaps.sort((a, b) => a.time - b.time);
+
+    const selectedIds = new Set();
+    if (turnLaps.length > 0) {
+        selectedIds.add(turnLaps[0].lapId); // Fastest lap in turn
+        const medianIdx = Math.floor(turnLaps.length / 2);
+        if (turnLaps[medianIdx]) {
+            selectedIds.add(turnLaps[medianIdx].lapId); // Median lap in turn
+        }
+    }
+
+    if (selectedIds.size > 0) {
+        state.groupASelection = selectedIds;
+        state.groupAVisibleMap = true;
+        state.groupAVisibleStats = true;
+    }
+
+    state.deltaPlotVisible = true;
+    updateExpandablePlotsVisibility();
+
+    state.sortMode = 'turn';
+    showTab('map');
+    setSort('turn');
+}
+
 export function setSort(mode) {
     state.sortMode = mode;
     document.querySelectorAll('.sort-btn').forEach(btn => btn.classList.remove('active'));
@@ -268,7 +481,15 @@ export function setSort(mode) {
     
     const turnSelector = document.getElementById('turn-selector');
     if (turnSelector) {
-        state.currentTurnIdx = parseInt(turnSelector.value || 0);
+        if (turnSelector.value !== "") {
+            state.currentTurnIdx = parseInt(turnSelector.value || 0);
+        } else {
+            const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+            const urlTurn = params ? params.get('turn') : null;
+            if (urlTurn !== null && !isNaN(parseInt(urlTurn))) {
+                state.currentTurnIdx = parseInt(urlTurn);
+            }
+        }
         turnSelector.style.display = (mode === 'turn') ? 'block' : 'none';
         
         if (mode === 'turn' && state.trackData && state.trackData.turns) {
@@ -286,15 +507,22 @@ export function setSort(mode) {
                 const rangeStart = Math.max(0, turn.start - 20);
                 state.globalTelemetryXRange = [rangeStart, rangeEnd];
 
-                if (turn.apex && turn.apex.length > 0) {
-                    const avgApexDist = turn.apex.reduce((sum, val) => sum + val, 0) / turn.apex.length;
-                    const points = state.trackData.center_line;
-                    if (points && points.length > 0) {
-                        const pt = getPointAtDistance({ points: points }, avgApexDist, ['lat', 'lng']);
-                        if (pt && pt.lat !== undefined && pt.lng !== undefined && state.map) {
-                            state.map.panTo({ lat: pt.lat, lng: pt.lng });
-                        }
+                // Move cursor on bottom slider to the start of that turn
+                const turnStart = (turn.start !== undefined && turn.start !== null) ? turn.start : 0;
+                state.playbackDistance = turnStart;
+                state.currentTargetDist = turnStart;
+                const slider = document.getElementById('distance-slider');
+                const display = document.getElementById('distance-display');
+                if (slider) slider.value = turnStart;
+                if (display) display.textContent = Math.round(turnStart) + 'm';
+                import('./map.js').then(m => {
+                    if (m && typeof m.updateDistanceMarker === 'function') {
+                        m.updateDistanceMarker(turnStart);
                     }
+                });
+
+                if (state.map) {
+                    focusMapOnTurn(state.currentTurnIdx);
                 }
             }
         } else if (mode === 'time' && state.trackData) {
@@ -422,9 +650,9 @@ export function toggleLap(lapId, group) {
         selection.delete(lapId);
     }
 
+    updateFastestSelectedLap();
     updateLapVisibility(lapId);
     updateSelectAllCheckboxes();
-    updateFastestSelectedLap();
     updateTelemetryPlots(state.currentTargetDist);
     renderExpandablePlots();
     renderStatsPlots();
@@ -446,11 +674,17 @@ export function highlightLap(lapId, active) {
 
     // Map polyline highlighting and dimming
     const lapIds = Object.keys(state.lapPolylines);
+    const refLap = getReferenceLap();
+    const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
+
     lapIds.forEach(id => {
         const polylines = state.lapPolylines[id];
         if (!polylines) return;
 
         const isCurrentLap = (id === lapId);
+        const isRefLap = (id === refLapId);
+        const defaultZIndex = (state.trajectoryColorMode === 'delta_t') ? (isRefLap ? 1 : 10) : 1;
+
         polylines.forEach(p => {
             const isHitArea = p.strokeOpacity === 0;
             if (!isHitArea) {
@@ -469,11 +703,11 @@ export function highlightLap(lapId, active) {
                         });
                     }
                 } else {
-                    // Reset to default style
+                    // Reset to default style preserving zIndex hierarchy
                     p.setOptions({
                         strokeWeight: 4,
                         strokeOpacity: 1.0,
-                        zIndex: 1
+                        zIndex: defaultZIndex
                     });
                 }
             }
@@ -615,6 +849,7 @@ export function clearSelection(group) {
     const selection = group === 'A' ? state.groupASelection : state.groupBSelection;
     selection.clear();
     
+    updateFastestSelectedLap();
     Object.keys(state.lapPolylines).forEach(lapId => {
         updateLapVisibility(lapId);
     });
@@ -625,7 +860,6 @@ export function clearSelection(group) {
         }
     });
     
-    updateFastestSelectedLap();
     updateTelemetryPlots(state.currentTargetDist);
     renderExpandablePlots();
     renderStatsPlots();
@@ -655,6 +889,7 @@ export function selectLapsByCriteria(group, type, value) {
         selection.add(sortedLaps[i].lapId);
     }
 
+    updateFastestSelectedLap();
     Object.keys(state.lapPolylines).forEach(lapId => {
         updateLapVisibility(lapId);
     });
@@ -666,7 +901,6 @@ export function selectLapsByCriteria(group, type, value) {
         }
     });
 
-    updateFastestSelectedLap();
     updateTelemetryPlots(state.currentTargetDist);
     renderExpandablePlots();
     renderStatsPlots();
@@ -763,7 +997,18 @@ export function toggleAllLaps(group) {
 export function updateLapVisibility(lapId) {
     const isVisible = (state.groupASelection.has(lapId) && state.groupAVisibleMap) || (state.groupBSelection.has(lapId) && state.groupBVisibleMap);
     if (state.lapPolylines[lapId]) {
-        state.lapPolylines[lapId].forEach(p => p.setMap(isVisible ? state.map : null));
+        const refLap = getReferenceLap();
+        const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
+        const isRefLap = (lapId === refLapId);
+        const zIndex = (state.trajectoryColorMode === 'delta_t') ? (isRefLap ? 1 : 10) : 1;
+
+        state.lapPolylines[lapId].forEach(p => {
+            const isHitArea = p.strokeOpacity === 0;
+            if (!isHitArea && typeof p.setOptions === 'function') {
+                p.setOptions({ zIndex: zIndex });
+            }
+            p.setMap(isVisible ? state.map : null);
+        });
     }
 }
 
@@ -774,6 +1019,7 @@ export function toggleGroupVisibility(group) {
     updateVisibilityIcons();
 
     if (state.activeTab === 'map') {
+        updateFastestSelectedLap();
         Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
         renderExpandablePlots();
     } else if (state.activeTab === 'stats') {
@@ -815,7 +1061,7 @@ export function updateFastestSelectedLap() {
     const turnIdx = parseInt(turnSelector && turnSelector.value !== "" ? turnSelector.value : state.currentTurnIdx || 0);
 
     selectedIds.forEach(id => {
-        const lap = state.lapDataLookup[id];
+        const lap = state.lapDataLookup ? state.lapDataLookup[id] : null;
         if (lap) {
             let t;
             if (state.sortMode === 'turn') {
@@ -824,7 +1070,7 @@ export function updateFastestSelectedLap() {
                 t = parseLapTime(lap.lap_time);
             }
             
-            if (t !== null) {
+            if (t !== null && !isNaN(t)) {
                 if (t < minTime) {
                     minTime = t;
                     fastest = lap;
@@ -838,10 +1084,29 @@ export function updateFastestSelectedLap() {
             }
         }
     });
+
+    // Pick the first lap in Group A based on the current sorting criteria
+    let firstA = null;
+    let firstIdA = null;
+    if (typeof getSortedLaps === 'function' && state.allSessionsData && state.allSessionsData.length > 0) {
+        const sorted = getSortedLaps();
+        for (const l of sorted) {
+            if (state.groupASelection && state.groupASelection.has(l.lapId)) {
+                firstIdA = l.lapId;
+                firstA = state.lapDataLookup ? (state.lapDataLookup[l.lapId] || l) : l;
+                break;
+            }
+        }
+    }
+
+    state.fastestGroupALap = firstA || fastestA;
+    state.fastestGroupALapId = firstIdA || fastestIdA;
     state.fastestSelectedLap = fastest;
     state.fastestSelectedLapId = fastestId;
-    state.fastestGroupALap = fastestA;
-    state.fastestGroupALapId = fastestIdA;
+
+    if (state.trajectoryColorMode === 'delta_t') {
+        updateAllPolylineColors();
+    }
 }
 
 export function togglePlay() {

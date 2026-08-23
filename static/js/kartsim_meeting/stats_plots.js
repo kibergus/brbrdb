@@ -18,6 +18,7 @@
 import { state } from './state.js';
 import { formatLapTime, parseLapTime } from '../utils.js';
 import { getSpeedAtDistance, getMinSpeedInRange } from './telemetry.js';
+import { selectTurnAndSwitchToMap } from './lap_selection.js';
 import {
   getRedThreshold,
   getTurnDiffColor,
@@ -25,9 +26,76 @@ import {
   generateMinimapSvg
 } from '../stats_plots.js';
 
-export { getRedThreshold, getTurnDiffColor, computeGroupBTurnDiffs };
+export { getRedThreshold, getTurnDiffColor, computeGroupBTurnDiffs, renderTurnGapsPlot };
 
 let currentHighlightTurnName = null;
+
+function attachTurnClickHandlers(gd) {
+  if (!gd || gd._turnClickBound) return;
+  gd._turnClickBound = true;
+
+  if (typeof gd.addEventListener === 'function') {
+    gd.addEventListener('click', e => {
+      const turns = state.trackData && state.trackData.turns ? state.trackData.turns : [];
+      if (turns.length === 0) return;
+
+      const target = e.target;
+      let foundIdx = -1;
+
+      // 1. Direct SVG target check on ticks/labels
+      if (target && typeof target.closest === 'function') {
+        const tickEl = target.closest('.xtick, .xtick text, .xtick tspan, .xaxislayer-above text, .xaxislayer-above g');
+        if (tickEl) {
+          const text = tickEl.textContent || '';
+          for (let i = 0; i < turns.length; i++) {
+            const name = turns[i].name || `Turn ${i + 1}`;
+            if (text.startsWith(name) || text.includes(name)) {
+              foundIdx = i;
+              break;
+            }
+          }
+
+          if (foundIdx === -1) {
+            const xtick = target.closest('.xtick');
+            if (xtick && xtick.parentElement) {
+              const allTicks = Array.from(xtick.parentElement.querySelectorAll('.xtick'));
+              const tickIdx = allTicks.indexOf(xtick);
+              if (tickIdx >= 0 && tickIdx < turns.length) {
+                foundIdx = tickIdx;
+              }
+            }
+          }
+        }
+      }
+
+      // 2. Coordinate-based fallback for click anywhere in the x-axis label zone
+      if (foundIdx === -1 && typeof gd.getBoundingClientRect === 'function') {
+        const rect = gd.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const clickY = e.clientY - rect.top;
+
+        const fullLayout = gd._fullLayout;
+        if (fullLayout && fullLayout.xaxis && fullLayout.yaxis) {
+          const xOffset = fullLayout.xaxis._offset !== undefined ? fullLayout.xaxis._offset : 60;
+          const xLength = fullLayout.xaxis._length !== undefined ? fullLayout.xaxis._length : (rect.width - 100);
+          const yBottom = (fullLayout.yaxis._offset !== undefined ? fullLayout.yaxis._offset : 38) +
+                          (fullLayout.yaxis._length !== undefined ? fullLayout.yaxis._length : (rect.height - 130));
+
+          if (clickY >= yBottom - 5 && clickX >= xOffset && clickX <= xOffset + xLength) {
+            const idx = Math.floor(((clickX - xOffset) / xLength) * turns.length);
+            if (idx >= 0 && idx < turns.length) {
+              foundIdx = idx;
+            }
+          }
+        }
+      }
+
+      if (foundIdx !== -1) {
+        selectTurnAndSwitchToMap(foundIdx);
+      }
+    });
+  }
+}
 
 /**
  * Main entry point to refresh all stats plots based on current selection and visibility.
@@ -160,7 +228,7 @@ function renderSummaryStats(laps) {
 }
 
 /**
- * Renders a horizontal violin plot of lap times, split by group.
+ * Renders a horizontal violin plot showing the distribution of lap times per session.
  */
 function renderLapTimesPlot(laps) {
   const gd = document.getElementById('stats-plot-lap-times');
@@ -175,11 +243,24 @@ function renderLapTimesPlot(laps) {
     const groupLaps = laps.filter(l => l.group === group && l.is_valid !== false);
     if (groupLaps.length === 0) return;
 
-    const times = groupLaps.map(l => parseLapTime(l.lap_time));
-    const labels = groupLaps.map(l => `Lap ${l.lap_num} (${l.session_name})`);
+    const times = [];
+    const labels = [];
+    const validGroupLaps = [];
+    groupLaps.forEach(l => {
+      const raw = l.lap_time !== undefined ? l.lap_time : l.time;
+      const t = parseLapTime(raw);
+      if (t !== null && !isNaN(t) && t > 0) {
+        times.push(t);
+        labels.push(`Lap ${l.lap_num} (${l.session_name || 'Session'})<br>Time: ${formatLapTime(t)}`);
+        validGroupLaps.push(l);
+      }
+    });
+
+    if (times.length === 0) return;
+
     const color = group === 'A' ? state.baseColor : state.highlightColor;
 
-    groupLaps.forEach((lap, pointIdx) => {
+    validGroupLaps.forEach((lap, pointIdx) => {
       const lapId = lap.lapId;
       if (!state.statsPlotIndices.lapTimes[lapId]) {
         state.statsPlotIndices.lapTimes[lapId] = [];
@@ -189,6 +270,7 @@ function renderLapTimesPlot(laps) {
 
     data.push({
       type: 'violin',
+      x: new Array(times.length).fill(group),
       y: times,
       name: `Group ${group}`,
       box: { visible: false },
@@ -196,11 +278,12 @@ function renderLapTimesPlot(laps) {
       fillcolor: color + '44',
       meanline: { visible: true },
       points: 'all',
-      jitter: 0.5,
+      jitter: 0.4,
       pointpos: 0,
       text: labels,
       hoverinfo: 'y+text',
       orientation: 'v',
+      spanmode: 'hard',
       showlegend: false
     });
     curveIdx++;
@@ -208,21 +291,29 @@ function renderLapTimesPlot(laps) {
 
   const layout = {
     autosize: true,
+    dragmode: false,
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(0,0,0,0)',
     font: { color: '#e2e8f0', family: 'Inter, sans-serif' },
     margin: { l: 60, r: 20, t: 10, b: 40 },
-    xaxis: { title: '', gridcolor: 'rgba(255,255,255,0.1)', showticklabels: true },
+    xaxis: {
+      title: '',
+      gridcolor: 'rgba(255,255,255,0.1)',
+      showticklabels: true,
+      categoryorder: 'array',
+      categoryarray: ['A', 'B'],
+      fixedrange: true
+    },
     yaxis: {
       title: 'Lap Time (s)',
       gridcolor: 'rgba(255,255,255,0.1)',
       zerolinecolor: 'rgba(255,255,255,0.1)',
-      tickformat: '.3f'
+      tickformat: '.3f',
+      fixedrange: true
     },
     showlegend: false,
     violingap: 0.3,
     violingroupgap: 0,
-    violinmode: 'group',
     hovermode: 'closest'
   };
 
@@ -242,7 +333,6 @@ function renderTurnGapsPlot(laps) {
   const turns = state.trackData.turns;
   const turnNames = turns.map((t, i) => t.name || `Turn ${i + 1}`);
 
-  // Find fastest time for each turn among all selected valid laps
   const turnFastestTimes = new Array(turns.length).fill(Infinity);
   laps.forEach(lap => {
     if (lap.is_valid === false || !lap.turn_times) return;
@@ -254,13 +344,11 @@ function renderTurnGapsPlot(laps) {
   });
 
   const groupBDiffs = computeGroupBTurnDiffs(laps, turns.length);
-  const maxGroupBDiff = groupBDiffs.length > 0 ? Math.max(...groupBDiffs) : 0;
-  const redThreshold = getRedThreshold(maxGroupBDiff);
+  const redThreshold = getRedThreshold(Math.max(...groupBDiffs, 0));
 
   const MAX_GAP = 2.0;
   const OUTLIER_Y = 2.06;
 
-  // Pre-calculate average in-range gaps for Group A and B per turn to format x-axis labels
   const turnLabels = new Array(turns.length);
   turns.forEach((_, turnIdx) => {
     const fastest = turnFastestTimes[turnIdx];
@@ -296,6 +384,9 @@ function renderTurnGapsPlot(laps) {
 
   const data = [];
   let curveIdx = 0;
+  let maxObservedGap = 0;
+  let hasOutliers = false;
+
   ['A', 'B'].forEach(group => {
     const groupLaps = laps.filter(l => l.group === group && l.is_valid !== false);
     if (groupLaps.length === 0) return;
@@ -330,7 +421,11 @@ function renderTurnGapsPlot(laps) {
             inRangeY.push(gap);
             inRangeText.push(hoverLabel);
             state.statsPlotIndices.turnGaps[lapId].push({ curveNumber: curveIdx, pointNumber: ptIdx });
+            if (gap > maxObservedGap) {
+              maxObservedGap = gap;
+            }
           } else {
+            hasOutliers = true;
             const ptIdx = outlierX.length;
             outlierX.push(turnNames[turnIdx]);
             outlierY.push(OUTLIER_Y);
@@ -379,21 +474,57 @@ function renderTurnGapsPlot(laps) {
     }
   });
 
+  let yMax = 2.0;
+  let yMin = -0.05;
+  let yRangeTop = 2.12;
+  let tickvals = [0, 0.5, 1.0, 1.5, 2.0];
+
+  if (!hasOutliers && maxObservedGap > 0) {
+    let step = 0.5;
+    if (maxObservedGap <= 0.15) step = 0.05;
+    else if (maxObservedGap <= 0.4) step = 0.1;
+    else if (maxObservedGap <= 1.0) step = 0.2;
+    else step = 0.5;
+
+    yMax = Math.min(2.0, Math.ceil(maxObservedGap / step) * step);
+    yMin = -0.03 * yMax;
+    yRangeTop = yMax + (step * 0.25);
+
+    tickvals = [];
+    for (let v = 0; v <= yMax + 0.0001; v += step) {
+      tickvals.push(parseFloat(v.toFixed(3)));
+    }
+  }
+
+  const ticktext = tickvals.map((v, i) => (i === tickvals.length - 1 ? `${v.toFixed(3)}s` : v.toFixed(3)));
+
   const layout = {
     autosize: true,
+    dragmode: false,
+    title: {
+      text: '<b>Turn Performance Gaps</b>',
+      font: { color: '#cbd5e1', size: 19, family: 'Inter, sans-serif' },
+      x: 0.02,
+      xref: 'paper',
+      y: 0.98,
+      yref: 'paper',
+      xanchor: 'left',
+      yanchor: 'top'
+    },
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(0,0,0,0)',
     font: { color: '#e2e8f0', family: 'Inter, sans-serif' },
-    margin: { l: 60, r: 40, t: 10, b: 95 },
+    margin: { l: 60, r: 40, t: 38, b: 95 },
     yaxis: {
       title: 'Gap from Fastest (s)',
-      range: [-0.05, 2.12],
+      range: [yMin, yRangeTop],
       autorange: false,
       gridcolor: 'rgba(255,255,255,0.1)',
       zerolinecolor: 'rgba(255,255,255,0.2)',
-      tickvals: [0, 0.5, 1.0, 1.5, 2.0],
-      ticktext: ['0.000', '0.500', '1.000', '1.500', '2.000s'],
-      tickformat: '.3f'
+      tickvals: tickvals,
+      ticktext: ticktext,
+      tickformat: '.3f',
+      fixedrange: true
     },
     xaxis: {
       title: '',
@@ -401,7 +532,8 @@ function renderTurnGapsPlot(laps) {
       tickangle: 0,
       tickmode: 'array',
       tickvals: turnNames,
-      ticktext: turnLabels
+      ticktext: turnLabels,
+      fixedrange: true
     },
     showlegend: false,
     legend: { orientation: 'h', y: -0.15, x: 0.5, xanchor: 'center', yanchor: 'top' },
@@ -410,6 +542,7 @@ function renderTurnGapsPlot(laps) {
   };
 
   Plotly.react(gd, data, layout, { responsive: true, displayModeBar: false });
+  attachTurnClickHandlers(gd);
 }
 
 /**
@@ -488,22 +621,35 @@ function renderApexSpeedsPlot(laps) {
 
   const layout = {
     autosize: true,
+    dragmode: false,
+    title: {
+      text: '<b>Minimum Corner Speeds</b>',
+      font: { color: '#cbd5e1', size: 19, family: 'Inter, sans-serif' },
+      x: 0.02,
+      xref: 'paper',
+      y: 0.98,
+      yref: 'paper',
+      xanchor: 'left',
+      yanchor: 'top'
+    },
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(0,0,0,0)',
     font: { color: '#e2e8f0', family: 'Inter, sans-serif' },
-    margin: { l: 60, r: 20, t: 10, b: 40 },
+    margin: { l: 60, r: 20, t: 38, b: 40 },
     yaxis: {
       title: 'Min Speed (km/h)',
       gridcolor: 'rgba(255,255,255,0.1)',
-      zerolinecolor: 'rgba(255,255,255,0.1)'
+      zerolinecolor: 'rgba(255,255,255,0.1)',
+      fixedrange: true
     },
-    xaxis: { title: '', gridcolor: 'rgba(255,255,255,0.1)' },
+    xaxis: { title: '', gridcolor: 'rgba(255,255,255,0.1)', fixedrange: true },
     showlegend: false,
     violinmode: 'group',
     hovermode: 'closest'
   };
 
   Plotly.react(gd, data, layout, { responsive: true, displayModeBar: false });
+  attachTurnClickHandlers(gd);
 }
 
 /**
@@ -525,8 +671,6 @@ export function renderStatsMinimap(laps) {
   const groupBDiffs = computeGroupBTurnDiffs(laps, numTurns);
 
   container.innerHTML = generateMinimapSvg(state.trackData, {
-    title: 'Track Minimap',
-    turn_diffs: groupBDiffs,
-    max_height: '420px'
+    turn_diffs: groupBDiffs
   });
 }

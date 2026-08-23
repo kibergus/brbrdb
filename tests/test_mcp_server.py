@@ -172,9 +172,12 @@ def test_get_pace_summary() -> None:
 
 
 def test_get_trajectory_plot() -> None:
-    for mode in ["lap", "pedals", "accel", "speed"]:
+    for mode in ["lap", "pedals", "accel", "speed", "delta_t"]:
         res = server.get_trajectory_plot(
-            laps=[("2026-07-12", "Lydd", "18_54_practice", 23)],
+            laps=[
+                ("2026-07-12", "Lydd", "18_54_practice", 23),
+                ("2026-07-12", "Lydd", "18_54_practice", 15)
+            ],
             color_mode=mode
         )
         assert isinstance(res, Image)

@@ -367,13 +367,13 @@ export function generateMinimapSvg(trackData, options) {
     }
   });
 
-  var maxHeight = options.max_height || '380px';
-  var titleHtml = options.title ? '<div style="font-size: 0.85rem; font-weight: 700; color: #94a3b8; margin-bottom: 0.4rem; text-align: center;">' + options.title + '</div>' : '';
+  var maxHeightStyle = options.max_height ? 'max-height: ' + options.max_height + ';' : '';
+  var titleHtml = options.title ? '<div style="flex-shrink: 0; font-size: 0.85rem; font-weight: 700; color: #94a3b8; margin-bottom: 0.4rem; text-align: center;">' + options.title + '</div>' : '';
 
   var legendHtml = '';
   if (turnDiffs && options.show_legend !== false) {
     legendHtml =
-      '<div style="display: flex; align-items: center; justify-content: center; gap: 0.6rem; font-size: 0.75rem; color: #94a3b8; margin-top: 0.4rem;">' +
+      '<div style="flex-shrink: 0; display: flex; align-items: center; justify-content: center; gap: 0.6rem; font-size: 0.75rem; color: #94a3b8; margin-top: 0.4rem;">' +
         '<span>0s (min)</span>' +
         '<div style="width: 80px; height: 6px; border-radius: 3px; background: linear-gradient(to right, #22c55e, #eab308, #ef4444);"></div>' +
         '<span>' + redThreshold + 's+ (mean)</span>' +
@@ -382,8 +382,8 @@ export function generateMinimapSvg(trackData, options) {
 
   return (
     titleHtml +
-    '<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">' +
-      '<svg viewBox="0 0 ' + viewBoxW + ' ' + viewBoxH + '" style="width: 100%; height: 100%; max-height: ' + maxHeight + ';">' +
+    '<div style="flex: 1; min-height: 0; width: 100%; display: flex; align-items: center; justify-content: center;">' +
+      '<svg viewBox="0 0 ' + viewBoxW + ' ' + viewBoxH + '" style="width: 100%; height: 100%; ' + maxHeightStyle + '">' +
         '<defs>' +
           '<filter id="glow" x="-20%" y="-20%" width="140%" height="140%">' +
             '<feGaussianBlur stdDeviation="4" result="blur" />' +

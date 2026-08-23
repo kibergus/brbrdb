@@ -19,7 +19,7 @@
  * Main entry point for the kartsim meeting page.
  */
 import { state } from './state.js';
-import { showTab, showRightPanelTab, showStatsSubTab, setSort, toggleAllLaps, toggleGroupVisibility, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, onSessionChange } from './lap_selection.js';
+import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, onSessionChange } from './lap_selection.js';
 import { setMapType, setTrajectoryColorMode, toggleTrajDropdown, updateDistanceMarker } from './map.js';
 import { stepDistance } from './telemetry.js';
 import { initExpandablePlots } from './plots_sync.js';
@@ -30,6 +30,7 @@ window.showTab = showTab;
 window.showRightPanelTab = showRightPanelTab;
 window.showStatsSubTab = showStatsSubTab;
 window.setSort = setSort;
+window.selectTurnAndSwitchToMap = selectTurnAndSwitchToMap;
 window.onSessionChange = onSessionChange;
 
 window.toggleAllLaps = toggleAllLaps;
@@ -93,7 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initialize
     const params = new URLSearchParams(window.location.search);
-    const initialTab = params.get('tab') || 'map';
+    const initialTab = params.get('tab') || 'stats';
     const sidParam = params.get('session_id') || (window.KART_CONFIG && window.KART_CONFIG.sessionId);
     if (sidParam) {
         state.selectedSessionId = sidParam;
@@ -169,7 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Restore trajectory color mode from URL
     const tcol = params.get('tcol');
-    if (tcol && ['pedals', 'speed', 'accel', 'gforce_lon', 'gforce_lat', 'lap'].includes(tcol)) {
+    if (tcol && ['pedals', 'speed', 'accel', 'gforce_lon', 'gforce_lat', 'lap', 'delta_t'].includes(tcol)) {
         setTrajectoryColorMode(tcol);
     }
 

@@ -19,7 +19,7 @@
  * Google Maps integration and marker/polyline management.
  */
 import { state } from './state.js';
-import { findSegmentIndex, precalculateLapData, fetchTelemetryChannel } from './telemetry.js';
+import { findSegmentIndex, precalculateLapData, fetchTelemetryChannel, getPointAtDistance, getTurnTime } from './telemetry.js';
 import { parseLapTime } from '../utils.js';
 import { debouncedUpdateURL } from './url_sync.js';
 
@@ -42,6 +42,72 @@ export const LAP_PALETTE = [
     '#00ff99'  // Lap 16: Mint Green
 ];
 
+export function calculateBoundsZoom(bounds, mapDim) {
+    if (!bounds) return 17.5;
+    try {
+        let ne = null;
+        let sw = null;
+        if (typeof bounds.getNorthEast === 'function') {
+            ne = bounds.getNorthEast();
+            sw = bounds.getSouthWest();
+        } else if (bounds.ne && bounds.sw) {
+            ne = bounds.ne;
+            sw = bounds.sw;
+        }
+        if (!ne || !sw) return 17.5;
+
+        let width = (mapDim && mapDim.width > 50) ? mapDim.width : 0;
+        let height = (mapDim && mapDim.height > 50) ? mapDim.height : 0;
+
+        if (!width || !height) {
+            if (typeof window !== 'undefined') {
+                const mapEl = document.getElementById('map');
+                if (mapEl && mapEl.clientWidth > 50 && mapEl.clientHeight > 50) {
+                    width = mapEl.clientWidth;
+                    height = mapEl.clientHeight;
+                } else {
+                    width = Math.max(400, (window.innerWidth || 1200) - 450);
+                    height = Math.max(300, (window.innerHeight || 800) - 250);
+                }
+            } else {
+                width = 1000;
+                height = 700;
+            }
+        }
+
+        const paddedWidth = Math.max(100, width - 60);
+        const paddedHeight = Math.max(100, height - 60);
+
+        const latNe = typeof ne.lat === 'function' ? ne.lat() : ne.lat;
+        const latSw = typeof sw.lat === 'function' ? sw.lat() : sw.lat;
+        const lngNe = typeof ne.lng === 'function' ? ne.lng() : ne.lng;
+        const lngSw = typeof sw.lng === 'function' ? sw.lng() : sw.lng;
+
+        const latRad = (lat) => {
+            const sin = Math.sin(lat * Math.PI / 180);
+            return Math.log((1 + sin) / (1 - sin)) / 2;
+        };
+
+        const latFraction = Math.abs(latRad(latNe) - latRad(latSw)) / (2 * Math.PI);
+        let lngDiff = lngNe - lngSw;
+        if (lngDiff < 0) lngDiff += 360;
+        const lngFraction = lngDiff / 360;
+
+        const zoom = (mapPx, worldPx, fraction) => {
+            if (fraction <= 0) return 17.5;
+            return Math.log(mapPx / worldPx / fraction) / Math.LN2;
+        };
+
+        const latZoom = zoom(paddedHeight, 256, Math.max(1e-7, latFraction));
+        const lngZoom = zoom(paddedWidth, 256, Math.max(1e-7, lngFraction));
+
+        const result = Math.min(latZoom, lngZoom);
+        return (isFinite(result) && result > 5) ? Math.round(result * 10) / 10 : 17.5;
+    } catch (e) {
+        return 17.5;
+    }
+}
+
 export function interpolateMultiStopColor(u, stops) {
     const val = Math.max(0, Math.min(1, u));
     for (let i = 0; i < stops.length - 1; i++) {
@@ -59,10 +125,102 @@ export function interpolateMultiStopColor(u, stops) {
     return `rgb(${lastColor[0]}, ${lastColor[1]}, ${lastColor[2]})`;
 }
 
-export function calculateSegmentColor(p1, lapId, mode, maxSpeed = 100) {
+export function getReferenceLap() {
+    if (state.fastestGroupALap) return state.fastestGroupALap;
+    if (state.fastestSelectedLap) return state.fastestSelectedLap;
+    if (state.lapDataLookup) {
+        let best = null;
+        let minTime = Infinity;
+        const turnSelector = typeof document !== 'undefined' ? document.getElementById('turn-selector') : null;
+        const turnIdx = parseInt(turnSelector && turnSelector.value !== "" ? turnSelector.value : state.currentTurnIdx || 0);
+
+        for (const id in state.lapDataLookup) {
+            const lap = state.lapDataLookup[id];
+            if (!lap || !lap.points || lap.points.length === 0 || lap.is_valid === false) continue;
+            let t;
+            if (state.sortMode === 'turn') {
+                t = getTurnTime(lap, turnIdx);
+            } else {
+                t = parseLapTime(lap.lap_time);
+            }
+            if (t !== null && !isNaN(t) && t < minTime) {
+                minTime = t;
+                best = lap;
+            }
+        }
+        return best;
+    }
+    return null;
+}
+
+export function calculateSegmentColor(p1, lapId, mode, maxSpeed = 100, p2 = null) {
     if (!p1) return '#ffffff';
 
     const currentMode = mode || state.trajectoryColorMode || 'pedals';
+
+    if (currentMode === 'delta_t') {
+        const refLap = getReferenceLap();
+        const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
+
+        // Fast track is white
+        if (!refLap || !refLap.points || refLap.points.length === 0 || lapId === refLapId) {
+            return '#ffffff';
+        }
+
+        const currentLap = state.lapDataLookup ? state.lapDataLookup[lapId] : null;
+        if (!currentLap || !currentLap.points || currentLap.points.length === 0) {
+            return '#ffffff';
+        }
+
+        const s1 = p1.dist !== undefined && p1.dist !== null ? p1.dist : 0;
+        const s2 = (p2 && p2.dist !== undefined && p2.dist !== null && p2.dist > s1) ? p2.dist : (s1 + 1);
+        const sMid = (s1 + s2) / 2;
+
+        // Centered distance window (5.0m half-width = 10.0m total window, approx 0.5s at race speed)
+        // Symmetric around sMid for zero phase lag and smooth, readable derivative.
+        const halfWindow = 5.0;
+        const wStart = Math.max(0, sMid - halfWindow);
+        const wEnd = sMid + halfWindow;
+
+        const pLap1 = getPointAtDistance(currentLap, wStart, 'time');
+        const pLap2 = getPointAtDistance(currentLap, wEnd, 'time');
+        const pRef1 = getPointAtDistance(refLap, wStart, 'time');
+        const pRef2 = getPointAtDistance(refLap, wEnd, 'time');
+
+        let rate = 0;
+        if (pLap1 && pLap2 && pRef1 && pRef2) {
+            const dtLap = pLap2.time - pLap1.time;
+            const dtRef = pRef2.time - pRef1.time;
+            if (dtLap > 0 && dtRef > 0) {
+                // Exact derivative matching the slope of the delta T plot over the centered window:
+                rate = (dtLap - dtRef) / dtRef;
+            }
+        } else {
+            const refSpeed = getPointAtDistance(refLap, sMid, 'speed')?.speed;
+            const lapSpeed = (p1.speed !== undefined && p1.speed !== null) ? p1.speed : getPointAtDistance(currentLap, sMid, 'speed')?.speed;
+            if (lapSpeed && lapSpeed > 0 && refSpeed && refSpeed > 0) {
+                rate = (refSpeed - lapSpeed) / lapSpeed;
+            }
+        }
+
+        // Color mapping:
+        // rate < 0 (gaining time / faster than fast lap): Green
+        // rate == 0 (same pace): Yellow
+        // rate > 0 (losing time / slower than fast lap): Red
+        const DELTA_T_STOPS = [
+            [0.0, [0, 255, 0]],     // -maxRate (gaining time): Pure Green
+            [0.5, [255, 255, 0]],   //  0.0 (equal pace):        Pure Yellow
+            [1.0, [255, 0, 0]]      // +maxRate (losing time):   Pure Red
+        ];
+
+        const maxRate = 0.25; // 0.25s gained/lost per second of fast lap
+        const s0 = 0.025;      // Sensitivity threshold for asinh scale
+        const asinhMax = Math.asinh(maxRate / s0);
+        const normalizedRate = Math.max(-1, Math.min(1, Math.asinh(rate / s0) / asinhMax));
+        const u = 0.5 + 0.5 * normalizedRate;
+
+        return interpolateMultiStopColor(u, DELTA_T_STOPS);
+    }
 
     if (currentMode === 'speed') {
         const v = p1.speed || 0;
@@ -159,6 +317,35 @@ export function toggleTrajDropdown(event) {
     }
 }
 
+export function updateAllPolylineColors(mode) {
+    const currentMode = mode || state.trajectoryColorMode || 'pedals';
+    const maxSpeed = state.globalMaxSpeed || 100;
+
+    if (!state.lapPolylines) return;
+
+    const refLap = getReferenceLap();
+    const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
+
+    Object.keys(state.lapPolylines).forEach(lapId => {
+        const polylines = state.lapPolylines[lapId];
+        const lap = state.lapDataLookup ? state.lapDataLookup[lapId] : null;
+        if (!polylines || !lap || !lap.points) return;
+
+        const isRefLap = (lapId === refLapId);
+        const zIndex = (currentMode === 'delta_t') ? (isRefLap ? 1 : 5) : 1;
+
+        const numSegments = lap.points.length - 1;
+        for (let i = 0; i < numSegments; i++) {
+            const segment = polylines[i];
+            if (segment && typeof segment.setOptions === 'function') {
+                const color = calculateSegmentColor(lap.points[i], lapId, currentMode, maxSpeed, lap.points[i + 1]);
+                segment.setOptions({ strokeColor: color, zIndex: zIndex });
+                segment.originalColor = color;
+            }
+        }
+    });
+}
+
 export function setTrajectoryColorMode(mode) {
     state.trajectoryColorMode = mode;
 
@@ -168,7 +355,8 @@ export function setTrajectoryColorMode(mode) {
         accel: 'Accel',
         gforce_lon: 'G Lon',
         gforce_lat: 'G Lat',
-        lap: 'Per Lap'
+        lap: 'Per Lap',
+        delta_t: 'Δ t'
     };
 
     const currentLabel = document.getElementById('traj-color-current-label');
@@ -191,23 +379,7 @@ export function setTrajectoryColorMode(mode) {
         dropdown.classList.remove('open');
     }
 
-    const maxSpeed = state.globalMaxSpeed || 100;
-
-    Object.keys(state.lapPolylines).forEach(lapId => {
-        const polylines = state.lapPolylines[lapId];
-        const lap = state.lapDataLookup[lapId];
-        if (!polylines || !lap || !lap.points) return;
-
-        const numSegments = lap.points.length - 1;
-        for (let i = 0; i < numSegments; i++) {
-            const segment = polylines[i];
-            if (segment && typeof segment.setOptions === 'function') {
-                const color = calculateSegmentColor(lap.points[i], lapId, mode, maxSpeed);
-                segment.setOptions({ strokeColor: color });
-                segment.originalColor = color;
-            }
-        }
-    });
+    updateAllPolylineColors(mode);
 
     debouncedUpdateURL();
 }
@@ -434,6 +606,9 @@ export function loadTrackPoints(overrideSessionId) {
                 session.laps.forEach(lap => {
                     if (lap.is_valid === false) return;
                     const lapId = `${session.session_id}-${lap.lap_num}`;
+                    lap.lapId = lapId;
+                    lap.session_id = session.session_id;
+                    lap.session_name = session.session_name;
                     state.lapDataLookup[lapId] = lap;
 
                     precalculateLapData(lap);
@@ -458,13 +633,17 @@ export function loadTrackPoints(overrideSessionId) {
                     }
                     state.lapPolylines[lapId] = [];
 
+                    const refLap = getReferenceLap();
+                    const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
+                    const isRefLap = (lapId === refLapId);
+                    const segZIndex = (state.trajectoryColorMode === 'delta_t') ? (isRefLap ? 1 : 5) : 1;
                     const isVisible = (state.groupASelection.has(lapId) && state.groupAVisibleMap) || (state.groupBSelection.has(lapId) && state.groupBVisibleMap);
 
                     for (let i = 0; i < lap.points.length - 1; i++) {
                         const p1 = lap.points[i];
                         const p2 = lap.points[i + 1];
 
-                        const color = calculateSegmentColor(p1, lapId, state.trajectoryColorMode, state.globalMaxSpeed);
+                        const color = calculateSegmentColor(p1, lapId, state.trajectoryColorMode, state.globalMaxSpeed, p2);
 
                         const segment = new google.maps.Polyline({
                             path: [p1, p2],
@@ -472,7 +651,7 @@ export function loadTrackPoints(overrideSessionId) {
                             strokeColor: color,
                             strokeOpacity: 1.0,
                             strokeWeight: 4,
-                            zIndex: 1,
+                            zIndex: segZIndex,
                             map: isVisible ? state.map : null
                         });
                         segment.originalColor = color;
@@ -495,8 +674,22 @@ export function loadTrackPoints(overrideSessionId) {
                 });
             });
 
-            if (!bounds.isEmpty() && state.map && !state.hasCustomMapSet) {
+            if (!bounds.isEmpty()) {
+                state.trackBounds = bounds;
+            }
+
+            if (!bounds.isEmpty() && state.map && !state.hasCustomMapSet && state.activeTab === 'map' && state.sortMode !== 'turn') {
                 state.map.fitBounds(bounds);
+                if (window.google && window.google.maps && google.maps.event) {
+                    google.maps.event.addListenerOnce(state.map, 'idle', () => {
+                        if (state.map && typeof state.map.getZoom === 'function') {
+                            const z = state.map.getZoom();
+                            if (z && z > 5) {
+                                state.defaultMapZoom = z;
+                            }
+                        }
+                    });
+                }
             }
             state.mapInitialized = true;
             isFetchingTrackPoints = false;
@@ -519,7 +712,7 @@ export function loadTrackPoints(overrideSessionId) {
                     if (parts.length === 2) {
                         const min = parseFloat(parts[0]);
                         const max = parseFloat(parts[1]);
-                        if (!isNaN(min) && !isNaN(max)) {
+                        if (!isNaN(min) && !isNaN(max) && !(min === 0 && max === 100)) {
                             state.globalTelemetryXRange = [min, max];
                         }
                     }
@@ -544,7 +737,9 @@ export function initMap() {
         if (!mapContainer) return;
 
         if (!state.map) {
-            state.globalTelemetryXRange = [0, 100];
+            if (!state.globalTelemetryXRange && state.trackData && state.trackData.lap_length) {
+                state.globalTelemetryXRange = [0, state.trackData.lap_length];
+            }
 
             const params = new URLSearchParams(window.location.search);
             const mapParam = params.get('map');
@@ -569,7 +764,7 @@ export function initMap() {
             state.map = new google.maps.Map(mapContainer, {
                 center: customCenter,
                 zoom: customZoom,
-                mapTypeId: 'hybrid',
+                mapTypeId: 'satellite',
                 mapId: 'KART_ANALYSIS_MAP',
                 tilt: 0,
                 gestureHandling: 'greedy',
@@ -632,7 +827,7 @@ export function setMapType(type) {
     });
 
     if (type === 'satellite' || type === 'hybrid') {
-        state.map.setMapTypeId(type);
+        state.map.setMapTypeId('satellite');
         state.map.setOptions({ styles: [] });
     } else if (type === 'kartsim') {
         state.map.setMapTypeId('solid_dark');
@@ -718,7 +913,7 @@ export function initTrackMarkers() {
                 if (parts.length === 2) {
                     const min = parseFloat(parts[0]);
                     const max = parseFloat(parts[1]);
-                    if (!isNaN(min) && !isNaN(max)) {
+                    if (!isNaN(min) && !isNaN(max) && !(min === 0 && max === 100)) {
                         state.globalTelemetryXRange = [min, max];
                         hasCustomXlim = true;
                     }
@@ -836,7 +1031,12 @@ export function initTrackMarkers() {
             }
 
             updateTrackLimitsVisibility();
+            import('./lap_selection.js').then(ui => {
+                ui.updateFastestSelectedLap();
+                ui.renderLapList();
+            });
             import('./stats_plots.js').then(stats => stats.renderStatsPlots());
+            import('./plots_sync.js').then(plots => plots.renderExpandablePlots());
         });
 }
 

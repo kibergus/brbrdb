@@ -316,7 +316,8 @@ def get_trajectory_plot(
     - start_m: Start distance for crop (omit for full lap)
     - end_m: End distance for crop (omit for full lap)
     - color_mode: Color scheme mode: 'lap' (default, solid color per lap), 'pedals' (green throttle /
-      red brake), 'accel' (green accel / red decel), or 'speed' (multi-stop speed heatmap).
+      red brake), 'accel' (green accel / red decel), 'speed' (multi-stop speed heatmap), or 'delta_t'
+      (white for reference lap, green/yellow/red derivative rate of time gained/lost vs reference lap).
 
     Returns Image object containing PNG trajectory plot data.
     """

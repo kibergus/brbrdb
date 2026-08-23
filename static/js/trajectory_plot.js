@@ -22,6 +22,8 @@
  * Supports lap filtering, distance cropping (start_m / end_m), custom lap styling, and marker overlays.
  */
 
+import { parseLapTime } from './utils.js';
+
 const DEFAULT_COLORS = ['#10b981', '#f43f5e', '#38bdf8', '#f59e0b', '#a855f7', '#ec4899', '#14b8a6'];
 
 export class TrajectoryPlot {
@@ -441,7 +443,19 @@ export class TrajectoryPlot {
                 if (s > maxSpeed) maxSpeed = s;
             });
         });
-        if (minSpeed === Infinity) { minSpeed = 0; maxSpeed = 100; }
+        // Calculate fastest lap for delta_t mode
+        let fastestLap = null;
+        let fastestTime = Infinity;
+        this.lapsData.forEach(lap => {
+            const t = lap.lap_time ? parseLapTime(lap.lap_time) : null;
+            if (t !== null && !isNaN(t) && t < fastestTime) {
+                fastestTime = t;
+                fastestLap = lap;
+            }
+        });
+        if (!fastestLap && this.lapsData.length > 0) {
+            fastestLap = this.lapsData[0];
+        }
 
         this.lapsData.forEach((lap, idx) => {
             const lapNum = lap.lap_num;
@@ -468,11 +482,11 @@ export class TrajectoryPlot {
                     });
                     this.polylines.push(polyline);
                 } else {
-                    // Segment-based coloring (pedals, accel, speed)
+                    // Segment-based coloring (pedals, accel, speed, delta_t)
                     for (let i = 0; i < croppedPts.length - 1; i++) {
                         const p1 = croppedPts[i];
                         const p2 = croppedPts[i + 1];
-                        const segColor = this._calculateSegmentColor(p1, color, colorMode, maxSpeed, minSpeed);
+                        const segColor = this._calculateSegmentColor(p1, color, colorMode, maxSpeed, minSpeed, lap, fastestLap, p2);
 
                         const segmentPolyline = new google.maps.Polyline({
                             path: [{ lat: p1.y, lng: p1.x }, { lat: p2.y, lng: p2.x }],
@@ -486,7 +500,8 @@ export class TrajectoryPlot {
                     }
                 }
 
-                legendItems.push({ color, label });
+                const legendColor = (colorMode === 'delta_t' && (lap === fastestLap || (fastestLap && lap && lap.lap_num === fastestLap.lap_num && lap.session_id === fastestLap.session_id))) ? '#ffffff' : color;
+                legendItems.push({ color: legendColor, label });
             }
         });
 
@@ -521,9 +536,55 @@ export class TrajectoryPlot {
         return `rgb(${lastColor[0]}, ${lastColor[1]}, ${lastColor[2]})`;
     }
 
-    _calculateSegmentColor(p, defaultColor, mode, maxSpeed = 100, minSpeed = 0) {
+    _calculateSegmentColor(p, defaultColor, mode, maxSpeed = 100, minSpeed = 0, lap = null, fastestLap = null, p2 = null) {
         if (!p) return defaultColor || '#ffffff';
         const currentMode = mode || this.options.color_mode || 'lap';
+
+        if (currentMode === 'delta_t') {
+            if (!fastestLap || !fastestLap.points || fastestLap.points.length === 0 || lap === fastestLap || (lap && fastestLap && lap.lap_num === fastestLap.lap_num && lap.session_id === fastestLap.session_id)) {
+                return '#ffffff';
+            }
+            const s1 = p.dist !== undefined && p.dist !== null ? p.dist : 0;
+            const s2 = (p2 && p2.dist !== undefined && p2.dist !== null && p2.dist > s1) ? p2.dist : (s1 + 1);
+            const sMid = (s1 + s2) / 2;
+
+            const halfWindow = 5.0;
+            const wStart = Math.max(0, sMid - halfWindow);
+            const wEnd = sMid + halfWindow;
+
+            const pLap1 = this._findPointByDistance(lap.points, wStart);
+            const pLap2 = this._findPointByDistance(lap.points, wEnd);
+            const pRef1 = this._findPointByDistance(fastestLap.points, wStart);
+            const pRef2 = this._findPointByDistance(fastestLap.points, wEnd);
+
+            let rate = 0;
+            if (pLap1 && pLap2 && pRef1 && pRef2 && typeof pLap1.time === 'number' && typeof pLap2.time === 'number' && typeof pRef1.time === 'number' && typeof pRef2.time === 'number') {
+                const dtLap = pLap2.time - pLap1.time;
+                const dtRef = pRef2.time - pRef1.time;
+                if (dtLap > 0 && dtRef > 0) {
+                    rate = (dtLap - dtRef) / dtRef;
+                }
+            } else {
+                const refPt = this._findPointByDistance(fastestLap.points, sMid);
+                const refSpeed = refPt ? refPt.speed : null;
+                const lapSpeed = p.speed;
+                if (lapSpeed && lapSpeed > 0 && refSpeed && refSpeed > 0) {
+                    rate = (refSpeed - lapSpeed) / lapSpeed;
+                }
+            }
+
+            const DELTA_T_STOPS = [
+                [0.0, [0, 255, 0]],     // -maxRate: Pure Green
+                [0.5, [255, 255, 0]],   //  0.0:      Pure Yellow
+                [1.0, [255, 0, 0]]      // +maxRate: Pure Red
+            ];
+            const maxRate = 0.25;
+            const s0 = 0.025;
+            const asinhMax = Math.asinh(maxRate / s0);
+            const normalizedRate = Math.max(-1, Math.min(1, Math.asinh(rate / s0) / asinhMax));
+            const u = 0.5 + 0.5 * normalizedRate;
+            return this._interpolateMultiStopColor(u, DELTA_T_STOPS);
+        }
 
         const SPEED_STOPS = [
             [0.00, [40, 20, 180]],   // Apex / Minimum speed: Deep Navy/Violet

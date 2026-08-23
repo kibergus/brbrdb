@@ -33,7 +33,7 @@ This reference outlines the available MCP server tools for fetching telemetry da
 - **Agent inspection tool**: Renders X/Z GPS line trajectories for comparison over distance crop.
 - **`laps` is the ONLY way to select laps**: Pass a list of 4-element tuples `(date, track, session_id, lap_number)`.
   Example: `laps=[("2026-06-25", "Llandow", "16_20_practice", 15), ("2026-07-28", "Llandow", "18_32_practice", 12)]`
-- **`color_mode`**: Color scheme mode: `"lap"` (default, solid color per lap), `"pedals"` (green throttle / red brake / white coasting), `"accel"` (green accel / red decel), or `"speed"` (multi-stop velocity heatmap).
+- **`color_mode`**: Color scheme mode: `"lap"` (default, solid color per lap), `"pedals"` (green throttle / red brake / white coasting), `"accel"` (green accel / red decel), `"speed"` (multi-stop velocity heatmap), or `"delta_t"` (reference lap in white, other laps colored by rate of time gained/lost: green=gaining time, yellow=equal pace, red=losing time).
 
 ### 8. `get_session_consistency_image(session_id, track, date, driver_name=None)`
 - Renders lap time evolution scatter plot over the session.

@@ -22,6 +22,7 @@ import { state } from './state.js';
 import { getSpeedAtDistance, getBrakingPointsInRange, getPointAtDistance, getPointsAtDistancesMonotonic, getTurnTime, fetchTelemetryChannel } from './telemetry.js';
 import { parseLapTime } from '../utils.js';
 import { debouncedUpdateURL } from './url_sync.js';
+import { updateAllPolylineColors } from './map.js';
 
 let lastPlotUpdate = 0;
 
@@ -441,6 +442,7 @@ export function updateAccelerationPlot(targetDist) {
 
     const config = { responsive: true, displayModeBar: false };
     const layout = {
+        autosize: true,
         uirevision: true,
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
@@ -1024,6 +1026,7 @@ export function updateSlipAnglePlot(targetDist) {
 
     const config = { responsive: true, displayModeBar: false };
     const layout = {
+        autosize: true,
         uirevision: true,
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
@@ -1394,6 +1397,7 @@ export function updateTelemetryPlots(targetDist) {
     }
 
     const layout = {
+        autosize: true,
         uirevision: true,
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
@@ -1534,8 +1538,12 @@ export function renderDeltaPlot() {
             }
         });
 
+        const currentRange = (state.globalTelemetryXRange && state.globalTelemetryXRange.length === 2)
+            ? state.globalTelemetryXRange
+            : (state.trackData && state.trackData.lap_length ? [0, state.trackData.lap_length] : [0, 1000]);
+
         const layout = {
-            uirevision: true,
+            uirevision: `${currentRange[0]}_${currentRange[1]}`,
             dragmode: 'pan',
             margin: { t: 30, b: 25, l: 80, r: 20 },
             paper_bgcolor: 'rgba(0,0,0,0)',
@@ -1545,7 +1553,7 @@ export function renderDeltaPlot() {
             xaxis: {
                 gridcolor: 'rgba(255,255,255,0.05)',
                 zeroline: false,
-                range: (state.globalTelemetryXRange && state.globalTelemetryXRange.length === 2) ? state.globalTelemetryXRange : [0, 1000],
+                range: currentRange,
                 fixedrange: false
             },
             yaxis: {
@@ -1634,8 +1642,12 @@ export function renderSpeedPlot() {
             }
         });
 
+        const currentRange = (state.globalTelemetryXRange && state.globalTelemetryXRange.length === 2)
+            ? state.globalTelemetryXRange
+            : (state.trackData && state.trackData.lap_length ? [0, state.trackData.lap_length] : [0, 1000]);
+
         const layout = {
-            uirevision: true,
+            uirevision: `${currentRange[0]}_${currentRange[1]}`,
             dragmode: 'pan',
             margin: { t: 30, b: 25, l: 80, r: 20 },
             paper_bgcolor: 'rgba(0,0,0,0)',
@@ -1645,7 +1657,7 @@ export function renderSpeedPlot() {
             xaxis: {
                 gridcolor: 'rgba(255,255,255,0.05)',
                 zeroline: false,
-                range: (state.globalTelemetryXRange && state.globalTelemetryXRange.length === 2) ? state.globalTelemetryXRange : [0, 1000],
+                range: currentRange,
                 fixedrange: false
             },
             yaxis: {
@@ -1775,8 +1787,12 @@ export function renderSingleChannelPlot(activeTab) {
             return lap ? { id, ...lap } : null;
         }).filter(l => l && l.points)) : [];
 
+        const currentRange = (state.globalTelemetryXRange && state.globalTelemetryXRange.length === 2)
+            ? state.globalTelemetryXRange
+            : (state.trackData && state.trackData.lap_length ? [0, state.trackData.lap_length] : [0, 1000]);
+
         const layout = {
-            uirevision: true,
+            uirevision: `${currentRange[0]}_${currentRange[1]}`,
             dragmode: 'pan',
             margin: { t: 30, b: 25, l: 80, r: 20 },
             paper_bgcolor: 'rgba(0,0,0,0)',
@@ -1786,7 +1802,7 @@ export function renderSingleChannelPlot(activeTab) {
             xaxis: {
                 gridcolor: 'rgba(255,255,255,0.05)',
                 zeroline: false,
-                range: state.globalTelemetryXRange,
+                range: currentRange,
                 fixedrange: false
             },
             yaxis: {
@@ -2196,7 +2212,7 @@ export function updateExpandablePlotsIndicator() {
 // Polling sync
 function _getPlotRange(id) {
     const el = document.getElementById(id);
-    if (!el || !el._fullLayout) return null;
+    if (!el || !el._fullLayout || !el._fullLayout.xaxis || !el.offsetParent || el.offsetWidth === 0) return null;
     const r = el._fullLayout.xaxis.range;
     return (r && r.length >= 2) ? r : null;
 }
@@ -2208,7 +2224,7 @@ function _rangesEqual(a, b, tol = 0.0001) {
 
 export function _syncPlotsFrame() {
     state._syncRafId = requestAnimationFrame(_syncPlotsFrame);
-    if (state._syncApplying) return;
+    if (state._syncApplying || state.activeTab !== 'map') return;
 
     const plotIds = [];
     if (state.activePlotChannels) {
@@ -2350,6 +2366,24 @@ export function initExpandablePlots() {
             debouncedUpdateURL();
         });
     });
+
+    const btnDelta = document.getElementById('btn-delta');
+    if (btnDelta) {
+        let preHoverColorMode = null;
+        btnDelta.addEventListener('mouseenter', () => {
+            if (state.trajectoryColorMode !== 'delta_t') {
+                preHoverColorMode = state.trajectoryColorMode || 'pedals';
+                updateAllPolylineColors('delta_t');
+            }
+        });
+        btnDelta.addEventListener('mouseleave', () => {
+            if (preHoverColorMode !== null) {
+                const targetMode = state.trajectoryColorMode || preHoverColorMode;
+                preHoverColorMode = null;
+                updateAllPolylineColors(targetMode);
+            }
+        });
+    }
 
     // Add mouseup listener to ensure Y-limits are finalized after a drag
     window.addEventListener('mouseup', () => {
@@ -2587,27 +2621,33 @@ export function updateExpandablePlotsVisibility() {
         content.style.height = '0';
     }
 
-    setTimeout(() => {
-        const deltaGd = document.getElementById('plot-area-delta');
-        if (state.deltaPlotVisible && deltaGd && deltaGd.offsetParent !== null) {
-            Plotly.Plots.resize(deltaGd);
-        }
-        const speedGd = document.getElementById('plot-area-speed');
-        if (state.speedPlotVisible && speedGd && speedGd.offsetParent !== null) {
-            Plotly.Plots.resize(speedGd);
-        }
-        if (state.activePlotChannels) {
-            state.activePlotChannels.forEach(tab => {
-                const activeGd = document.getElementById('plot-area-' + tab);
-                if (activeGd && activeGd.offsetParent !== null) {
-                    Plotly.Plots.resize(activeGd);
-                }
-            });
-        }
-    }, 150);
+    if ((!state.globalTelemetryXRange || state.globalTelemetryXRange.length !== 2 || (state.globalTelemetryXRange[0] === 0 && state.globalTelemetryXRange[1] === 100)) && state.trackData && state.trackData.lap_length) {
+        state.globalTelemetryXRange = [0, state.trackData.lap_length];
+    }
 
     renderExpandablePlots();
-    if (anyExtraVisible) startSyncLoop();
+    if (anyExtraVisible) {
+        startSyncLoop();
+        setTimeout(() => {
+            const range = state.globalTelemetryXRange || (state.trackData && state.trackData.lap_length ? [0, state.trackData.lap_length] : null);
+            const plotIds = [];
+            if (state.deltaPlotVisible) plotIds.push('plot-area-delta');
+            if (state.speedPlotVisible) plotIds.push('plot-area-speed');
+            if (state.activePlotChannels) {
+                state.activePlotChannels.forEach(tab => plotIds.push('plot-area-' + tab));
+            }
+
+            plotIds.forEach(id => {
+                const gd = document.getElementById(id);
+                if (gd && gd.offsetParent !== null && window.Plotly && window.Plotly.Plots) {
+                    Plotly.Plots.resize(gd);
+                    if (range && range.length === 2) {
+                        Plotly.relayout(gd, { 'xaxis.range': range, 'xaxis.autorange': false });
+                    }
+                }
+            });
+        }, 150);
+    }
 }
 
 function renderCustomLegend(tab, targetEl) {

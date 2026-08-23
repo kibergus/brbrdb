@@ -21,7 +21,11 @@ import { state } from './state.js';
 
 vi.mock('./map.js', () => ({
     initMap: vi.fn(),
-    updateTrackLimitsVisibility: vi.fn()
+    updateTrackLimitsVisibility: vi.fn(),
+    updateDistanceMarker: vi.fn(),
+    calculateBoundsZoom: vi.fn(() => 15),
+    updateAllPolylineColors: vi.fn(),
+    getReferenceLap: vi.fn(() => null)
 }));
 
 vi.mock('./plots_sync.js', () => ({
@@ -30,7 +34,8 @@ vi.mock('./plots_sync.js', () => ({
     updateSlipAnglePlot: vi.fn(),
     renderExpandablePlots: vi.fn(),
     startSyncLoop: vi.fn(),
-    updateDeltaYLim: vi.fn()
+    updateDeltaYLim: vi.fn(),
+    updateExpandablePlotsVisibility: vi.fn()
 }));
 
 vi.mock('./stats_plots.js', () => ({
@@ -43,16 +48,26 @@ vi.mock('./url_sync.js', () => ({
 
 describe('lap_selection.js showTab UI changes', () => {
     let mockSidePanel;
+    let mockExpandablePlots;
+    let mockMapControlsBar;
 
     beforeEach(() => {
         mockSidePanel = { style: {} };
+        mockExpandablePlots = { style: {} };
+        mockMapControlsBar = { style: {} };
 
         vi.stubGlobal('document', {
             querySelectorAll: vi.fn().mockReturnValue([]),
-            getElementById: vi.fn().mockReturnValue(null),
+            getElementById: vi.fn().mockImplementation((id) => {
+                if (id === 'expandable-plots-block') return mockExpandablePlots;
+                return null;
+            }),
             querySelector: vi.fn().mockImplementation((selector) => {
                 if (selector === '.map-side-panel') {
                     return mockSidePanel;
+                }
+                if (selector === '.map-controls-bar') {
+                    return mockMapControlsBar;
                 }
                 return null;
             })
@@ -64,16 +79,20 @@ describe('lap_selection.js showTab UI changes', () => {
         state.lapPolylines = {};
     });
 
-    it('sets state.activeTab and hides sidebar panel when Stats tab is selected', () => {
+    it('sets state.activeTab and hides sidebar panel, bottom plots, and slider when Stats tab is selected', () => {
         showTab('stats');
         expect(state.activeTab).toBe('stats');
         expect(mockSidePanel.style.display).toBe('none');
+        expect(mockExpandablePlots.style.display).toBe('none');
+        expect(mockMapControlsBar.style.display).toBe('none');
     });
 
-    it('sets state.activeTab and shows sidebar panel when Map tab is selected', () => {
+    it('sets state.activeTab and shows sidebar panel, bottom plots, and slider when Map tab is selected', () => {
         showTab('map');
         expect(state.activeTab).toBe('map');
         expect(mockSidePanel.style.display).toBe('flex');
+        expect(mockExpandablePlots.style.display).toBe('flex');
+        expect(mockMapControlsBar.style.display).toBe('flex');
     });
 
     it('does not update map polylines visibility when toggling group visibility in stats tab', () => {
@@ -154,6 +173,86 @@ describe('showStatsSubTab', () => {
         expect(mockProgressionBtn.classList.toggle).toHaveBeenCalledWith('active', true);
         expect(mockProgressionPane.style.display).toBe('block');
         expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/track_progression'));
+    });
+});
+
+describe('selectTurnAndSwitchToMap', () => {
+    it('sets turn index, selects fastest lap in that turn for Group A, and switches to map tab', async () => {
+        const { selectTurnAndSwitchToMap } = await import('./lap_selection.js');
+
+        state.trackData = {
+            lap_length: 1000,
+            center_line: [
+                { dist: 0, lat: 51.0, lng: -0.1 },
+                { dist: 50, lat: 51.001, lng: -0.101 },
+                { dist: 80, lat: 51.002, lng: -0.102 },
+                { dist: 120, lat: 51.003, lng: -0.103 },
+                { dist: 500, lat: 51.005, lng: -0.105 }
+            ],
+            turns: [
+                { name: 'Turn 1', start: 50, end: 120, apex: [80] },
+                { name: 'Turn 2', start: 200, end: 300, apex: [250] }
+            ]
+        };
+
+        state.allSessionsData = [
+            {
+                session_id: 'sess1',
+                laps: [
+                    { lap_num: 1, is_valid: true, turn_times: [5.2, 8.4] },
+                    { lap_num: 2, is_valid: true, turn_times: [4.8, 8.9] },
+                    { lap_num: 3, is_valid: false, turn_times: [3.0, 7.0] } // invalid lap ignored
+                ]
+            }
+        ];
+
+        const mockTurnSelector = { value: '0', style: {} };
+        const mockSidePanel = { style: {} };
+        const mockExpandablePlots = { style: {} };
+        const mockMapControlsBar = { style: {} };
+        const mockSlider = { value: 0 };
+        const mockDisplay = { textContent: '' };
+
+        const mockFitBounds = vi.fn();
+        const mockPanTo = vi.fn();
+        state.map = {
+            getZoom: () => 16,
+            fitBounds: mockFitBounds,
+            panTo: mockPanTo
+        };
+        state.defaultMapZoom = 15;
+
+        vi.stubGlobal('document', {
+            querySelectorAll: vi.fn().mockReturnValue([]),
+            getElementById: vi.fn().mockImplementation((id) => {
+                if (id === 'turn-selector') return mockTurnSelector;
+                if (id === 'expandable-plots-block') return mockExpandablePlots;
+                if (id === 'distance-slider') return mockSlider;
+                if (id === 'distance-display') return mockDisplay;
+                return null;
+            }),
+            querySelector: vi.fn().mockImplementation((selector) => {
+                if (selector === '.map-side-panel') return mockSidePanel;
+                if (selector === '.map-controls-bar') return mockMapControlsBar;
+                return null;
+            })
+        });
+
+        selectTurnAndSwitchToMap(0);
+
+        expect(state.currentTurnIdx).toBe(0);
+        expect(mockTurnSelector.value).toBe(0);
+        expect(state.sortMode).toBe('turn');
+        expect(state.activeTab).toBe('map');
+        expect(state.groupASelection.has('sess1-2')).toBe(true); // Fastest lap
+        expect(state.groupASelection.has('sess1-1')).toBe(true); // Median lap
+        expect(state.groupASelection.size).toBe(2);
+        expect(state.deltaPlotVisible).toBe(true);
+        expect(state.playbackDistance).toBe(50);
+        expect(state.currentTargetDist).toBe(50);
+        expect(mockSlider.value).toBe(50);
+        expect(mockDisplay.textContent).toBe('50m');
+        expect(mockFitBounds).toHaveBeenCalled();
     });
 });
 
