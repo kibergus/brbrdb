@@ -127,7 +127,7 @@ def test_api_endpoints_require_login_401() -> None:
 
 
 def test_gallery_restricted() -> None:
-    # Test that accessing /gallery is blocked if see_gallery permission is false
+    # Test that accessing /gallery returns 403 error page if see_gallery permission is false
     client = app.app.test_client()
     mock_keys = {
         'no_gallery_key': {
@@ -138,15 +138,37 @@ def test_gallery_restricted() -> None:
         }
     }
     with patch('auth.load_keys', return_value=mock_keys):
-        # 1. No gallery permission -> 403 Forbidden
+        # 1. No gallery permission -> 403 Forbidden with friendly error page
         client.set_cookie('auth_key', 'no_gallery_key')
         response = client.get(
             '/gallery?league=fat_regional&meeting=2026-06-13',
             environ_base={'REMOTE_ADDR': '192.168.1.100'}
         )
         assert response.status_code == 403
+        html = response.get_data(as_text=True)
+        assert 'athletes' in html.lower()
+        assert 'parents' in html.lower()
+        assert 'brbrdb@kibergus.com' in html
 
-        # 2. Has gallery permission -> not 403 (should render or find sessions, but won't be blocked)
+        # 2. Menu should still contain gallery link even without ACL
+        resp_about = client.get('/about', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_about.status_code == 200
+        about_html = resp_about.get_data(as_text=True)
+        assert 'Gallery' in about_html
+        assert 'href="/gallery"' in about_html
+
+        # 3. Anonymous user (no key, remote IP) -> /gallery returns 403 error page (not 302 redirect)
+        client_anon = app.app.test_client()
+        response_anon_gallery = client_anon.get('/gallery', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert response_anon_gallery.status_code == 403
+        anon_gallery_html = response_anon_gallery.get_data(as_text=True)
+        assert 'athletes' in anon_gallery_html.lower()
+
+        # 4. Anonymous user -> /about returns 200 OK
+        response_anon_about = client_anon.get('/about', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert response_anon_about.status_code == 200
+
+        # 5. Has gallery permission -> not 403 (should render or find sessions, but won't be blocked)
         client.set_cookie('auth_key', 'has_gallery_key')
         response2 = client.get(
             '/gallery?league=fat_regional&meeting=2026-06-13',

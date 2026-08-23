@@ -87,8 +87,10 @@ def teardown_db(exception: Any = None) -> None:
 
 @app.before_request
 def _require_login() -> werkzeug_wrappers.Response | tuple[str, int] | None:
-    """Global auth gate — skipped for localhost, static files, and the /auth endpoint itself."""
-    if request.endpoint in ('auth', 'static'):
+    """Global auth gate — skipped for localhost, static files, auth, about, and gallery endpoints."""
+    if request.endpoint in ('auth', 'static', 'about') or (
+        request.endpoint and request.endpoint.startswith('gallery.')
+    ):
         return None
 
     acl = auth.get_current_acl()
@@ -113,10 +115,6 @@ def _require_login() -> werkzeug_wrappers.Response | tuple[str, int] | None:
     if has_kartsim:
         if not acl.get('kartsim_data'):
             abort(403, description='Access to KartSim data is restricted')
-
-    if request.path == '/gallery' or request.path.startswith('/gallery/'):
-        if not acl.get('see_gallery'):
-            abort(403, description='Access to gallery is restricted')
 
     return None
 

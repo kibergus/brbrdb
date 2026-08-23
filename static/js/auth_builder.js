@@ -14,92 +14,121 @@
  * limitations under the License.
  */
 
-document.addEventListener('DOMContentLoaded', () => {
-    const keyInput = document.getElementById('apiKeyInput');
-    const targetInput = document.getElementById('targetInput');
-    const resultBox = document.getElementById('resultBox');
-    const copyBtn = document.getElementById('copyBtn');
-    const openLink = document.getElementById('openLink');
-    const copyToast = document.getElementById('copyToast');
-    const presetChips = document.querySelectorAll('.preset-chip');
-
-    let currentUrl = '';
-    let toastTimeout = null;
-
-    function formatRedirectPath(rawPath) {
-        const trimmed = (rawPath || '').trim();
-        if (!trimmed) {
-            return '/';
-        }
-        if (trimmed.startsWith('/') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-            return trimmed;
-        }
-        return '/' + trimmed;
+/**
+ * Formats the redirect destination path, stripping site domain prefixes if a full URL is provided.
+ * @param {string} rawPath - The destination path or full URL.
+ * @param {string} [currentOrigin] - Optional origin to strip (defaults to window.location.origin).
+ * @returns {string} The formatted redirect path starting with '/'.
+ */
+export function formatRedirectPath(rawPath, currentOrigin) {
+    let trimmed = (rawPath || '').trim();
+    if (!trimmed) {
+        return '/';
     }
 
-    function updateUrl() {
-        const key = (keyInput.value || '').trim();
-        const target = formatRedirectPath(targetInput.value);
+    const prefixesToStrip = [
+        'https://brbrdb.brbrkitten.com',
+        'http://brbrdb.brbrkitten.com',
+    ];
 
-        if (!key) {
-            currentUrl = '';
-            resultBox.innerHTML = '<span class="result-placeholder">Enter an API key above to generate the shareable URL...</span>';
-            copyBtn.disabled = true;
-            openLink.classList.add('disabled');
-            openLink.removeAttribute('href');
-            return;
-        }
-
-        const origin = window.location.origin;
-        currentUrl = `${origin}/auth?key=${encodeURIComponent(key)}&next=${encodeURIComponent(target)}`;
-
-        resultBox.textContent = currentUrl;
-        copyBtn.disabled = false;
-        openLink.classList.remove('disabled');
-        openLink.href = currentUrl;
+    if (currentOrigin) {
+        prefixesToStrip.push(currentOrigin.replace(/\/+$/, ''));
+    } else if (typeof window !== 'undefined' && window.location && window.location.origin) {
+        prefixesToStrip.push(window.location.origin.replace(/\/+$/, ''));
     }
 
-    keyInput.addEventListener('input', updateUrl);
-    targetInput.addEventListener('input', updateUrl);
+    for (const prefix of prefixesToStrip) {
+        if (prefix && trimmed.startsWith(prefix)) {
+            trimmed = trimmed.slice(prefix.length).trim();
+            break;
+        }
+    }
 
-    presetChips.forEach(chip => {
-        chip.addEventListener('click', () => {
-            const path = chip.getAttribute('data-path');
-            if (path) {
-                targetInput.value = path;
-                updateUrl();
+    if (!trimmed) {
+        return '/';
+    }
+    if (trimmed.startsWith('/') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        return trimmed;
+    }
+    return '/' + trimmed;
+}
+
+if (typeof document !== 'undefined') {
+    document.addEventListener('DOMContentLoaded', () => {
+        const keyInput = document.getElementById('apiKeyInput');
+        const targetInput = document.getElementById('targetInput');
+        const resultBox = document.getElementById('resultBox');
+        const copyBtn = document.getElementById('copyBtn');
+        const openLink = document.getElementById('openLink');
+        const copyToast = document.getElementById('copyToast');
+        const presetChips = document.querySelectorAll('.preset-chip');
+
+        let currentUrl = '';
+        let toastTimeout = null;
+
+        function updateUrl() {
+            const key = (keyInput.value || '').trim();
+            const target = formatRedirectPath(targetInput.value);
+
+            if (!key) {
+                currentUrl = '';
+                resultBox.innerHTML = '<span class="result-placeholder">Enter an API key above to generate the shareable URL...</span>';
+                copyBtn.disabled = true;
+                openLink.classList.add('disabled');
+                openLink.removeAttribute('href');
+                return;
+            }
+
+            const origin = window.location.origin;
+            currentUrl = `${origin}/auth?key=${encodeURIComponent(key)}&next=${encodeURIComponent(target)}`;
+
+            resultBox.textContent = currentUrl;
+            copyBtn.disabled = false;
+            openLink.classList.remove('disabled');
+            openLink.href = currentUrl;
+        }
+
+        keyInput.addEventListener('input', updateUrl);
+        targetInput.addEventListener('input', updateUrl);
+
+        presetChips.forEach(chip => {
+            chip.addEventListener('click', () => {
+                const path = chip.getAttribute('data-path');
+                if (path) {
+                    targetInput.value = path;
+                    updateUrl();
+                }
+            });
+        });
+
+        copyBtn.addEventListener('click', async () => {
+            if (!currentUrl) return;
+
+            try {
+                await navigator.clipboard.writeText(currentUrl);
+                if (toastTimeout) clearTimeout(toastTimeout);
+                copyToast.classList.add('show');
+                toastTimeout = setTimeout(() => {
+                    copyToast.classList.remove('show');
+                }, 2500);
+            } catch (err) {
+                console.error('Failed to copy text: ', err);
+                const tempArea = document.createElement('textarea');
+                tempArea.value = currentUrl;
+                document.body.appendChild(tempArea);
+                tempArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(tempArea);
+
+                if (toastTimeout) clearTimeout(toastTimeout);
+                copyToast.classList.add('show');
+                toastTimeout = setTimeout(() => {
+                    copyToast.classList.remove('show');
+                }, 2500);
             }
         });
+
+        // Initialize state on page load
+        updateUrl();
     });
-
-    copyBtn.addEventListener('click', async () => {
-        if (!currentUrl) return;
-
-        try {
-            await navigator.clipboard.writeText(currentUrl);
-            if (toastTimeout) clearTimeout(toastTimeout);
-            copyToast.classList.add('show');
-            toastTimeout = setTimeout(() => {
-                copyToast.classList.remove('show');
-            }, 2500);
-        } catch (err) {
-            console.error('Failed to copy text: ', err);
-            // Fallback for older browsers or non-secure contexts
-            const tempArea = document.createElement('textarea');
-            tempArea.value = currentUrl;
-            document.body.appendChild(tempArea);
-            tempArea.select();
-            document.execCommand('copy');
-            document.body.removeChild(tempArea);
-            
-            if (toastTimeout) clearTimeout(toastTimeout);
-            copyToast.classList.add('show');
-            toastTimeout = setTimeout(() => {
-                copyToast.classList.remove('show');
-            }, 2500);
-        }
-    });
-
-    // Initialize state on page load
-    updateUrl();
-});
+}

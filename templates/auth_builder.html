@@ -26,7 +26,7 @@
         <div class="form-group">
             <label for="targetInput">Destination Page</label>
             <div class="input-wrapper">
-                <input type="text" id="targetInput" placeholder="/" value="/" autocomplete="off">
+                <input type="text" id="targetInput" placeholder="/" autocomplete="off">
             </div>
             <div class="preset-chips">
                 <span class="preset-chip" data-path="/">/ (Home)</span>
@@ -71,5 +71,5 @@
     </div>
 </div>
 
-<script src="{{ url_for('static', filename='js/auth_builder.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='js/auth_builder.js') }}"></script>
 {% endblock %}

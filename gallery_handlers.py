@@ -224,10 +224,10 @@ def _apply_watermark(img: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 @gallery_blueprint.route('/gallery')
-def gallery() -> str:
+def gallery() -> tuple[str, int] | str:
     """Dispatch to the appropriate gallery sub-page based on query parameters."""
     if not auth.get_current_acl().get('see_gallery'):
-        abort(403, description='Access to gallery is restricted')
+        return render_template('gallery_restricted.html'), 403
 
     league = request.args.get('league')
     meeting_date = request.args.get('meeting')
