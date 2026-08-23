@@ -210,7 +210,7 @@ def render_stacked_telemetry_plot(
             ax.plot(dists_grid, y_vals, color=color, linewidth=2, label=lap_lbl)
 
         if 'speed' in ch.lower():
-            all_s = [interp_lap_data[l][ch] for l in laps if ch in interp_lap_data[l]]
+            all_s = [interp_lap_data[lp][ch] for lp in laps if ch in interp_lap_data[lp]]
             if all_s:
                 min_s = float(np.nanmin([np.nanmin(s) for s in all_s]))
                 max_s = float(np.nanmax([np.nanmax(s) for s in all_s]))

@@ -185,9 +185,9 @@
 </div>
 
 {# Video Lightbox Modal #}
-<div id="video-lightbox" class="lightbox" onclick="closeVideoLightbox()">
+<div id="video-lightbox" class="lightbox" onclick="handleVideoCloseClick(event)">
     <div class="lightbox-content video-card" id="video-card-lightbox" onclick="event.stopPropagation()" style="max-width: 800px; width: 95vw; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 16px; padding: 1.5rem; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);">
-        <button class="lightbox-close" onclick="closeVideoLightbox()" style="top: 0.5rem; right: 1rem; position: absolute; z-index: 1001;">&times;</button>
+        <button class="lightbox-close" onclick="handleVideoCloseClick(event)" style="top: 0.5rem; right: 1rem; position: absolute; z-index: 1001;">&times;</button>
         
         <h3 id="video-lightbox-title" style="margin-top: 0; margin-bottom: 1rem; color: var(--text-primary); font-size: 1.2rem; font-weight: 600; padding-right: 2rem;"></h3>
 
@@ -310,7 +310,7 @@ function navigateLightbox(direction, event) {
     );
 }
 
-function enterCropMode() {
+function enterCropMode(fromHistory = false) {
     const lightbox = document.getElementById('lightbox');
     if (!lightbox) return;
     lightbox.setAttribute('data-mode', 'crop');
@@ -320,9 +320,15 @@ function enterCropMode() {
     
     const previewPill = document.getElementById('lightbox-preview-pill');
     if (previewPill) previewPill.style.display = 'block';
+
+    if (!fromHistory) {
+        if (!history.state || history.state.mode !== 'crop') {
+            history.pushState({ modal: 'photo', mode: 'crop', photoIndex: currentPhotoIndex }, '');
+        }
+    }
 }
 
-function exitCropMode() {
+function exitCropMode(fromHistory = false) {
     const lightbox = document.getElementById('lightbox');
     if (!lightbox) return;
     lightbox.setAttribute('data-mode', 'view');
@@ -339,15 +345,29 @@ function exitCropMode() {
     
     const nativeBtn = document.getElementById('lightbox-native-ratio');
     setCropRatio(null, nativeBtn, true);
+
+    if (!fromHistory) {
+        if (history.state && history.state.mode === 'crop') {
+            history.back();
+        }
+    }
 }
 
 function handleCloseClick(event) {
     if (event) event.stopPropagation();
     const lightbox = document.getElementById('lightbox');
     if (lightbox && lightbox.getAttribute('data-mode') === 'crop') {
-        exitCropMode();
+        if (history.state && history.state.mode === 'crop') {
+            history.back();
+        } else {
+            exitCropMode(true);
+        }
     } else {
-        closeLightbox();
+        if (history.state && history.state.modal === 'photo') {
+            history.back();
+        } else {
+            closeLightbox(true);
+        }
     }
 }
 
@@ -722,7 +742,7 @@ function initLightboxEvents() {
             return;
         }
         e.preventDefault();
-        const delta = e.deltaY < 0 ? 0.15 : -0.15;
+        const delta = e.deltaY < 0 ? 0.0375 : -0.0375;
         zoomFactor = Math.max(1.0, Math.min(5.0, zoomFactor + delta));
         updateTransform();
     }, { passive: false });
@@ -786,7 +806,7 @@ async function downloadCropped(event) {
     }
 }
 
-function openLightbox(smallUrl, fullUrl, filename, caption, league, meetingFolder) {
+function openLightbox(smallUrl, fullUrl, filename, caption, league, meetingFolder, fromHistory = false) {
     const lightbox = document.getElementById('lightbox');
     const img = document.getElementById('lightbox-img');
     const shareBtn = document.getElementById('lightbox-share');
@@ -843,6 +863,14 @@ function openLightbox(smallUrl, fullUrl, filename, caption, league, meetingFolde
     }
 
     lightbox.classList.add('active');
+
+    if (!fromHistory) {
+        if (!history.state || history.state.modal !== 'photo') {
+            history.pushState({ modal: 'photo', mode: 'view', photoIndex: currentPhotoIndex }, '');
+        } else {
+            history.replaceState({ modal: 'photo', mode: 'view', photoIndex: currentPhotoIndex }, '');
+        }
+    }
 }
 
 async function sharePhoto(event) {
@@ -907,14 +935,21 @@ async function sharePhoto(event) {
     }
 }
 
-function closeLightbox() {
+function closeLightbox(fromHistory = false) {
     const lightbox = document.getElementById('lightbox');
+    if (!lightbox) return;
     lightbox.classList.remove('active');
     lightbox.setAttribute('data-mode', 'view');
     const closeBtnText = document.querySelector('#lightbox-close-btn .close-text-crop');
     if (closeBtnText) closeBtnText.style.display = 'none';
     const previewPill = document.getElementById('lightbox-preview-pill');
     if (previewPill) previewPill.style.display = 'none';
+
+    if (!fromHistory) {
+        if (history.state && history.state.modal === 'photo') {
+            history.back();
+        }
+    }
 }
 
 function handleVideoCardClick(card) {
@@ -926,7 +961,7 @@ function handleVideoCardClick(card) {
     openVideoLightbox(url, thumbUrl, filename, markers);
 }
 
-function openVideoLightbox(url, thumbUrl, filename, markers) {
+function openVideoLightbox(url, thumbUrl, filename, markers, fromHistory = false) {
     const modal = document.getElementById('video-lightbox');
     const video = document.getElementById('video-lightbox-el');
     const title = document.getElementById('video-lightbox-title');
@@ -985,6 +1020,12 @@ function openVideoLightbox(url, thumbUrl, filename, markers) {
     }
 
     modal.classList.add('active');
+
+    if (!fromHistory) {
+        if (!history.state || history.state.modal !== 'video') {
+            history.pushState({ modal: 'video' }, '');
+        }
+    }
 }
 
 function filterLightboxMarkers(selectedDriver) {
@@ -999,24 +1040,40 @@ function filterLightboxMarkers(selectedDriver) {
     });
 }
 
-function closeVideoLightbox() {
+function handleVideoCloseClick(event) {
+    if (event) event.stopPropagation();
+    if (history.state && history.state.modal === 'video') {
+        history.back();
+    } else {
+        closeVideoLightbox(true);
+    }
+}
+
+function closeVideoLightbox(fromHistory = false) {
     const modal = document.getElementById('video-lightbox');
     const video = document.getElementById('video-lightbox-el');
     if (video) {
         video.pause();
     }
-    modal.classList.remove('active');
+    if (modal) {
+        modal.classList.remove('active');
+    }
+    if (!fromHistory) {
+        if (history.state && history.state.modal === 'video') {
+            history.back();
+        }
+    }
 }
 
 // Close lightboxes on Escape key, navigate on Left/Right arrows
 document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') {
         const lightbox = document.getElementById('lightbox');
-        if (lightbox && lightbox.classList.contains('active') && lightbox.getAttribute('data-mode') === 'crop') {
-            exitCropMode();
-        } else {
-            closeLightbox();
-            closeVideoLightbox();
+        const videoLightbox = document.getElementById('video-lightbox');
+        if (lightbox && lightbox.classList.contains('active')) {
+            handleCloseClick(event);
+        } else if (videoLightbox && videoLightbox.classList.contains('active')) {
+            handleVideoCloseClick(event);
         }
     } else if (event.key === 'ArrowLeft') {
         const lightbox = document.getElementById('lightbox');
@@ -1068,5 +1125,70 @@ document.addEventListener('touchend', function(e) {
         }
     }
 }, { passive: true });
+
+window.addEventListener('popstate', function(event) {
+    const state = event.state;
+    const photoLightbox = document.getElementById('lightbox');
+    const videoLightbox = document.getElementById('video-lightbox');
+    const isPhotoActive = photoLightbox && photoLightbox.classList.contains('active');
+    const isVideoActive = videoLightbox && videoLightbox.classList.contains('active');
+
+    if (state && state.modal === 'photo') {
+        if (isVideoActive) {
+            closeVideoLightbox(true);
+        }
+        
+        if (photoCards.length === 0) {
+            photoCards = Array.from(document.querySelectorAll('.gallery-grid .gallery-card:not(.video-card-item)'));
+        }
+        const idx = state.photoIndex !== undefined && state.photoIndex >= 0 && state.photoIndex < photoCards.length 
+            ? state.photoIndex 
+            : 0;
+
+        if (!isPhotoActive || currentPhotoIndex !== idx) {
+            if (photoCards[idx]) {
+                currentPhotoIndex = idx;
+                const card = photoCards[idx];
+                openLightbox(
+                    card.dataset.smallUrl,
+                    card.dataset.fullUrl,
+                    card.dataset.filename,
+                    card.dataset.caption,
+                    card.dataset.league,
+                    card.dataset.meetingFolder,
+                    true
+                );
+            }
+        }
+
+        if (photoLightbox) {
+            if (state.mode === 'crop') {
+                if (photoLightbox.getAttribute('data-mode') !== 'crop') {
+                    enterCropMode(true);
+                }
+            } else {
+                if (photoLightbox.getAttribute('data-mode') === 'crop') {
+                    exitCropMode(true);
+                }
+            }
+        }
+    } else if (state && state.modal === 'video') {
+        if (isPhotoActive) {
+            closeLightbox(true);
+        }
+    } else {
+        if (isPhotoActive) {
+            closeLightbox(true);
+        }
+        if (isVideoActive) {
+            closeVideoLightbox(true);
+        }
+    }
+});
+
+// Clean up initial state on page load so reload starts clean
+if (window.history && window.history.replaceState) {
+    window.history.replaceState(null, '');
+}
 </script>
 {% endblock %}
