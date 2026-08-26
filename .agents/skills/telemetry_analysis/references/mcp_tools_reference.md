@@ -25,15 +25,19 @@ This reference outlines the available MCP server tools for fetching telemetry da
 
 ### 6. `get_telemetry_plot(laps, start_m, end_m, channels)`
 - **Agent inspection tool**: Renders stacked multi-channel telemetry plot and returns base64 PNG.
+- **Plot Readability Guideline**: Keep `laps` under 3 (default: 2 laps - Benchmark Reference Lap vs Target Comparison Lap).
 - **`laps` is the ONLY way to select laps**: Pass a list of 4-element tuples `(date, track, session_id, lap_number)`.
   Example: `laps=[("2026-06-25", "Llandow", "16_20_practice", 15), ("2026-07-28", "Llandow", "18_32_practice", 12)]`
-- Channels: `["Speed", "Brake", "Throttle", "Steering Angle", "delta_time"]`.
+- Channels: `["Speed", "Throttle", "Brake", "Steering Angle", "Delta Time"]`. (If `Throttle` is not recorded on the kart, use `accel`/`acceleration` to analyze engine drive out of corners; inspect `Slip Angle` if available).
 
 ### 7. `get_trajectory_plot(laps, start_m=None, end_m=None, color_mode="lap")`
 - **Agent inspection tool**: Renders X/Z GPS line trajectories for comparison over distance crop.
+- **Plot Readability Guideline**: Keep `laps` under 3 (default: 2 laps - Benchmark Reference Lap vs Target Comparison Lap).
 - **`laps` is the ONLY way to select laps**: Pass a list of 4-element tuples `(date, track, session_id, lap_number)`.
   Example: `laps=[("2026-06-25", "Llandow", "16_20_practice", 15), ("2026-07-28", "Llandow", "18_32_practice", 12)]`
 - **`color_mode`**: Color scheme mode: `"lap"` (default, solid color per lap), `"pedals"` (green throttle / red brake / white coasting), `"accel"` (green accel / red decel), `"speed"` (multi-stop velocity heatmap), or `"delta_t"` (reference lap in white, other laps colored by rate of time gained/lost: green=gaining time, yellow=equal pace, red=losing time).
+- **GPS-Only Telemetry**: Crucial tool when advanced channels (throttle/steering) are missing to diagnose line geometry, turn-in points, apex clipping, and exit tracking.
 
 ### 8. `get_session_consistency_image(session_id, track, date, driver_name=None)`
 - Renders lap time evolution scatter plot over the session.
+

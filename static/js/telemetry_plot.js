@@ -163,16 +163,21 @@
           var distCol = findCol(['Lap Distance (m)', 'Lap Distance', 'LapDistance']);
           var timeCol = findCol(['Time']);
 
-          var requestedChannels = options.channels || ['speed', 'brake', 'throttle', 'steering', 'delta_time'];
+          var requestedChannels = options.channels || ['Speed', 'Throttle', 'Brake', 'Steering Angle', 'Delta Time'];
           var channelColMap = {};
 
+          function isDeltaTime(name) {
+            var s = (name || '').toLowerCase().replace('_', ' ').trim();
+            return s === 'delta time' || s === 'delta';
+          }
+
           requestedChannels.forEach(function(ch) {
-            var normCh = ch.toLowerCase();
-            if (normCh === 'speed') channelColMap[normCh] = findCol(['Speed', 'Speed (km/h)']);
-            else if (normCh === 'brake') channelColMap[normCh] = findCol(['Brake']);
-            else if (normCh === 'throttle') channelColMap[normCh] = findCol(['Throttle']);
-            else if (normCh === 'steering') channelColMap[normCh] = findCol(['Steering Angle', 'Steering Wheel Angle (deg)', 'Steering']);
-            else if (normCh !== 'delta_time') channelColMap[normCh] = findCol([ch]);
+            var normCh = ch.toLowerCase().trim();
+            if (normCh === 'speed' || normCh === 'speed (km/h)') channelColMap[ch] = findCol(['Speed', 'Speed (km/h)']);
+            else if (normCh === 'brake' || normCh === 'brake (%)') channelColMap[ch] = findCol(['Brake', 'Brake (%)']);
+            else if (normCh === 'throttle' || normCh === 'throttle (%)') channelColMap[ch] = findCol(['Throttle', 'Throttle (%)']);
+            else if (normCh === 'steering' || normCh === 'steering angle' || normCh.indexOf('steering') !== -1) channelColMap[ch] = findCol(['Steering Angle', 'Steering Wheel Angle (deg)', 'Steering']);
+            else if (!isDeltaTime(ch)) channelColMap[ch] = findCol([ch]);
           });
 
           var channelKeys = Object.keys(channelColMap);
@@ -345,14 +350,19 @@
         return self.fetchData(options).then(function(sessionData) {
           targetElem.innerHTML = ''; // clear loading state
 
-          var startM = options.start_m || 0;
-          var endM = options.end_m || 1000;
+          var startM = options.start_m !== undefined ? options.start_m : 0;
+          var endM = options.end_m !== undefined ? options.end_m : 1000;
           var requestedLapsNum = (options.laps || []).map(function(v) { return Number(v); });
-          var channels = options.channels || ['speed', 'brake', 'throttle', 'steering', 'delta_time'];
+          var channels = options.channels || ['Speed', 'Throttle', 'Brake', 'Steering Angle', 'Delta Time'];
           var verticalLines = options.vertical_lines || [];
           var highlightRanges = options.highlight_ranges || [];
           var lapStyles = options.lap_styles || {};
           var annotations = options.annotations || [];
+
+          function isDeltaTime(name) {
+            var s = (name || '').toLowerCase().replace('_', ' ').trim();
+            return s === 'delta time' || s === 'delta';
+          }
 
           var defaultColors = ['#10b981', '#f43f5e', '#38bdf8', '#f59e0b', '#a855f7', '#ec4899'];
           var numChannels = channels.length;
@@ -363,12 +373,14 @@
 
           // Highlight ranges (background rects)
           highlightRanges.forEach(function(hr) {
+            var hrStart = hr.start_m !== undefined ? hr.start_m : 0;
+            var hrEnd = hr.end_m !== undefined ? hr.end_m : 1000;
             shapes.push({
               type: 'rect',
               xref: 'x',
               yref: 'paper',
-              x0: hr.start_m,
-              x1: hr.end_m,
+              x0: hrStart,
+              x1: hrEnd,
               y0: 0,
               y1: 1,
               fillcolor: hr.color || 'rgba(255, 82, 82, 0.12)',
@@ -377,7 +389,7 @@
             });
             if (hr.label) {
               plotlyAnnotations.push({
-                x: (hr.start_m + hr.end_m) / 2,
+                x: (hrStart + hrEnd) / 2,
                 y: 1,
                 xref: 'x',
                 yref: 'paper',
@@ -391,12 +403,14 @@
 
           // Vertical lines (Apexes, Brake points)
           verticalLines.forEach(function(vl) {
+            var vlDist = vl.distance_m !== undefined ? vl.distance_m : 0;
+
             shapes.push({
               type: 'line',
               xref: 'x',
               yref: 'paper',
-              x0: vl.distance_m,
-              x1: vl.distance_m,
+              x0: vlDist,
+              x1: vlDist,
               y0: 0,
               y1: 1,
               line: {
@@ -407,7 +421,7 @@
             });
             if (vl.label) {
               plotlyAnnotations.push({
-                x: vl.distance_m,
+                x: vlDist,
                 y: 1.02,
                 xref: 'x',
                 yref: 'paper',
@@ -438,10 +452,10 @@
 
           var channelMinMax = {};
           channels.forEach(function(ch) {
-            channelMinMax[ch.toLowerCase()] = { min: Infinity, max: -Infinity };
+            channelMinMax[ch] = { min: Infinity, max: -Infinity };
           });
 
-          // Reference lap for delta_time (first lap in lapsToRender)
+          // Reference lap for Delta Time (first lap in lapsToRender)
           var refLapObj = lapsToRender.length > 0 ? lapsToRender[0] : null;
           var refPoints = (refLapObj && refLapObj.points) ? refLapObj.points : [];
           var refT_at_start = interpolateTimeAtDist(refPoints, startM);
@@ -462,7 +476,7 @@
             var lapTimes = [];
             var lapChannels = {};
 
-            channels.forEach(function(ch) { lapChannels[ch.toLowerCase()] = []; });
+            channels.forEach(function(ch) { lapChannels[ch] = []; });
 
             for (var p = 0; p < points.length; p++) {
               var pt = points[p];
@@ -471,10 +485,11 @@
                   lapDists.push(pt.dist);
                   lapTimes.push(pt.time || 0);
                   channels.forEach(function(ch) {
-                    var normCh = ch.toLowerCase();
-                    if (normCh !== 'delta_time') {
-                      var val = (pt[normCh] !== undefined && pt[normCh] !== null && !isNaN(pt[normCh])) ? pt[normCh] : (pt[ch] !== undefined ? pt[ch] : null);
-                      lapChannels[normCh].push(val);
+                    if (!isDeltaTime(ch)) {
+                      var normCh = ch.toLowerCase();
+                      var val = (pt[ch] !== undefined && pt[ch] !== null && !isNaN(pt[ch])) ? pt[ch] :
+                        ((pt[normCh] !== undefined && pt[normCh] !== null && !isNaN(pt[normCh])) ? pt[normCh] : null);
+                      lapChannels[ch].push(val);
                     }
                   });
                 }
@@ -485,11 +500,10 @@
 
             // Create subplots for channels
             channels.forEach(function(ch, chIdx) {
-              var normCh = ch.toLowerCase();
               var axisSuffix = chIdx === 0 ? '' : String(chIdx + 1);
-              var yData = lapChannels[normCh] || [];
+              var yData = lapChannels[ch] || [];
 
-              if (normCh === 'delta_time') {
+              if (isDeltaTime(ch)) {
                 yData = lapDists.map(function(d) {
                   var currentLapSegTime = interpolateTimeAtDist(points, d) - lapT_at_start;
                   var refSegTime = interpolateTimeAtDist(refPoints, d) - refT_at_start;
@@ -499,8 +513,8 @@
 
               yData.forEach(function(v) {
                 if (v !== null && v !== undefined && !isNaN(v)) {
-                  if (v < channelMinMax[normCh].min) channelMinMax[normCh].min = v;
-                  if (v > channelMinMax[normCh].max) channelMinMax[normCh].max = v;
+                  if (v < channelMinMax[ch].min) channelMinMax[ch].min = v;
+                  if (v > channelMinMax[ch].max) channelMinMax[ch].max = v;
                 }
               });
 
@@ -515,31 +529,49 @@
                 type: 'scatter',
                 mode: 'lines',
                 line: lineConfig,
-                hovertemplate: ch.toUpperCase() + ': %{y:.2f}<br>Dist: %{x:.1f}m<extra>' + lapLabel + '</extra>'
+                hovertemplate: ch + ': %{y:.2f}<br>Dist: %{x:.1f}m<extra>' + lapLabel + '</extra>'
               });
             });
           });
 
           // Text Annotations
           annotations.forEach(function(ann) {
-            var chIdx = channels.indexOf(ann.channel || channels[0]);
-            var yAxisRef = chIdx <= 0 ? 'y' : 'y' + (chIdx + 1);
-            plotlyAnnotations.push({
-              x: ann.distance_m,
+            var annDist = ann.distance_m !== undefined ? ann.distance_m : 0;
+            var targetCh = (ann.channel || channels[0] || '').toLowerCase().trim();
+            var chIdx = -1;
+            for (var c = 0; c < channels.length; c++) {
+              var normC = (channels[c] || '').toLowerCase().trim();
+              if (normC === targetCh || normC.indexOf(targetCh) !== -1 || targetCh.indexOf(normC) !== -1) {
+                chIdx = c;
+                break;
+              }
+            }
+            if (chIdx === -1) chIdx = 0;
+            var yAxisRef = chIdx === 0 ? 'y' : 'y' + (chIdx + 1);
+
+            var annObj = {
+              x: annDist,
               yref: yAxisRef,
-              text: ann.text,
+              text: ann.text || '',
               showarrow: true,
               arrowhead: 2,
-              arrowcolor: '#38bdf8',
+              arrowcolor: ann.color || '#38bdf8',
               font: { color: '#f8fafc', size: 11 },
               bgcolor: '#1e293b',
-              bordercolor: '#38bdf8',
+              bordercolor: ann.color || '#38bdf8',
               borderwidth: 1,
               borderpad: 4
-            });
+            };
+
+            if (ann.y !== undefined && ann.y !== null) {
+              annObj.y = ann.y;
+            }
+
+            plotlyAnnotations.push(annObj);
           });
 
           // Layout grid configuration
+          var plotHeight = options.height || (numChannels * 210);
           var layout = {
             paper_bgcolor: 'transparent',
             plot_bgcolor: '#0f172a',
@@ -549,6 +581,8 @@
             annotations: plotlyAnnotations,
             margin: { t: 30, b: 40, l: 60, r: 20 },
             hovermode: 'x unified',
+            dragmode: 'pan',
+            height: plotHeight,
             showlegend: true,
             legend: {
               orientation: 'h',
@@ -561,26 +595,28 @@
               title: { text: 'Distance (m)', font: { size: 12, color: '#94a3b8' } },
               range: [startM, endM],
               gridcolor: '#334155',
-              zerolinecolor: '#475569'
+              zerolinecolor: '#475569',
+              fixedrange: false
             }
           };
 
           // Y-Axes configuration
           channels.forEach(function(ch, chIdx) {
             var yKey = chIdx === 0 ? 'yaxis' : 'yaxis' + (chIdx + 1);
-            var normCh = ch.toLowerCase();
-            var titleText = ch.toUpperCase();
+            var normCh = ch.toLowerCase().trim();
+            var titleText = ch;
             if (normCh === 'speed') titleText = 'Speed (km/h)';
-            if (normCh === 'brake') titleText = 'Brake (%)';
-            if (normCh === 'throttle') titleText = 'Throttle (%)';
-            if (normCh === 'steering') titleText = 'Steering (deg)';
-            if (normCh === 'delta_time') titleText = 'Delta (s)';
+            else if (normCh === 'brake') titleText = 'Brake (%)';
+            else if (normCh === 'throttle') titleText = 'Throttle (%)';
+            else if (normCh === 'steering' || normCh === 'steering angle') titleText = 'Steering Angle (deg)';
+            else if (isDeltaTime(ch)) titleText = 'Delta Time (s)';
 
-            var mm = channelMinMax[normCh];
+            var mm = channelMinMax[ch];
             var yConfig = {
               title: { text: titleText, font: { size: 10, color: '#cbd5e1' } },
               gridcolor: '#1e293b',
-              zerolinecolor: '#334155'
+              zerolinecolor: '#334155',
+              fixedrange: true
             };
 
             if (normCh === 'speed' && mm && isFinite(mm.min) && isFinite(mm.max)) {
@@ -588,7 +624,7 @@
               var pad = Math.max(1.0, span * 0.1);
               yConfig.range = [Math.floor(mm.min - pad), Math.ceil(mm.max + pad)];
               yConfig.autorange = false;
-            } else if (normCh === 'delta_time' && mm && isFinite(mm.min) && isFinite(mm.max)) {
+            } else if (isDeltaTime(ch) && mm && isFinite(mm.min) && isFinite(mm.max)) {
               var dtMin = Math.min(0, mm.min);
               var dtMax = Math.max(0.05, mm.max);
               var pad = (dtMax - dtMin) * 0.15;
@@ -601,7 +637,8 @@
 
           var config = {
             responsive: true,
-            displayModeBar: false
+            displayModeBar: false,
+            scrollZoom: true
           };
 
           return Plotly.newPlot(targetElem, traces, layout, config);
@@ -648,5 +685,8 @@
     }
   };
 
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { TelemetryPlot: TelemetryPlot };
+  }
   global.TelemetryPlot = TelemetryPlot;
-})(typeof window !== 'undefined' ? window : this);
+})(typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : this));

@@ -1,6 +1,6 @@
 ---
 name: telemetry_analysis
-description: Analyzes karting telemetry data using MCP server tools and corner sub-agents, comparing fastest vs median and 75th percentile laps to produce an actionable interactive HTML coaching report in reports folder.
+description: Analyzes karting telemetry data using MCP server tools and corner sub-agents, comparing reference benchmark vs target laps (<3 laps per plot) with Delta T inflection point analysis, causation chain investigation (throttle/accel, steering, slip angles, trajectory), and actionable coaching guidance in HTML reports.
 ---
 
 # Telemetry Analysis Skill
@@ -14,9 +14,10 @@ This skill provides an autonomous, turn-by-turn workflow for analyzing karting t
 ```
 Orchestrator Agent
  ├── 1. Data Discovery (list_sessions, get_track_info, get_pace_summary, get_aggregates, get_stats)
- ├── 2. Corner Sub-Agent Delegation (1 sub-agent per turn: Turn 1, Turn 2, ...)
- ├── 3. Synthesis (Identify 1 or 2 most important actionable coaching takeaways)
- └── 4. HTML Report Generation (writes reports/<session_id>_telemetry_report.html with TelemetryPlot widgets)
+ ├── 2. Lap Selection (Keep <3 laps per plot: Benchmark vs Target Comparison Lap)
+ ├── 3. Corner Sub-Agent Delegation (Delta T inflection analysis, telemetry causation chain, trajectory)
+ ├── 4. Synthesis (Identify 1 or 2 most important actionable coaching takeaways)
+ └── 5. HTML Report Generation (writes reports/<session_id>_telemetry_report.html with TelemetryPlot widgets)
 ```
 
 ---
@@ -37,11 +38,11 @@ Orchestrator Agent
    - Call `get_pace_summary(track=..., date=..., driver_name=...)` to identify theoretical best lap vs actual best lap across all sessions on that date, total delta, and per-turn deltas.
    - Call `get_aggregates(track=..., date=..., driver_name=...)` to check per-turn time consistency (`turn_time_std_s`).
 
-5. **Select Cross-Session Reference Laps**:
-   Scan **all sessions** for that date via `get_stats(..., turn_index=N)` / `get_pace_summary` to select:
-   - **Fastest Corner Benchmark Lap**: When analyzing a specific corner (e.g. Turn 4), the benchmark reference lap **MUST be selected based on the fastest segment time for THAT SPECIFIC CORNER** (`turn_time_s` from `get_stats(..., turn_index=N)`), **NOT overall full lap time**. For example, if Lap 12 has the fastest Turn 4 corner time (9.042s), Lap 12 MUST be chosen as the Turn 4 benchmark reference lap, even if another lap had a faster overall full lap time.
-   - **2nd Fastest / Comparison Laps**: The next fastest corner laps or representative clean laps.
-   - **Time Loss Laps (~0.4s Lost)**: Target laps where significant time is lost in that specific corner (e.g., +0.35s to +0.45s corner delta) due to driver mistakes or line degradation.
+5. **Select Reference & Comparison Laps (Strict Plot Readability Rule)**:
+   - **Plot Readability Rule**: **Keep the number of laps shown on plots under 3** (typically **2 laps**: 1 Benchmark Lap vs 1 Target Comparison Lap; or at most 3 laps when contrasting a specific distribution like Benchmark vs Median vs 75th percentile) unless specifically asked to do differently. This prevents plot clutter and keeps traces clear and interpretable.
+   - Scan **all sessions** for that date via `get_stats(..., turn_index=N)` / `get_pace_summary` to select:
+     - **Fastest Corner Benchmark Lap**: When analyzing a specific corner (e.g. Turn 4), the benchmark reference lap **MUST be selected based on the fastest segment time for THAT SPECIFIC CORNER** (`turn_time_s` from `get_stats(..., turn_index=N)`), **NOT overall full lap time**. For example, if Lap 12 has the fastest Turn 4 corner time (9.042s), Lap 12 MUST be chosen as the Turn 4 benchmark reference lap, even if another lap had a faster overall full lap time.
+     - **Target Comparison Lap**: A representative median lap or a lap with a specific time loss (~0.3s to 0.5s delta) to diagnose the root cause of the slowdown.
 
 ---
 
@@ -50,30 +51,49 @@ Orchestrator Agent
 For **EACH** turn defined in `get_track_info`:
 Launch a dedicated sub-agent focusing exclusively on that turn index $N$ ($Turn\ 1, Turn\ 2, \dots$).
 
-### Sub-Agent Instructions & Scope:
+### Sub-Agent Scope & Plot Restrictions:
 1. Restrict visual and statistical analysis **only** to the distance range `start_m` to `end_m` of the target turn.
-2. Call `get_stats(track=..., date=..., turn_index=N)` for the target driver to compare:
+2. **Keep plotted laps under 3** (default to 2 laps: Benchmark Reference Lap vs Target Comparison Lap) for all visual inspection and report widgets.
+3. Call `get_stats(track=..., date=..., turn_index=N)` for the target driver to compare:
    - Turn time ($s$)
    - Entry speed ($km/h$)
    - Minimum apex speed ($km/h$)
    - Exit speed ($km/h$)
    - Straight exit speed ($km/h$)
    - Apex maximum steering angle ($deg$)
-3. Inspect internal plot images:
-   - Call `get_telemetry_plot(laps=[(date, track, session_id, lap_num), ...], start_m=..., end_m=..., channels=["Speed", "Brake", "Throttle", "Steering Angle", "delta_time"])`.
-   - Call `get_trajectory_plot(laps=[(date, track, session_id, lap_num), ...], start_m=..., end_m=..., color_mode="lap")`.
-     - `color_mode`: Can be `"lap"` (default, solid color per lap for line comparison), `"delta_t"` (reference lap in white, other laps green/yellow/red rate of time gained/lost), `"pedals"` (pedal inputs: green throttle / red brake / white coasting), `"accel"` (longitudinal acceleration: green accel / red decel), or `"speed"` (velocity heatmap). Sub-agents can use `"delta_t"` to visually inspect exactly where on the line the driver is losing time.
-4. Diagnose driver root cause actions (linking driver control inputs directly to chosen trajectory line geometry):
-   - **Line Geometry & Trajectory**: Wide vs tight entry approach, apex clipping distance, mid-corner trajectory arc, and exit line width.
-   - **Throttle Pickup & Lift Offs**: How entry line angle and apex trajectory dictate when full throttle can be picked up, or force mid-corner throttle chops/lifting.
-   - **Steering Inputs & Corrections**: How trajectory pinch or over-shooting forces over-steering, scrubbed minimum speed, or emergency counter-steering.
-   - **Braking & Entry Dynamics**: Braking point distance and trail-braking pressure shaped by the entry trajectory angle into the turn.
-   - **Time Delta Reference**: ALWAYS calculate time deltas relative to the fastest lap present on the plot/report.
-5. Generate `TelemetryPlot.js` JSON spec:
-   - Define `vertical_lines` for apex distance and braking initiation.
-   - Define `highlight_ranges` for braking zone and corner exit acceleration zone.
-   - Define `lap_styles` for fastest, median, and 75% laps.
-   - Define `annotations` pointing out exact telemetry deltas (e.g. "Apex Min Speed: 61.2 vs 58.4 km/h").
+
+---
+
+## Lap-to-Lap Comparison & Root Cause Causation Methodology
+
+When comparing laps, the core objective is to determine **why time was lost** and formulate **actionable things the driver can do to be faster**:
+
+### 1. Delta T Inflection Point Analysis
+- Inspect the **Delta Time ($\Delta T$)** channel across the corner distance.
+- Pinpoint the **exact meter marks / locations where $\Delta T$ begins to climb or steepens significantly** (identifying where time is actively lost: entry phase, apex phase, or exit acceleration phase).
+
+### 2. Telemetry Channels Inspection & Causation Chain
+Around each point where time is lost, inspect the relevant telemetry channels to establish the **causation chain** (Driver Control Input $\rightarrow$ Kart Dynamics / Attitude $\rightarrow$ Speed Deficit $\rightarrow$ Time Delta):
+- **Throttle / Accelerator**:
+  - Check for delayed throttle pickup, hesitation, throttle breathing/lifting, or partial application.
+  - *Fallback if throttle channel is not available*: Inspect **longitudinal acceleration (`accel` / `acceleration`)** to evaluate when positive drive begins and how aggressively the kart accelerates out of the corner.
+- **Steering Angle & Steering Inputs**:
+  - Check for excessive steering lock (causing front tire scrub and wiping off minimum apex speed).
+  - Look for sudden steering spikes, mid-corner steering corrections, or delayed steering unwind on corner exit.
+- **Slip Angles & Lateral Dynamics (if available)**:
+  - Inspect slip angles, lateral acceleration, or yaw rate to check for sliding, snap oversteer, rear instability, or excessive understeer scrub.
+- **Braking Dynamics (if available)**:
+  - Compare braking initiation point (meters), peak braking force, and trail-braking smoothness vs abrupt brake release or early overslowing.
+- **Other Available Channels**:
+  - Inspect Engine RPM (clutch slip, power band drop, or gearing effects) and speed deltas.
+
+### 3. Trajectory & Line Analysis (Crucial for GPS-Only & All Telemetry)
+- Call `get_trajectory_plot(laps=[...], start_m=..., end_m=..., color_mode="delta_t")` and `color_mode="lap"`.
+- **GPS-Only Telemetry Diagnosis**: When advanced sensor channels (throttle, steering, slip angles) are not available and only GPS is recorded, **the spatial trajectory is the primary diagnostic tool**. Analyze:
+  - **Entry Width & Turn-in Point**: Did an early turn-in pinch the apex radius? Did a narrow entry prevent carrying roll speed?
+  - **Apex Clipping & Geometric Arc**: Was the apex missed? Was the apex clipped too early (forcing a compromised exit)?
+  - **Mid-Corner Radius**: Did the driver maintain a smooth continuous radius or have to correct the line?
+  - **Exit Width**: Did the driver track out fully to the exit kerb to maximize exit radius, or did they pinch the exit?
 
 ---
 
@@ -81,7 +101,8 @@ Launch a dedicated sub-agent focusing exclusively on that turn index $N$ ($Turn\
 
 1. Collect all corner sub-agent reports.
 2. Rank turns by time delta and driver inconsistency.
-4. Keep the coaching advice clear, encouraging, and directly grounded in the telemetry evidence.
+3. Identify the 1 or 2 highest-priority coaching takeaways across the entire lap.
+4. Translate telemetry causation findings into clear, actionable advice the driver can execute on track.
 
 ---
 
@@ -106,6 +127,10 @@ ALL coaching text, explanations, and report summaries MUST be tailored for **you
    - Keep bullet points punchy, visual, and easy to remember when sitting in the kart on the dummy grid.
    - Give 1-2 simple visual cues for their next session (e.g. "Eye up the exit curb early, keep steering inputs smooth at the apex, and flatten out the wheel as you smash the throttle!").
 
+4. **Speed Units Standard (km/h Only)**:
+   - **Always use `km/h`** in all report text, coaching takeaways, coach summary boxes, table headers/cells, and plot annotations.
+   - If raw telemetry channels or intermediate calculations are recorded in m/s, convert them to km/h ($v_{\text{km/h}} = v_{\text{m/s}} \times 3.6$).
+
 ---
 
 ## Step 4: HTML Report Generation in Data Reports Folder
@@ -119,6 +144,8 @@ Generate a standalone HTML file in the reports directory at `<DATA_DIR>/reports/
   - Stats & Minimap Library: `<script type="module" src="/static/js/stats_plots.js"></script>`
   - TelemetryPlot Library: `<script src="/static/js/telemetry_plot.js"></script>`
   - TrajectoryPlot Module: `<script type="module" src="/static/js/trajectory_plot.js"></script>`
+
+- **Plot Lap Limit**: Always keep the number of laps displayed on `TelemetryPlot` and `TrajectoryPlot` widgets under 3 (default: 2 laps - Benchmark Reference Lap and Target Comparison Lap).
 
 - **No Hardcoded Plot Data (Anti-Hallucination & Clean Architecture)**:
   - Reports MUST NEVER hardcode raw arrays of lap times or plot data in scripts.
@@ -163,19 +190,20 @@ Generate a standalone HTML file in the reports directory at `<DATA_DIR>/reports/
       session_id: "...",
       track: "...",
       date: "...",
-      laps: [23, 15, 8],
+      league: "...",
+      class_name: "...",
+      laps: [23, 15], // Keep under 3 laps (Benchmark vs Target Lap)
       start_m: 12.0,
       end_m: 120.0,
-      channels: ["speed", "brake", "throttle", "steering", "delta_time"],
+      channels: ["Speed", "Throttle", "Brake", "Steering Angle", "Delta Time"],
       vertical_lines: [{ distance_m: 65.0, label: "Apex T1", color: "#38bdf8", style: "dashed" }],
       highlight_ranges: [{ start_m: 45.0, end_m: 65.0, label: "Braking Zone", color: "rgba(244, 63, 94, 0.12)" }],
       lap_styles: {
         "23": { color: "#10b981", width: 2.5, label: "Lap 23 (Fastest - 43.43s)" },
-        "15": { color: "#f59e0b", width: 1.5, label: "Lap 15 (Median - 44.10s)" },
-        "8": { color: "#f43f5e", width: 1.5, label: "Lap 8 (75% Lap - 44.58s)", style: "dashed" }
+        "15": { color: "#f59e0b", width: 1.5, label: "Lap 15 (Target - 44.10s)" }
       },
       annotations: [
-        { distance_m: 65.0, channel: "speed", text: "Min Speed: 61.2 vs 58.4 km/h" }
+        { distance_m: 65.0, channel: "Speed", text: "Min Speed: 61.2 vs 58.4 km/h" }
       ]
     });
   </script>
@@ -189,7 +217,10 @@ Generate a standalone HTML file in the reports directory at `<DATA_DIR>/reports/
       session_id: "...",
       track: "...",
       date: "...",
-      laps: [23, 15],
+      league: "...",
+      class_name: "...",
+      laps: [23, 15], // Keep under 3 laps
+      reference_lap: 23, // Explicit benchmark reference lap (drawn in white in delta_t mode)
       start_m: 12.0,
       end_m: 120.0,
       color_mode: "delta_t", // "delta_t" (reference lap in white, other laps green/yellow/red pace delta), "speed", "accel", "pedals", or "lap"
@@ -197,6 +228,12 @@ Generate a standalone HTML file in the reports directory at `<DATA_DIR>/reports/
     });
   </script>
   ```
+- **Reference Lap Disambiguation**:
+  - `TrajectoryPlot.render` accepts `reference_lap` in three formats:
+    1. **Tuple/Array (Multi-session disambiguation)**: `reference_lap: ["2026-08-02", "Llandow", "12_30_race_5_qualifying", 11]`
+    2. **Object**: `reference_lap: { session_id: "12_30_race_5_qualifying", lap: 11 }`
+    3. **Number** (single session): `reference_lap: 11`
+  - **Default**: If omitted, it automatically defaults to the **first lap in `options.laps`** (which is always the Benchmark Reference Lap in coaching reports).
 - **Time Delta Calculation**: Time deltas in report tables and annotations MUST always be calculated relative to the fastest lap present on the plot/report (the reference lap with delta = 0.000s).
 - **Cross-Session Benchmark Laps**: When selecting the fastest reference lap for a corner, ALWAYS scan across ALL sessions available for that date (e.g. morning practice, afternoon practice, heat/race sessions) so the benchmark represents the driver's absolute best performance of the day.
 - **GPS Coordinates for Trajectory Plots**: Spatial trajectory plots (`TrajectoryPlot.js` / `get_trajectory_plot`) MUST ALWAYS use `Longitude` and `Latitude` GPS coordinates (in degrees) as the primary spatial channels. Supports `color_mode: "delta_t"` to visually display time gained (green) or lost (red) relative to the reference lap.

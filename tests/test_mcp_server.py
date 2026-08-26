@@ -59,11 +59,11 @@ def test_get_track_info_success() -> None:
     assert len(info["turns"]) > 0
 
     t1 = info["turns"][0]
-    assert "name" in t1
-    assert "start" in t1
-    assert "apex" in t1
-    assert "end" in t1
     assert t1["name"] == "1"
+    assert isinstance(t1["start"], float)
+    assert isinstance(t1["apex"], list)
+    assert isinstance(t1["end"], float)
+    assert t1["start"] < t1["end"]
 
 
 def test_get_track_info_invalid_track() -> None:
@@ -79,7 +79,7 @@ def test_get_telemetry_plot_success() -> None:
         ],
         start_m=12.0,
         end_m=120.0,
-        channels=["Speed", "Brake", "delta_time"]
+        channels=["Speed", "Throttle", "Brake", "Steering Angle", "Delta Time"]
     )
     assert isinstance(result, Image)
     img_bytes = result.data

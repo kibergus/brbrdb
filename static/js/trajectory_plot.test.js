@@ -23,6 +23,13 @@ function createMockElement(tagName = 'div') {
     const listeners = {};
     const attributes = {};
     const style = {};
+    let className = '';
+    const classList = {
+        add: vi.fn(c => { if (!className.includes(c)) className = (className + ' ' + c).trim(); }),
+        remove: vi.fn(c => { className = className.replace(new RegExp(`\\b${c}\\b`, 'g'), '').trim(); }),
+        toggle: vi.fn(c => { if (className.includes(c)) classList.remove(c); else classList.add(c); }),
+        contains: vi.fn(c => className.includes(c))
+    };
 
     return {
         tagName: tagName.toUpperCase(),
@@ -30,7 +37,9 @@ function createMockElement(tagName = 'div') {
         style,
         innerHTML: '',
         textContent: '',
-        className: '',
+        get className() { return className; },
+        set className(v) { className = String(v); },
+        classList,
         setAttribute(k, v) { attributes[k] = String(v); },
         getAttribute(k) { return attributes[k]; },
         appendChild(child) {
@@ -42,7 +51,7 @@ function createMockElement(tagName = 'div') {
             const walk = (el) => {
                 if (!el || !el.children) return;
                 for (const c of el.children) {
-                    if (selector.startsWith('.') && c.className === selector.slice(1)) results.push(c);
+                    if (selector.startsWith('.') && c.className.split(/\s+/).includes(selector.slice(1))) results.push(c);
                     walk(c);
                 }
             };
@@ -105,17 +114,24 @@ describe('TrajectoryPlot.js', () => {
                 if (selector === '#plot-container') return mockContainer;
                 return null;
             }),
-            createElement: vi.fn().mockImplementation((tagName) => createMockElement(tagName))
+            createElement: vi.fn().mockImplementation((tagName) => createMockElement(tagName)),
+            addEventListener: vi.fn()
         });
 
         function MockMap() {
             this.fitBounds = vi.fn();
+            this.setMapTypeId = vi.fn();
+            this.mapTypes = { set: vi.fn() };
             this.data = {
                 setStyle: vi.fn(),
-                addGeoJson: vi.fn()
+                addGeoJson: vi.fn(),
+                setMap: vi.fn()
             };
         }
-        function MockPolyline() {}
+        function MockPolyline() {
+            this.setOptions = vi.fn();
+            this.setMap = vi.fn();
+        }
         function MockMarker() { this.addListener = vi.fn(); }
         function MockInfoWindow() {}
         function MockBounds() {
@@ -129,7 +145,8 @@ describe('TrajectoryPlot.js', () => {
                 Polyline: vi.fn().mockImplementation(function() { return new MockPolyline(); }),
                 Marker: vi.fn().mockImplementation(function() { return new MockMarker(); }),
                 InfoWindow: vi.fn().mockImplementation(function() { return new MockInfoWindow(); }),
-                LatLngBounds: vi.fn().mockImplementation(function() { return new MockBounds(); })
+                LatLngBounds: vi.fn().mockImplementation(function() { return new MockBounds(); }),
+                Size: vi.fn().mockImplementation(function(w, h) { return { width: w, height: h }; })
             }
         };
     });
@@ -143,7 +160,8 @@ describe('TrajectoryPlot.js', () => {
     it('renders Google Maps plot correctly with pre-loaded telemetry data', async () => {
         const plot = await TrajectoryPlot.render(mockContainer, {
             data: mockTelemetryData,
-            laps: [1, 2]
+            laps: [1, 2],
+            color_mode: 'lap'
         });
 
         expect(plot.map).not.toBeNull();
@@ -154,31 +172,59 @@ describe('TrajectoryPlot.js', () => {
         expect(legend).not.toBeNull();
     });
 
-    it('supports distance cropping using start_m and end_m', async () => {
+    it('defaults height to 600px (1.5x higher)', async () => {
+        const plot = await TrajectoryPlot.render(mockContainer, {
+            data: mockTelemetryData,
+            laps: [1]
+        });
+
+        expect(plot.options.height).toBe('600px');
+    });
+
+    it('renders full lap trajectory and uses crop range for initial map bounds focus', async () => {
         const plot = await TrajectoryPlot.render(mockContainer, {
             data: mockTelemetryData,
             laps: [1],
             start_m: 50,
-            end_m: 150
+            end_m: 150,
+            color_mode: 'lap'
         });
 
         const croppedPoints = plot._cropPoints(mockTelemetryData.laps[0].points);
         expect(croppedPoints.length).toBe(3);
         expect(croppedPoints[0].dist).toBe(50);
         expect(croppedPoints[2].dist).toBe(150);
+
+        // Polylines are drawn for the full 5-point lap
+        expect(plot.lapPolylines[1].length).toBe(1);
     });
 
-    it('renders extra information markers on Google Maps', async () => {
+    it('renders extra information markers on Google Maps with canonical distance_m and time', async () => {
         const plot = await TrajectoryPlot.render(mockContainer, {
             data: mockTelemetryData,
             laps: [1],
             markers: [
                 { time: 10.0, label: 'Apex T1', color: '#ff5252', description: 'Maximum G-force' },
-                { dist: 150, label: 'Brake Point', color: '#38bdf8' }
+                { distance_m: 150, label: 'Brake Point', color: '#38bdf8' },
+                { distance_m: 100, label: 'Apex T2' }
             ]
         });
 
-        expect(global.google.maps.Marker).toHaveBeenCalledTimes(2);
+        expect(global.google.maps.Marker).toHaveBeenCalledTimes(3);
+    });
+
+    it('supports start and end crop aliases without _m suffix', async () => {
+        const plot = await TrajectoryPlot.render(mockContainer, {
+            data: mockTelemetryData,
+            laps: [1],
+            start: 50,
+            end: 150
+        });
+
+        const croppedPoints = plot._cropPoints(mockTelemetryData.laps[0].points);
+        expect(croppedPoints.length).toBe(3);
+        expect(croppedPoints[0].dist).toBe(50);
+        expect(croppedPoints[2].dist).toBe(150);
     });
 
     it('updates markers dynamically using updateMarkers()', async () => {
@@ -205,8 +251,136 @@ describe('TrajectoryPlot.js', () => {
             });
 
             expect(plot.options.color_mode).toBe(mode);
-            // In segment mode with two 5-point laps, it should create 8 segment polylines (4 per lap)
+            // In segment mode with two 5-point full laps, it should create 8 segment polylines (4 per lap)
             expect(global.google.maps.Polyline).toHaveBeenCalledTimes(8);
         }
     });
+
+    it('switches map types between satellite, track limits (kartsim), and hybrid', async () => {
+        const plot = await TrajectoryPlot.render(mockContainer, {
+            data: mockTelemetryData,
+            laps: [1]
+        });
+
+        plot.setMapType('kartsim');
+        expect(plot.currentMapType).toBe('kartsim');
+        expect(plot.map.setMapTypeId).toHaveBeenCalledWith('solid_dark');
+        expect(plot.map.data.setMap).toHaveBeenCalledWith(plot.map);
+
+        plot.setMapType('satellite');
+        expect(plot.currentMapType).toBe('satellite');
+        expect(plot.map.setMapTypeId).toHaveBeenCalledWith('satellite');
+        expect(plot.map.data.setMap).toHaveBeenCalledWith(null);
+
+        plot.setMapType('hybrid');
+        expect(plot.currentMapType).toBe('hybrid');
+        expect(plot.map.setMapTypeId).toHaveBeenCalledWith('satellite');
+        expect(plot.map.data.setMap).toHaveBeenCalledWith(plot.map);
+    });
+
+    it('supports switching trajectory color modes dynamically', async () => {
+        const plot = await TrajectoryPlot.render(mockContainer, {
+            data: mockTelemetryData,
+            laps: [1, 2],
+            color_mode: 'lap'
+        });
+
+        expect(plot.polylines.length).toBe(2);
+
+        plot.setColorMode('delta_t');
+        expect(plot.currentColorMode).toBe('delta_t');
+        expect(plot.polylines.length).toBe(8);
+    });
+
+    it('highlights target lap on hover in legend and restores on mouseleave', async () => {
+        const plot = await TrajectoryPlot.render(mockContainer, {
+            data: mockTelemetryData,
+            laps: [1, 2],
+            color_mode: 'lap'
+        });
+
+        plot.highlightLap(1, true);
+        expect(plot.lapPolylines[1][0].polyline.setOptions).toHaveBeenCalledWith(
+            expect.objectContaining({
+                strokeWeight: 8,
+                strokeOpacity: 1.0,
+                zIndex: 1000
+            })
+        );
+        expect(plot.lapPolylines[2][0].polyline.setOptions).toHaveBeenCalledWith(
+            expect.objectContaining({
+                strokeWeight: 2.5,
+                strokeOpacity: 0.35,
+                zIndex: 1
+            })
+        );
+
+        plot.highlightLap(1, false);
+        expect(plot.lapPolylines[1][0].polyline.setOptions).toHaveBeenCalledWith(
+            expect.objectContaining({
+                strokeWeight: 4,
+                strokeOpacity: 0.95
+            })
+        );
+    });
+
+    it('respects explicit reference_lap in delta_t mode', async () => {
+        const plot = await TrajectoryPlot.render(mockContainer, {
+            data: mockTelemetryData,
+            laps: [1, 2],
+            color_mode: 'delta_t',
+            reference_lap: 2
+        });
+
+        expect(plot.lapPolylines[2]).toBeDefined();
+        expect(plot.lapPolylines[2].length).toBeGreaterThan(0);
+    });
+
+    it('disambiguates reference_lap across multiple sessions using tuple or object', async () => {
+        const multiSessionData = [
+            {
+                session_id: 'session_A',
+                date: '2026-08-02',
+                track: 'Llandow',
+                lap: 5,
+                points: [{ x: -3.496, y: 51.434, dist: 0, time: 0, speed: 20 }, { x: -3.497, y: 51.435, dist: 50, time: 2.5, speed: 20 }]
+            },
+            {
+                session_id: 'session_B',
+                date: '2026-08-02',
+                track: 'Llandow',
+                lap: 5,
+                points: [{ x: -3.496, y: 51.434, dist: 0, time: 0, speed: 20 }, { x: -3.497, y: 51.435, dist: 50, time: 2.4, speed: 21 }]
+            }
+        ];
+
+        // Disambiguate using tuple
+        const plot1 = await TrajectoryPlot.render(mockContainer, {
+            data: multiSessionData,
+            color_mode: 'delta_t',
+            reference_lap: ['2026-08-02', 'Llandow', 'session_B', 5]
+        });
+        const refLap1 = plot1._resolveReferenceLap();
+        expect(refLap1.session_id).toBe('session_B');
+        expect(refLap1.lap_num).toBe(5);
+
+        // Disambiguate using object
+        const plot2 = await TrajectoryPlot.render(mockContainer, {
+            data: multiSessionData,
+            color_mode: 'delta_t',
+            reference_lap: { session_id: 'session_A', lap: 5 }
+        });
+        const refLap2 = plot2._resolveReferenceLap();
+        expect(refLap2.session_id).toBe('session_A');
+        expect(refLap2.lap_num).toBe(5);
+
+        // Default when omitted: first lap
+        const plot3 = await TrajectoryPlot.render(mockContainer, {
+            data: multiSessionData,
+            color_mode: 'delta_t'
+        });
+        const refLap3 = plot3._resolveReferenceLap();
+        expect(refLap3.session_id).toBe('session_A');
+    });
 });
+

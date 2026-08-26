@@ -26,9 +26,46 @@ def get_track_info_impl(track: str) -> dict[str, Any]:
     Parameters:
     - track: Track name (e.g. "Lydd", "Lydd Karting 2026", "Buckmore Park")
 
-    Returns track information dictionary.
+    Returns track information dictionary with canonical field names:
+    - lap_length (meters)
+    - sector_end (list of meter boundaries)
+    - turns: list of objects with { name, start, apex, end } (distances in meters)
     """
-    track_data = db.get_track(track)
-    if not track_data:
+    raw_track_data = db.get_track(track)
+    if not raw_track_data:
         raise ValueError(f"Track not found: {track!r}")
+
+    track_data: dict[str, Any] = dict(raw_track_data)
+
+    lap_len_raw = track_data.get('lap_length', 0.0)
+    track_data['lap_length'] = float(lap_len_raw)
+
+    sec_ends = track_data.get('sector_end', [])
+    track_data['sector_end'] = [float(s) for s in sec_ends] if isinstance(sec_ends, list) else []
+
+    turns = track_data.get('turns', [])
+    normalized_turns: list[dict[str, Any]] = []
+    if isinstance(turns, list):
+        for turn in turns:
+            if isinstance(turn, dict):
+                t = dict(turn)
+                start_val = float(t.get('start', 0.0))
+                end_val = float(t.get('end', 0.0))
+
+                raw_apex = t.get('apex', [])
+                if isinstance(raw_apex, (int, float)):
+                    apex_list = [float(raw_apex)]
+                elif isinstance(raw_apex, list):
+                    apex_list = [float(a) for a in raw_apex if a is not None]
+                else:
+                    apex_list = []
+
+                normalized_turns.append({
+                    'name': str(t.get('name', '')),
+                    'start': start_val,
+                    'apex': apex_list,
+                    'end': end_val
+                })
+
+    track_data['turns'] = normalized_turns
     return track_data

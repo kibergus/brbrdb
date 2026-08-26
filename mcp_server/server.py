@@ -23,7 +23,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Image
 from database import db
-from mcp_server import image_tools, lap_tools
+from mcp_server import image_tools, lap_tools, track_tools
 
 mcp = FastMCP("brbrdb")
 
@@ -134,10 +134,7 @@ def get_track_info(track: str) -> dict[str, Any]:
 
     Returns track information dictionary.
     """
-    track_data = db.get_track(track)
-    if not track_data:
-        raise ValueError(f"Track not found: {track!r}")
-    return track_data
+    return track_tools.get_track_info_impl(track)
 
 
 @mcp.tool()
@@ -165,7 +162,7 @@ def get_telemetry_plot(
     - laps: List of (date, track, session_id, lap_number) tuples or lists.
     - start_m: Start distance along the lap in metres
     - end_m: End distance along the lap in metres
-    - channels: Channels to plot (e.g. ["Speed", "Brake", "Throttle", "Steering Angle", "delta_time"])
+    - channels: Channels to plot (e.g. ["Speed", "Throttle", "Brake", "Steering Angle", "Delta Time"])
 
     Returns Image object containing PNG plot data.
     """

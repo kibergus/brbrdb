@@ -183,10 +183,12 @@
         session_id: "{{ session_id }}",
         track: "{{ track_name }}",
         date: "{{ date }}",
+        league: "{{ league }}",
+        class_name: "{{ class_name }}",
         laps: [{{ benchmark_lap_num }}, {{ median_lap_num }}],
         start_m: {{ turn_start_m }},
         end_m: {{ turn_end_m }},
-        channels: ["speed", "brake", "throttle", "steering", "delta_time"]
+        channels: ["Speed", "Throttle", "Brake", "Steering Angle", "Delta Time"]
       });
     });
   </script>

@@ -15,16 +15,31 @@
  * ==============================================================================
  */
 
-/**
- * TrajectoryPlot.js
- * Google Maps trajectory plot rendering library for brbrdb.
- * Renders spatial telemetry lines (Latitude, Longitude) directly on interactive Google Maps (Satellite/Hybrid/Roadmap).
- * Supports lap filtering, distance cropping (start_m / end_m), custom lap styling, and marker overlays.
- */
-
 import { parseLapTime } from './utils.js';
 
 const DEFAULT_COLORS = ['#10b981', '#f43f5e', '#38bdf8', '#f59e0b', '#a855f7', '#ec4899', '#14b8a6'];
+
+export const SolidBackgroundMapType = function () {
+    if (typeof google !== 'undefined' && google.maps && google.maps.Size) {
+        this.tileSize = new google.maps.Size(256, 256);
+    } else {
+        this.tileSize = { width: 256, height: 256 };
+    }
+    this.maxZoom = 21;
+    this.name = 'Track Limits';
+    this.alt = 'Show track limits on solid background';
+};
+
+SolidBackgroundMapType.prototype.getTile = function (coord, zoom, ownerDocument) {
+    const doc = ownerDocument || (typeof document !== 'undefined' ? document : null);
+    const div = doc ? doc.createElement('div') : { style: {} };
+    const w = (this.tileSize && this.tileSize.width) ? this.tileSize.width : 256;
+    const h = (this.tileSize && this.tileSize.height) ? this.tileSize.height : 256;
+    div.style.width = w + 'px';
+    div.style.height = h + 'px';
+    div.style.backgroundColor = '#0f172a';
+    return div;
+};
 
 export class TrajectoryPlot {
     /**
@@ -50,22 +65,27 @@ export class TrajectoryPlot {
             league: options.league || '',
             class_name: options.class_name || '',
             laps: Array.isArray(options.laps) ? options.laps : [],
-            start_m: options.start_m !== undefined && options.start_m !== null ? Number(options.start_m) : null,
-            end_m: options.end_m !== undefined && options.end_m !== null ? Number(options.end_m) : null,
+            start_m: (options.start_m !== undefined && options.start_m !== null) ? Number(options.start_m) : (options.start !== undefined && options.start !== null ? Number(options.start) : null),
+            end_m: (options.end_m !== undefined && options.end_m !== null) ? Number(options.end_m) : (options.end !== undefined && options.end !== null ? Number(options.end) : null),
             markers: Array.isArray(options.markers) ? options.markers : [],
             lap_styles: options.lap_styles || {},
             data: options.data || null,
             width: options.width || '100%',
-            height: options.height || '400px',
+            height: options.height || '600px',
             map_type: options.map_type || 'satellite',
             theme: options.theme || 'dark',
-            color_mode: options.color_mode || 'lap'
+            color_mode: options.color_mode || 'delta_t',
+            reference_lap: options.reference_lap !== undefined ? options.reference_lap : null
         };
 
         this.map = null;
         this.polylines = [];
+        this.lapPolylines = {};
         this.googleMarkers = [];
         this.lapsData = [];
+        this.currentMapType = this.options.map_type;
+        this.currentColorMode = this.options.color_mode;
+        this.legendElement = null;
     }
 
     async init() {
@@ -97,6 +117,30 @@ export class TrajectoryPlot {
         }
         spec.key = spec.key || `${spec.session_id}_L${spec.lap}`;
         return spec;
+    }
+
+    _resolveReferenceLap() {
+        if (!this.lapsData || this.lapsData.length === 0) return null;
+
+        if (this.options.reference_lap !== undefined && this.options.reference_lap !== null) {
+            const spec = this._parseLapSpec(this.options.reference_lap);
+            const match = this.lapsData.find(lap => {
+                if (spec.session_id && lap.session_id && lap.session_id !== spec.session_id && !lap.session_id.startsWith(spec.session_id)) {
+                    return false;
+                }
+                if (spec.date && lap.date && lap.date !== spec.date) {
+                    return false;
+                }
+                if (spec.track && lap.track && lap.track !== spec.track) {
+                    return false;
+                }
+                return Number(lap.lap_num) === Number(spec.lap);
+            });
+            if (match) return match;
+        }
+
+        // Default to the first lap in lapsData (which maps to options.laps[0] Benchmark Lap)
+        return this.lapsData[0];
     }
 
     async _loadData() {
@@ -211,6 +255,8 @@ export class TrajectoryPlot {
                         loadedLaps.push({
                             lap_num: spec.lap,
                             session_id: spec.session_id,
+                            date: spec.date,
+                            track: spec.track,
                             label: spec.label,
                             color: spec.color,
                             lap_time: l.lap_time || '',
@@ -286,18 +332,45 @@ export class TrajectoryPlot {
         }
 
         const normalizedLaps = [];
-        const requestedLaps = this.options.laps.map(l => Number(l));
+        const lapSpecs = (this.options.laps || []).map(l => this._parseLapSpec(l));
 
         for (const s of sessions) {
-            const laps = s.laps || [];
+            const laps = s.laps || (s.points ? [s] : []);
             for (const l of laps) {
-                const lapNum = Number(l.lap_num || l.lap);
-                if (requestedLaps.length === 0 || requestedLaps.includes(lapNum)) {
+                const lapNum = Number(l.lap_num !== undefined ? l.lap_num : (l.lap !== undefined ? l.lap : 0));
+                const lapSessionId = l.session_id || s.session_id || this.options.session_id || '';
+                const lapDate = l.date || s.date || this.options.date || '';
+                const lapTrack = l.track || s.track || this.options.track || '';
+
+                let matchedSpec = null;
+                if (lapSpecs.length === 0) {
+                    matchedSpec = true;
+                } else {
+                    matchedSpec = lapSpecs.find(spec => {
+                        if (spec.session_id && lapSessionId && lapSessionId !== spec.session_id && !lapSessionId.startsWith(spec.session_id)) {
+                            return false;
+                        }
+                        if (spec.date && lapDate && lapDate !== spec.date) {
+                            return false;
+                        }
+                        if (spec.track && lapTrack && lapTrack !== spec.track) {
+                            return false;
+                        }
+                        return Number(spec.lap) === lapNum;
+                    });
+                }
+
+                if (matchedSpec) {
                     const points = this._extractPoints(l.points || l);
                     if (points.length > 0) {
                         normalizedLaps.push({
                             lap_num: lapNum,
-                            lap_time: l.lap_time || '',
+                            session_id: lapSessionId,
+                            date: lapDate,
+                            track: lapTrack,
+                            label: (matchedSpec && typeof matchedSpec === 'object' && matchedSpec.label) || l.label || s.label || '',
+                            color: (matchedSpec && typeof matchedSpec === 'object' && matchedSpec.color) || l.color || s.color || '',
+                            lap_time: l.lap_time || s.lap_time || '',
                             points: points
                         });
                     }
@@ -317,6 +390,9 @@ export class TrajectoryPlot {
             let dist = p.dist !== undefined ? p.dist : (p.distance_m !== undefined ? p.distance_m : (p.dist_m !== undefined ? p.dist_m : i));
             let time = p.time !== undefined ? p.time : (p.t !== undefined ? p.t : 0);
             let speed = p.speed !== undefined ? p.speed : 0;
+            let throttle = p.throttle !== undefined ? p.throttle : 0;
+            let brake = p.brake !== undefined ? p.brake : 0;
+            let acc = p.acc !== undefined ? p.acc : (p.g_lon !== undefined ? p.g_lon * 9.81 : 0);
 
             if (x !== null && y !== null && !isNaN(x) && !isNaN(y)) {
                 pts.push({
@@ -324,7 +400,10 @@ export class TrajectoryPlot {
                     y: Number(y),
                     dist: Number(dist),
                     time: Number(time),
-                    speed: Number(speed)
+                    speed: Number(speed),
+                    throttle: Number(throttle),
+                    brake: Number(brake),
+                    acc: Number(acc)
                 });
             }
         }
@@ -358,14 +437,13 @@ export class TrajectoryPlot {
         wrapper.style.width = '100%';
         wrapper.style.height = this.options.height;
         wrapper.style.background = this.options.theme === 'light' ? '#f8fafc' : '#090d16';
-        wrapper.style.borderRadius = '8px';
+        wrapper.style.borderRadius = '12px';
         wrapper.style.overflow = 'hidden';
         wrapper.style.position = 'relative';
 
         let allPoints = [];
         for (const lap of this.lapsData) {
-            const cropped = this._cropPoints(lap.points);
-            allPoints = allPoints.concat(cropped);
+            allPoints = allPoints.concat(lap.points || []);
         }
 
         if (allPoints.length === 0) {
@@ -397,23 +475,37 @@ export class TrajectoryPlot {
         this.container.appendChild(wrapper);
 
         this.map = new google.maps.Map(mapDiv, {
-            mapTypeId: this.options.map_type || 'satellite',
+            mapTypeId: (this.currentMapType === 'kartsim') ? 'solid_dark' : 'satellite',
             gestureHandling: 'greedy',
             disableDefaultUI: false,
             zoomControl: true,
-            mapTypeControl: true,
+            mapTypeControl: false,
             scaleControl: true,
             streetViewControl: false,
             fullscreenControl: true
         });
 
-        this.map.data.setStyle({
-            strokeColor: '#38bdf8',
-            strokeOpacity: 0.8,
-            strokeWeight: 2,
-            fillColor: '#38bdf8',
-            fillOpacity: 0.15
-        });
+        if (this.map.mapTypes) {
+            this.map.mapTypes.set('solid_dark', new SolidBackgroundMapType());
+        }
+
+        if (this.map.data) {
+            this.map.data.setStyle({
+                strokeColor: '#38bdf8',
+                strokeOpacity: 0.8,
+                strokeWeight: 2,
+                fillColor: '#38bdf8',
+                fillOpacity: 0.15
+            });
+
+            if (typeof this.map.data.setMap === 'function') {
+                if (this.currentMapType === 'satellite') {
+                    this.map.data.setMap(null);
+                } else {
+                    this.map.data.setMap(this.map);
+                }
+            }
+        }
 
         if (this.options.track) {
             const apiBase = this.options.api_base || '';
@@ -421,96 +513,384 @@ export class TrajectoryPlot {
             fetch(trackUrl, { credentials: 'include' })
                 .then(res => res.ok ? res.json() : null)
                 .then(data => {
-                    if (data && data.geojson && this.map) {
+                    if (data && data.geojson && this.map && this.map.data) {
                         this.map.data.addGeoJson(data.geojson);
                     }
                 })
                 .catch(err => console.warn('TrajectoryPlot: Failed to load track limits GeoJSON', err));
         }
 
+        // Fit initial bounds: if start_m/end_m specified, zoom into corner; otherwise full track
         const bounds = new google.maps.LatLngBounds();
-        const legendItems = [];
-        const colorMode = (this.options.color_mode || 'lap').toLowerCase();
+        let hasBoundsPoints = false;
 
-        // Calculate global speed min/max
+        this.lapsData.forEach(lap => {
+            const pts = (this.options.start_m !== null || this.options.end_m !== null)
+                ? this._cropPoints(lap.points || [])
+                : (lap.points || []);
+            pts.forEach(p => {
+                bounds.extend({ lat: p.y, lng: p.x });
+                hasBoundsPoints = true;
+            });
+        });
+
+        if (hasBoundsPoints && !bounds.isEmpty()) {
+            this.map.fitBounds(bounds);
+        }
+
+        // Draw full-lap polylines
+        this._drawPolylines();
+
+        // Markers
+        this._renderMarkers();
+
+        // UI Controls & Legend
+        this._renderMapTypeSelector(wrapper);
+        this._renderColorModeSelector(wrapper);
+        this._renderLegend(wrapper);
+    }
+
+    _drawPolylines() {
+        if (this.polylines) {
+            this.polylines.forEach(p => {
+                if (p && typeof p.setMap === 'function') {
+                    p.setMap(null);
+                }
+            });
+        }
+        this.polylines = [];
+        this.lapPolylines = {};
+
+        if (!this.map || !this.lapsData || this.lapsData.length === 0) return;
+
+        const colorMode = (this.currentColorMode || 'delta_t').toLowerCase();
+
         let minSpeed = Infinity;
         let maxSpeed = -Infinity;
         this.lapsData.forEach(lap => {
-            const croppedPts = this._cropPoints(lap.points);
-            croppedPts.forEach(p => {
+            (lap.points || []).forEach(p => {
                 const s = p.speed || 0;
                 if (s < minSpeed) minSpeed = s;
                 if (s > maxSpeed) maxSpeed = s;
             });
         });
-        // Calculate fastest lap for delta_t mode
-        let fastestLap = null;
-        let fastestTime = Infinity;
-        this.lapsData.forEach(lap => {
-            const t = lap.lap_time ? parseLapTime(lap.lap_time) : null;
-            if (t !== null && !isNaN(t) && t < fastestTime) {
-                fastestTime = t;
-                fastestLap = lap;
-            }
-        });
-        if (!fastestLap && this.lapsData.length > 0) {
-            fastestLap = this.lapsData[0];
-        }
+
+        const fastestLap = this._resolveReferenceLap();
 
         this.lapsData.forEach((lap, idx) => {
             const lapNum = lap.lap_num;
             const style = this.options.lap_styles[lapNum] || {};
             const color = style.color || DEFAULT_COLORS[idx % DEFAULT_COLORS.length];
             const strokeWidth = style.width || 4;
-            const label = style.label || `Lap ${lapNum}` + (lap.lap_time ? ` (${lap.lap_time})` : '');
+            const points = lap.points || [];
 
-            const croppedPts = this._cropPoints(lap.points);
-            if (croppedPts.length > 0) {
-                croppedPts.forEach(p => {
-                    bounds.extend({ lat: p.y, lng: p.x });
+            if (points.length === 0) return;
+
+            this.lapPolylines[lapNum] = [];
+
+            if (colorMode === 'lap' || points.length < 2) {
+                const path = points.map(p => ({ lat: p.y, lng: p.x }));
+                const polyline = new google.maps.Polyline({
+                    path: path,
+                    geodesic: true,
+                    strokeColor: color,
+                    strokeOpacity: 0.95,
+                    strokeWeight: strokeWidth,
+                    zIndex: 10,
+                    map: this.map
                 });
+                this.polylines.push(polyline);
+                this.lapPolylines[lapNum].push({
+                    polyline,
+                    defaultWeight: strokeWidth,
+                    defaultOpacity: 0.95,
+                    defaultZIndex: 10
+                });
+            } else {
+                for (let i = 0; i < points.length - 1; i++) {
+                    const p1 = points[i];
+                    const p2 = points[i + 1];
+                    const segColor = this._calculateSegmentColor(p1, color, colorMode, maxSpeed, minSpeed, lap, fastestLap, p2);
+                    const isRef = (colorMode === 'delta_t' && (lap === fastestLap || (fastestLap && lap.lap_num === fastestLap.lap_num && lap.session_id === fastestLap.session_id)));
+                    const defaultZIndex = isRef ? 5 : 10;
 
-                if (colorMode === 'lap' || croppedPts.length < 2) {
-                    const path = croppedPts.map(p => ({ lat: p.y, lng: p.x }));
-                    const polyline = new google.maps.Polyline({
-                        path: path,
+                    const segmentPolyline = new google.maps.Polyline({
+                        path: [{ lat: p1.y, lng: p1.x }, { lat: p2.y, lng: p2.x }],
                         geodesic: true,
-                        strokeColor: color,
+                        strokeColor: segColor,
                         strokeOpacity: 0.95,
                         strokeWeight: strokeWidth,
+                        zIndex: defaultZIndex,
                         map: this.map
                     });
-                    this.polylines.push(polyline);
-                } else {
-                    // Segment-based coloring (pedals, accel, speed, delta_t)
-                    for (let i = 0; i < croppedPts.length - 1; i++) {
-                        const p1 = croppedPts[i];
-                        const p2 = croppedPts[i + 1];
-                        const segColor = this._calculateSegmentColor(p1, color, colorMode, maxSpeed, minSpeed, lap, fastestLap, p2);
-
-                        const segmentPolyline = new google.maps.Polyline({
-                            path: [{ lat: p1.y, lng: p1.x }, { lat: p2.y, lng: p2.x }],
-                            geodesic: true,
-                            strokeColor: segColor,
-                            strokeOpacity: 0.95,
-                            strokeWeight: strokeWidth,
-                            map: this.map
-                        });
-                        this.polylines.push(segmentPolyline);
-                    }
+                    this.polylines.push(segmentPolyline);
+                    this.lapPolylines[lapNum].push({
+                        polyline: segmentPolyline,
+                        defaultWeight: strokeWidth,
+                        defaultOpacity: 0.95,
+                        defaultZIndex
+                    });
                 }
-
-                const legendColor = (colorMode === 'delta_t' && (lap === fastestLap || (fastestLap && lap && lap.lap_num === fastestLap.lap_num && lap.session_id === fastestLap.session_id))) ? '#ffffff' : color;
-                legendItems.push({ color: legendColor, label });
             }
         });
+    }
 
-        if (!bounds.isEmpty()) {
-            this.map.fitBounds(bounds);
+    _renderMapTypeSelector(wrapper) {
+        const controls = document.createElement('div');
+        controls.className = 'map-overlay-controls';
+        controls.style.position = 'absolute';
+        controls.style.top = '12px';
+        controls.style.left = '12px';
+        controls.style.zIndex = '10';
+
+        const selector = document.createElement('div');
+        selector.className = 'custom-selector';
+        selector.id = 'map-type-selector';
+
+        const types = [
+            { id: 'satellite', label: 'Satellite' },
+            { id: 'kartsim', label: 'Track Limits' },
+            { id: 'hybrid', label: 'Hybrid' }
+        ];
+
+        types.forEach(t => {
+            const item = document.createElement('div');
+            item.className = 'selector-item' + (this.currentMapType === t.id ? ' active' : '');
+            item.setAttribute('data-type', t.id);
+            item.textContent = t.label;
+            item.addEventListener('click', () => {
+                this.setMapType(t.id);
+            });
+            selector.appendChild(item);
+        });
+
+        controls.appendChild(selector);
+        wrapper.appendChild(controls);
+    }
+
+    _renderColorModeSelector(wrapper) {
+        const controls = document.createElement('div');
+        controls.className = 'map-overlay-controls map-overlay-right';
+        controls.style.position = 'absolute';
+        controls.style.top = '12px';
+        controls.style.right = '12px';
+        controls.style.zIndex = '10';
+
+        const dropdown = document.createElement('div');
+        dropdown.className = 'custom-dropdown';
+
+        const modes = [
+            { id: 'delta_t', label: 'Δ t', dotClass: 'mode-delta-t' },
+            { id: 'pedals', label: 'Brake/Throttle', dotClass: 'mode-pedals' },
+            { id: 'speed', label: 'Speed', dotClass: 'mode-speed' },
+            { id: 'accel', label: 'Acceleration', dotClass: 'mode-accel' },
+            { id: 'lap', label: 'Lap Colors', dotClass: 'mode-lap' }
+        ];
+
+        const activeMode = modes.find(m => m.id === this.currentColorMode) || modes[0];
+
+        const triggerBtn = document.createElement('button');
+        triggerBtn.className = 'dropdown-trigger-btn';
+        triggerBtn.title = 'Trajectory Color Mode';
+        triggerBtn.innerHTML = `
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/>
+                <circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/>
+                <circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/>
+                <circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/>
+                <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.92 0 1.7-.72 1.7-1.61 0-.43-.17-.83-.44-1.13-.24-.26-.4-.63-.4-1.04 0-.84.67-1.5 1.5-1.5H16c3.31 0 6-2.69 6-6 0-4.96-4.49-9-10-9z"/>
+            </svg>
+            <span class="traj-color-current-label">${activeMode.label}</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M6 9l6 6 6-6"/>
+            </svg>
+        `;
+
+        triggerBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dropdown.classList.toggle('open');
+        });
+
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+            document.addEventListener('click', () => {
+                dropdown.classList.remove('open');
+            });
         }
 
-        this._renderMarkers();
-        this._renderLegend(wrapper, legendItems);
+        const menu = document.createElement('div');
+        menu.className = 'dropdown-menu';
+
+        modes.forEach(m => {
+            const item = document.createElement('div');
+            item.className = 'dropdown-item' + (this.currentColorMode === m.id ? ' active' : '');
+            item.setAttribute('data-mode', m.id);
+            item.innerHTML = `
+                <span class="item-color-dot ${m.dotClass}"></span>
+                <span>${m.label}</span>
+            `;
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                dropdown.classList.remove('open');
+                this.setColorMode(m.id);
+            });
+            menu.appendChild(item);
+        });
+
+        dropdown.appendChild(triggerBtn);
+        dropdown.appendChild(menu);
+        controls.appendChild(dropdown);
+        wrapper.appendChild(controls);
+    }
+
+    _renderLegend(wrapper) {
+        if (!this.lapsData || this.lapsData.length === 0) return;
+
+        const legend = document.createElement('div');
+        legend.className = 'trajectory-legend';
+        legend.style.position = 'absolute';
+        legend.style.top = '58px';
+        legend.style.left = '12px';
+        legend.style.background = 'rgba(15, 23, 42, 0.85)';
+        legend.style.backdropFilter = 'blur(8px)';
+        legend.style.padding = '8px 12px';
+        legend.style.borderRadius = '8px';
+        legend.style.border = '1px solid rgba(255, 255, 255, 0.1)';
+        legend.style.color = '#f8fafc';
+        legend.style.fontSize = '12px';
+        legend.style.zIndex = '10';
+        legend.style.boxShadow = '0 4px 16px rgba(0,0,0,0.4)';
+        legend.style.maxWidth = '300px';
+
+        this.lapsData.forEach((lap, idx) => {
+            const lapNum = lap.lap_num;
+            const style = this.options.lap_styles[lapNum] || {};
+            const color = style.color || DEFAULT_COLORS[idx % DEFAULT_COLORS.length];
+            const label = style.label || `Lap ${lapNum}` + (lap.lap_time ? ` (${lap.lap_time})` : '');
+
+            const row = document.createElement('div');
+            row.className = 'trajectory-legend-item';
+            row.style.display = 'flex';
+            row.style.alignItems = 'center';
+            row.style.padding = '4px 6px';
+            row.style.borderRadius = '4px';
+            row.style.cursor = 'pointer';
+            row.style.transition = 'all 0.15s ease';
+            row.setAttribute('data-lap', lapNum);
+
+            const box = document.createElement('span');
+            box.style.width = '14px';
+            box.style.height = '4px';
+            box.style.background = color;
+            box.style.marginRight = '8px';
+            box.style.borderRadius = '2px';
+            box.style.flexShrink = '0';
+
+            const txt = document.createElement('span');
+            txt.textContent = label;
+
+            row.appendChild(box);
+            row.appendChild(txt);
+
+            row.addEventListener('mouseenter', () => {
+                this.highlightLap(lapNum, true);
+                row.style.background = 'rgba(56, 189, 248, 0.2)';
+            });
+
+            row.addEventListener('mouseleave', () => {
+                this.highlightLap(lapNum, false);
+                row.style.background = 'transparent';
+            });
+
+            legend.appendChild(row);
+        });
+
+        wrapper.appendChild(legend);
+        this.legendElement = legend;
+    }
+
+    highlightLap(lapNum, active) {
+        Object.keys(this.lapPolylines).forEach(key => {
+            const isTarget = Number(key) === Number(lapNum);
+            const polyList = this.lapPolylines[key] || [];
+
+            polyList.forEach(entry => {
+                const p = entry.polyline;
+                if (!p || typeof p.setOptions !== 'function') return;
+
+                if (active) {
+                    if (isTarget) {
+                        p.setOptions({
+                            strokeWeight: 8,
+                            strokeOpacity: 1.0,
+                            zIndex: 1000
+                        });
+                    } else {
+                        p.setOptions({
+                            strokeWeight: 2.5,
+                            strokeOpacity: 0.35,
+                            zIndex: 1
+                        });
+                    }
+                } else {
+                    p.setOptions({
+                        strokeWeight: entry.defaultWeight || 4,
+                        strokeOpacity: entry.defaultOpacity || 0.95,
+                        zIndex: entry.defaultZIndex || 10
+                    });
+                }
+            });
+        });
+    }
+
+    setMapType(type) {
+        this.currentMapType = type;
+        if (this.container) {
+            this.container.querySelectorAll('.selector-item').forEach(item => {
+                if (item.getAttribute('data-type') === type) {
+                    item.classList.add('active');
+                } else {
+                    item.classList.remove('active');
+                }
+            });
+        }
+        if (this.map) {
+            if (type === 'satellite' || type === 'hybrid') {
+                this.map.setMapTypeId('satellite');
+            } else if (type === 'kartsim') {
+                this.map.setMapTypeId('solid_dark');
+            }
+            if (this.map.data && typeof this.map.data.setMap === 'function') {
+                this.map.data.setMap(type === 'satellite' ? null : this.map);
+            }
+        }
+    }
+
+    setColorMode(mode) {
+        this.currentColorMode = mode;
+        this.options.color_mode = mode;
+
+        if (this.container) {
+            const labelEl = this.container.querySelector('.traj-color-current-label');
+            const modes = [
+                { id: 'delta_t', label: 'Δ t' },
+                { id: 'pedals', label: 'Brake/Throttle' },
+                { id: 'speed', label: 'Speed' },
+                { id: 'accel', label: 'Acceleration' },
+                { id: 'lap', label: 'Lap Colors' }
+            ];
+            const found = modes.find(m => m.id === mode);
+            if (labelEl && found) labelEl.textContent = found.label;
+
+            this.container.querySelectorAll('.dropdown-item').forEach(item => {
+                if (item.getAttribute('data-mode') === mode) {
+                    item.classList.add('active');
+                } else {
+                    item.classList.remove('active');
+                }
+            });
+        }
+
+        this._drawPolylines();
     }
 
     _interpolateMultiStopColor(val, stops) {
@@ -538,7 +918,7 @@ export class TrajectoryPlot {
 
     _calculateSegmentColor(p, defaultColor, mode, maxSpeed = 100, minSpeed = 0, lap = null, fastestLap = null, p2 = null) {
         if (!p) return defaultColor || '#ffffff';
-        const currentMode = mode || this.options.color_mode || 'lap';
+        const currentMode = mode || this.currentColorMode || this.options.color_mode || 'lap';
 
         if (currentMode === 'delta_t') {
             if (!fastestLap || !fastestLap.points || fastestLap.points.length === 0 || lap === fastestLap || (lap && fastestLap && lap.lap_num === fastestLap.lap_num && lap.session_id === fastestLap.session_id)) {
@@ -647,8 +1027,8 @@ export class TrajectoryPlot {
             let closestPoint = null;
             if (m.time !== undefined && m.time !== null) {
                 closestPoint = this._findPointByTime(targetLap.points, Number(m.time));
-            } else if (m.dist !== undefined && m.dist !== null) {
-                closestPoint = this._findPointByDistance(targetLap.points, Number(m.dist));
+            } else if (m.distance_m !== undefined && m.distance_m !== null) {
+                closestPoint = this._findPointByDistance(targetLap.points, Number(m.distance_m));
             }
 
             if (!closestPoint) return;
@@ -677,47 +1057,6 @@ export class TrajectoryPlot {
                 });
             }
         });
-    }
-
-    _renderLegend(wrapper, legendItems) {
-        if (!legendItems || legendItems.length === 0) return;
-
-        const legend = document.createElement('div');
-        legend.className = 'trajectory-legend';
-        legend.style.position = 'absolute';
-        legend.style.top = '12px';
-        legend.style.right = '12px';
-        legend.style.background = 'rgba(15, 23, 42, 0.85)';
-        legend.style.backdropFilter = 'blur(6px)';
-        legend.style.padding = '8px 12px';
-        legend.style.borderRadius = '6px';
-        legend.style.color = '#f8fafc';
-        legend.style.fontSize = '12px';
-        legend.style.zIndex = '10';
-        legend.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
-
-        legendItems.forEach(item => {
-            const row = document.createElement('div');
-            row.style.display = 'flex';
-            row.style.alignItems = 'center';
-            row.style.marginBottom = '4px';
-
-            const box = document.createElement('span');
-            box.style.width = '12px';
-            box.style.height = '3px';
-            box.style.background = item.color;
-            box.style.marginRight = '8px';
-            box.style.borderRadius = '2px';
-
-            const txt = document.createElement('span');
-            txt.textContent = item.label;
-
-            row.appendChild(box);
-            row.appendChild(txt);
-            legend.appendChild(row);
-        });
-
-        wrapper.appendChild(legend);
     }
 
     _findPointByTime(points, targetTime) {
@@ -756,3 +1095,4 @@ if (typeof window !== 'undefined') {
     window.TrajectoryPlot = TrajectoryPlot;
     window.renderTrajectoryPlot = TrajectoryPlot.render;
 }
+

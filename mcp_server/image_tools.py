@@ -30,6 +30,7 @@ from mcp_server import lap_tools
 # Use non-interactive Agg backend to render images in headless server environment without GUI dependencies
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.ticker as ticker  # noqa: E402
 
 
 def _parse_time_seconds(time_str: str) -> float:
@@ -95,16 +96,26 @@ def extract_raw_lap_data(
     if dist_idx == -1:
         raise ValueError(f"Distance column not found in telemetry file {csv_path}")
 
+    def find_header_col(name: str) -> str:
+        for h in header:
+            if h == name or h.lower() == name.lower():
+                return h
+        raise ValueError(f"Channel {name!r} not found in telemetry columns: {header}")
+
+    def is_delta_time_ch(ch_name: str) -> bool:
+        return ch_name.lower().replace('_', ' ').strip() == 'delta time'
+
+    channel_col_map: dict[str, str] = {}
     for ch in channels:
-        if ch != 'delta_time' and ch not in header:
-            raise ValueError(f"Channel {ch!r} not found in telemetry columns: {header}")
+        if not is_delta_time_ch(ch):
+            channel_col_map[ch] = find_header_col(ch)
 
     lap_set = set(laps)
     raw_lap_data: dict[int, dict[str, list[float]]] = {
         l_num: {'dist': [], 'time': []} for l_num in laps
     }
     for ch in channels:
-        if ch != 'delta_time':
+        if not is_delta_time_ch(ch):
             for l_num in laps:
                 raw_lap_data[l_num][ch] = []
 
@@ -124,8 +135,8 @@ def extract_raw_lap_data(
             raw_lap_data[lap_val]['time'].append(time_val)
 
             for ch in channels:
-                if ch != 'delta_time':
-                    c_idx = header.index(ch)
+                if not is_delta_time_ch(ch):
+                    c_idx = header.index(channel_col_map[ch])
                     val_str = row[c_idx].strip()
                     val = float(val_str) if val_str != '' else np.nan
                     raw_lap_data[lap_val][ch].append(val)
@@ -146,9 +157,12 @@ def interpolate_lap_channels(
     start_m: float,
     end_m: float
 ) -> tuple[np.ndarray, dict[int | str, dict[str, np.ndarray]]]:
-    """Interpolate raw lap channels onto a uniform distance grid and compute delta_time."""
+    """Interpolate raw lap channels onto a uniform distance grid and compute Delta Time."""
     dists_grid = np.linspace(start_m, end_m, num=500)
     interp_lap_data: dict[int | str, dict[str, np.ndarray]] = {}
+
+    def is_delta_time_ch(ch_name: str) -> bool:
+        return ch_name.lower().replace('_', ' ').strip() == 'delta time'
 
     for l_num in laps:
         l_dist = np.array(raw_lap_data[l_num]['dist'])
@@ -164,11 +178,12 @@ def interpolate_lap_channels(
         interp_lap_data[l_num] = {'time': interp_segment_time}
 
         for ch in channels:
-            if ch != 'delta_time':
+            if not is_delta_time_ch(ch):
                 c_vals = np.array(raw_lap_data[l_num][ch])[sort_order]
                 interp_lap_data[l_num][ch] = np.interp(dists_grid, l_dist, c_vals)
 
-    if 'delta_time' in channels:
+    delta_ch = next((ch for ch in channels if is_delta_time_ch(ch)), None)
+    if delta_ch:
         ref_lap = laps[0]
         ref_time = interp_lap_data[ref_lap]['time']
         ref_segment_time = ref_time - ref_time[0]
@@ -176,7 +191,7 @@ def interpolate_lap_channels(
         for l_num in laps:
             t = interp_lap_data[l_num]['time']
             l_segment_time = t - t[0]
-            interp_lap_data[l_num]['delta_time'] = l_segment_time - ref_segment_time
+            interp_lap_data[l_num][delta_ch] = l_segment_time - ref_segment_time
 
     return dists_grid, interp_lap_data
 
@@ -219,13 +234,29 @@ def render_stacked_telemetry_plot(
                 ax.set_ylim(min_s - pad, max_s + pad)
 
         ax.set_ylabel(ch, fontsize=10)
-        ax.grid(True, linestyle='--', alpha=0.3)
 
         if idx == 0:
             ax.legend(loc='upper right', frameon=True, facecolor='#18181b', edgecolor='#27272a')
             ax.set_title(
                 f"Telemetry Comparison - Session: {session_id}", fontsize=12, fontweight='bold'
             )
+
+    dist_span = float(dists_grid[-1] - dists_grid[0]) if len(dists_grid) > 1 else 100.0
+    if dist_span <= 150:
+        major_step = 10.0
+        minor_step = 2.0
+    elif dist_span <= 500:
+        major_step = 25.0
+        minor_step = 5.0
+    else:
+        major_step = 50.0
+        minor_step = 10.0
+
+    for ax in axes:
+        ax.xaxis.set_major_locator(ticker.MultipleLocator(major_step))
+        ax.xaxis.set_minor_locator(ticker.MultipleLocator(minor_step))
+        ax.grid(True, which='major', linestyle='--', alpha=0.4, color='#64748b')
+        ax.grid(True, which='minor', linestyle=':', alpha=0.2, color='#475569')
 
     axes[-1].set_xlabel("Distance (m)", fontsize=10)
 
@@ -344,6 +375,62 @@ def _get_segment_color(
     return lap_color
 
 
+def _latlon_to_mercator(lon: float, lat: float) -> tuple[float, float]:
+    """Convert (lon, lat) in degrees to Web Mercator (EPSG:3857) (x, y) meters to preserve angles."""
+    r = 6378137.0
+    x = r * math.radians(lon)
+    lat_clamped = min(max(lat, -89.5), 89.5)
+    lat_rad = math.radians(lat_clamped)
+    y = r * math.log(math.tan(math.pi / 4.0 + lat_rad / 2.0))
+    return x, y
+
+
+def _render_track_boundaries(ax: plt.Axes, track_name: str) -> bool:
+    """Render track boundary lines from database GeoJSON metadata in Mercator projection."""
+    track_data = db.get_track(track_name)
+    if not track_data or 'geojson' not in track_data:
+        return False
+
+    geojson = track_data.get('geojson', {})
+    features = geojson.get('features', []) if isinstance(geojson, dict) else []
+    if not features:
+        return False
+
+    rendered_any = False
+    for feat in features:
+        if not isinstance(feat, dict):
+            continue
+        geom = feat.get('geometry', {})
+        geom_type = geom.get('type')
+        coords = geom.get('coordinates', [])
+
+        if geom_type == 'LineString' and coords:
+            m_pts = [_latlon_to_mercator(c[0], c[1]) for c in coords if len(c) >= 2]
+            bx = [p[0] for p in m_pts]
+            by = [p[1] for p in m_pts]
+            if bx and by:
+                ax.plot(bx, by, color='#94a3b8', linewidth=1.5, linestyle='-', alpha=0.85, zorder=1)
+                rendered_any = True
+        elif geom_type == 'MultiLineString' and coords:
+            for line in coords:
+                m_pts = [_latlon_to_mercator(c[0], c[1]) for c in line if len(c) >= 2]
+                bx = [p[0] for p in m_pts]
+                by = [p[1] for p in m_pts]
+                if bx and by:
+                    ax.plot(bx, by, color='#94a3b8', linewidth=1.5, linestyle='-', alpha=0.85, zorder=1)
+                    rendered_any = True
+        elif geom_type == 'Polygon' and coords:
+            for ring in coords:
+                m_pts = [_latlon_to_mercator(c[0], c[1]) for c in ring if len(c) >= 2]
+                bx = [p[0] for p in m_pts]
+                by = [p[1] for p in m_pts]
+                if bx and by:
+                    ax.plot(bx, by, color='#94a3b8', linewidth=1.5, linestyle='-', alpha=0.85, zorder=1)
+                    rendered_any = True
+
+    return rendered_any
+
+
 def render_trajectory_plot(
     laps: list[tuple[str, str, str, int] | list[Any] | dict[str, Any]],
     start_m: float | None = None,
@@ -365,7 +452,8 @@ def render_trajectory_plot(
     fig, ax = plt.subplots(figsize=(8, 8))
     colors = ['#10b981', '#f43f5e', '#38bdf8', '#f59e0b', '#a855f7', '#ec4899']
 
-    full_track_rendered = False
+    has_boundaries = _render_track_boundaries(ax, first_track)
+    full_track_pts: list[tuple[float, float]] = []
     all_lap_pts = []
 
     for idx_l, (date, track, session_id, lap_num) in enumerate(parsed_laps):
@@ -387,57 +475,27 @@ def render_trajectory_plot(
         header = [c.strip() for c in csv_rows[0]]
         data_rows = csv_rows[1:]
 
-        lap_idx = header.index('Lap') if 'Lap' in header else -1
-        dist_idx = -1
-        for col_name in ['Lap Distance (m)', 'Lap Distance', 'LapDistance']:
-            if col_name in header:
-                dist_idx = header.index(col_name)
-                break
+        def find_col(*candidates: str) -> int:
+            for cand in candidates:
+                for idx, h in enumerate(header):
+                    if h == cand or h.lower() == cand.lower():
+                        return idx
+            return -1
 
-        x_idx = -1
-        for col_name in ['Longitude', 'x', 'pos_x']:
-            if col_name in header:
-                x_idx = header.index(col_name)
-                break
-
-        y_idx = -1
-        for col_name in ['Latitude', 'y', 'z', 'pos_y', 'pos_z']:
-            if col_name in header:
-                y_idx = header.index(col_name)
-                break
-
-        speed_idx = -1
-        for col_name in ['Speed', 'speed', 'Ground Speed']:
-            if col_name in header:
-                speed_idx = header.index(col_name)
-                break
-
-        throttle_idx = -1
-        for col_name in ['Throttle', 'Throttle (%)', 'throttle']:
-            if col_name in header:
-                throttle_idx = header.index(col_name)
-                break
-
-        brake_idx = -1
-        for col_name in ['Brake', 'Brake (%)', 'brake']:
-            if col_name in header:
-                brake_idx = header.index(col_name)
-                break
-
-        glon_idx = -1
-        for col_name in ['GForceLon', 'gforcelon']:
-            if col_name in header:
-                glon_idx = header.index(col_name)
-                break
-
-        time_idx = header.index('Time') if 'Time' in header else -1
+        lap_idx = find_col('Lap')
+        dist_idx = find_col('Lap Distance', 'Lap Distance (m)', 'LapDistance')
+        x_idx = find_col('Longitude', 'x')
+        y_idx = find_col('Latitude', 'y', 'z')
+        speed_idx = find_col('Speed')
+        throttle_idx = find_col('Throttle')
+        brake_idx = find_col('Brake')
+        glon_idx = find_col('GForceLon')
+        time_idx = find_col('Time')
 
         if lap_idx == -1 or dist_idx == -1 or x_idx == -1 or y_idx == -1:
             raise ValueError(f"Trajectory coordinates missing in {csv_path}")
 
-        full_track_pts: list[tuple[float, float]] = []
         lap_pts: list[dict[str, float]] = []
-
         prev_speed = 0.0
         prev_time = 0.0
 
@@ -449,6 +507,8 @@ def render_trajectory_plot(
                 d_val = float(row[dist_idx])
                 x_val = float(row[x_idx])
                 y_val = float(row[y_idx])
+                if -180.0 <= x_val <= 180.0 and -90.0 <= y_val <= 90.0:
+                    x_val, y_val = _latlon_to_mercator(x_val, y_val)
 
                 speed_val = float(row[speed_idx]) if speed_idx != -1 else 0.0
                 if speed_val <= 50.0 and speed_val > 0.0:
@@ -469,22 +529,10 @@ def render_trajectory_plot(
                     prev_speed = speed_kmh
                     prev_time = t_sec
 
-                if not full_track_rendered:
+                if not has_boundaries and idx_l == 0:
                     full_track_pts.append((x_val, y_val))
 
                 if l_val == lap_num:
-                    if start_m is not None and end_m is not None:
-                        if start_m <= end_m:
-                            if not (start_m <= d_val <= end_m):
-                                continue
-                        else:
-                            if not (d_val >= start_m or d_val <= end_m):
-                                continue
-                    elif start_m is not None and d_val < start_m:
-                        continue
-                    elif end_m is not None and d_val > end_m:
-                        continue
-
                     lap_pts.append({
                         'x': x_val,
                         'y': y_val,
@@ -498,11 +546,10 @@ def render_trajectory_plot(
             except (ValueError, IndexError):
                 continue
 
-        if not full_track_rendered and full_track_pts and (start_m is not None or end_m is not None):
+        if not has_boundaries and full_track_pts and (start_m is not None or end_m is not None):
             fx = [p[0] for p in full_track_pts]
             fy = [p[1] for p in full_track_pts]
             ax.plot(fx, fy, color='#334155', linestyle='--', linewidth=1.5, alpha=0.6, label="Full Track")
-            full_track_rendered = True
 
         all_lap_pts.append((lap_num, session_id, colors[idx_l % len(colors)], lap_pts))
 
@@ -525,7 +572,7 @@ def render_trajectory_plot(
         lap_label = f"Lap {lap_num} ({session_id})" + (" [Ref]" if (color_mode == 'delta_t' and is_ref) else "")
 
         if color_mode == 'lap' or len(lap_pts) < 2:
-            ax.plot(lx, ly, color=lap_color, linewidth=2.5, label=lap_label)
+            ax.plot(lx, ly, color=lap_color, linewidth=2.5, label=lap_label, zorder=3)
         else:
             segments = []
             segment_colors: list[tuple[float, float, float, float] | str] = []
@@ -564,20 +611,169 @@ def render_trajectory_plot(
                     )
                 segment_colors.append(col)
 
-            lc_z = 1 if (color_mode == 'delta_t' and is_ref) else 2
+            lc_z = 2 if (color_mode == 'delta_t' and is_ref) else 3
             lc = LineCollection(segments, colors=segment_colors, linewidths=2.5, zorder=lc_z)
             ax.add_collection(lc)
             # Dummy line for legend entry
             legend_col = '#ffffff' if (color_mode == 'delta_t' and is_ref) else lap_color
             ax.plot([], [], color=legend_col, linewidth=2.5, label=lap_label)
 
-        # Start and end markers
-        marker_col = '#ffffff' if (color_mode == 'delta_t' and is_ref) else lap_color
-        ax.plot(lx[0], ly[0], marker='o', color=marker_col, markersize=6)
-        ax.plot(lx[-1], ly[-1], marker='s', color=marker_col, markersize=6)
+        # Whole lap start and end markers (if not zoomed into a specific corner)
+        if start_m is None and end_m is None:
+            marker_col = '#ffffff' if (color_mode == 'delta_t' and is_ref) else lap_color
+            ax.plot(lx[0], ly[0], marker='o', color=marker_col, markersize=6, zorder=4)
+            ax.plot(lx[-1], ly[-1], marker='s', color=marker_col, markersize=6, zorder=4)
 
-    ax.set_aspect('equal', adjustable='datalim')
-    ax.grid(True, linestyle='--', alpha=0.3)
+    # Cross-track distance markers and Turn boundaries along official track center_line
+    track_data = db.get_track(first_track) or {}
+    cl = track_data.get('center_line', [])
+
+    if cl:
+        m_pts = [_latlon_to_mercator(p['lon'], p['lat']) for p in cl]
+        cl_d = np.array([p['dist'] for p in cl])
+        cl_x = np.array([p[0] for p in m_pts])
+        cl_y = np.array([p[1] for p in m_pts])
+        sort_idx = np.argsort(cl_d)
+        cl_d_sorted = cl_d[sort_idx]
+        cl_x_sorted = cl_x[sort_idx]
+        cl_y_sorted = cl_y[sort_idx]
+    elif ref_lap_pts:
+        cl_d = np.array([p['d'] for p in ref_lap_pts])
+        cl_x = np.array([p['x'] for p in ref_lap_pts])
+        cl_y = np.array([p['y'] for p in ref_lap_pts])
+        sort_idx = np.argsort(cl_d)
+        cl_d_sorted = cl_d[sort_idx]
+        cl_x_sorted = cl_x[sort_idx]
+        cl_y_sorted = cl_y[sort_idx]
+    else:
+        cl_d_sorted = np.array([])
+        cl_x_sorted = np.array([])
+        cl_y_sorted = np.array([])
+
+    if len(cl_d_sorted) > 1:
+        def _draw_perpendicular_line(
+            d_target: float,
+            half_width_m: float,
+            color: str,
+            linewidth: float = 1.2,
+            linestyle: str = '-',
+            zorder: int = 5,
+            label: str | None = None
+        ) -> None:
+            d_min, d_max = float(cl_d_sorted[0]), float(cl_d_sorted[-1])
+            if not (d_min <= d_target <= d_max):
+                return
+
+            cx = float(np.interp(d_target, cl_d_sorted, cl_x_sorted))
+            cy = float(np.interp(d_target, cl_d_sorted, cl_y_sorted))
+
+            d_prev = max(d_min, d_target - 1.0)
+            d_next = min(d_max, d_target + 1.0)
+            x_prev = float(np.interp(d_prev, cl_d_sorted, cl_x_sorted))
+            y_prev = float(np.interp(d_prev, cl_d_sorted, cl_y_sorted))
+            x_next = float(np.interp(d_next, cl_d_sorted, cl_x_sorted))
+            y_next = float(np.interp(d_next, cl_d_sorted, cl_y_sorted))
+
+            dx = x_next - x_prev
+            dy = y_next - y_prev
+            length_m = math.hypot(dx, dy)
+            if length_m < 1e-6:
+                return
+
+            nx = -dy / length_m
+            ny = dx / length_m
+
+            x1 = cx - half_width_m * nx
+            y1 = cy - half_width_m * ny
+            x2 = cx + half_width_m * nx
+            y2 = cy + half_width_m * ny
+
+            ax.plot(
+                [x1, x2], [y1, y2], color=color, linewidth=linewidth, linestyle=linestyle, zorder=zorder, label=label
+            )
+
+        # 5m cross-track distance markers
+        d_max_val = float(cl_d_sorted[-1])
+        d_curr = 0.0
+        while d_curr <= d_max_val:
+            is_major = (int(round(d_curr)) % 25 == 0)
+            hw = 5.0 if is_major else 3.5
+            col = '#64748b' if is_major else '#334155'
+            lw = 1.2 if is_major else 0.8
+            _draw_perpendicular_line(d_curr, half_width_m=hw, color=col, linewidth=lw, zorder=2)
+            d_curr += 5.0
+
+        # Prominent Turn Start and End boundary lines across the track
+        if start_m is not None:
+            _draw_perpendicular_line(
+                start_m,
+                half_width_m=7.0,
+                color='#38bdf8',
+                linewidth=2.5,
+                zorder=6,
+                label=f"Turn Start ({start_m:.0f}m)",
+            )
+
+        if end_m is not None:
+            _draw_perpendicular_line(
+                end_m,
+                half_width_m=7.0,
+                color='#f43f5e',
+                linewidth=2.5,
+                zorder=6,
+                label=f"Turn End ({end_m:.0f}m)",
+            )
+
+    # Focus axis limits onto the corner while showing full trajectories flowing through
+    if (start_m is not None or end_m is not None):
+        turn_pts = []
+        for _, _, _, pts in all_lap_pts:
+            for p in pts:
+                d = p['d']
+                if start_m is not None and end_m is not None:
+                    if start_m <= end_m:
+                        in_turn = (start_m <= d <= end_m)
+                    else:
+                        in_turn = (d >= start_m or d <= end_m)
+                elif start_m is not None:
+                    in_turn = (d >= start_m)
+                elif end_m is not None:
+                    in_turn = (d <= end_m)
+                else:
+                    in_turn = True
+                if in_turn:
+                    turn_pts.append(p)
+
+        if turn_pts:
+            all_x = [p['x'] for p in turn_pts]
+            all_y = [p['y'] for p in turn_pts]
+            x_min, x_max = min(all_x), max(all_x)
+            y_min, y_max = min(all_y), max(all_y)
+            span_x = x_max - x_min
+            span_y = y_max - y_min
+            pad = max(span_x, span_y) * 0.20
+            pad = max(pad, 0.0001)
+            center_x = (x_min + x_max) / 2.0
+            center_y = (y_min + y_max) / 2.0
+            half_span = max(span_x, span_y) / 2.0 + pad
+            ax.set_xlim(center_x - half_span, center_x + half_span)
+            ax.set_ylim(center_y - half_span, center_y + half_span)
+            ax.set_aspect('equal', adjustable='box')
+    else:
+        ax.set_aspect('equal', adjustable='datalim')
+
+    # Remove latitude and longitude coordinate text, ticks, and exponent offsets
+    ax.xaxis.set_major_formatter(plt.NullFormatter())
+    ax.yaxis.set_major_formatter(plt.NullFormatter())
+    ax.xaxis.offsetText.set_visible(False)
+    ax.yaxis.offsetText.set_visible(False)
+    ax.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+
+    # Drop background rectangular grid
+    ax.grid(False)
+
     title_suffix = f" [{color_mode.capitalize()} Mode]" if color_mode != 'lap' else ""
     ax.set_title(f"Trajectory Comparison ({first_track}){title_suffix}", fontsize=12, fontweight='bold')
     ax.legend(loc='upper right', frameon=True, facecolor='#18181b', edgecolor='#27272a')

@@ -269,7 +269,7 @@ header {
 
 .telemetry-widget-container {
   width: 100%;
-  min-height: 480px;
+  min-height: 960px;
   background: #0f172a;
   border-radius: 12px;
   margin-bottom: 1.25rem;
@@ -366,4 +366,191 @@ header {
 .lap_8 { color: #f97316; font-weight: 700; }
 .lap_9 { color: #6366f1; font-weight: 700; }
 .lap_10 { color: #14b8a6; font-weight: 700; }
+
+/* Map Overlay Controls & Selectors */
+.map-overlay-controls {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+}
+
+.map-overlay-controls.map-overlay-right {
+  left: auto;
+  right: 12px;
+}
+
+.custom-selector {
+  display: flex;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.selector-item {
+  padding: 0.45rem 0.9rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  user-select: none;
+}
+
+.selector-item:last-child {
+  border-right: none;
+}
+
+.selector-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.selector-item.active {
+  background: var(--accent-primary);
+  color: #090d16;
+}
+
+/* Custom Dropdown for Trajectory Color Modes */
+.custom-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.dropdown-trigger-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  padding: 0.45rem 0.85rem;
+  color: #f8fafc;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: all 0.2s ease;
+}
+
+.dropdown-trigger-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--accent-primary);
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 180px;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  display: none;
+  flex-direction: column;
+  z-index: 1000;
+  overflow: hidden;
+  padding: 4px 0;
+}
+
+.custom-dropdown.open .dropdown-menu {
+  display: flex;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  user-select: none;
+}
+
+.dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f8fafc;
+}
+
+.dropdown-item.active {
+  background: rgba(56, 189, 248, 0.18);
+  color: var(--accent-primary);
+  font-weight: 700;
+}
+
+.item-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.item-color-dot.mode-pedals {
+  background: linear-gradient(135deg, #ef4444 50%, #22c55e 50%);
+}
+
+.item-color-dot.mode-delta-t {
+  background: linear-gradient(135deg, #00ff00 0%, #ffff00 50%, #ff0000 100%);
+}
+
+.item-color-dot.mode-speed {
+  background: linear-gradient(135deg, rgb(40,20,180), rgb(0,200,255), rgb(255,30,60), rgb(255,200,0), rgb(0,255,80));
+}
+
+.item-color-dot.mode-accel {
+  background: linear-gradient(135deg, #ff3333 50%, #00ff44 50%);
+}
+
+.item-color-dot.mode-lap {
+  background: linear-gradient(135deg, #00f0ff 33%, #ff6600 33% 66%, #00ff44 66%);
+}
+
+/* Trajectory Legend */
+.trajectory-legend {
+  position: absolute;
+  top: 58px;
+  left: 12px;
+  background: rgba(15, 23, 42, 0.88);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+  font-size: 12px;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  max-width: 320px;
+}
+
+.trajectory-legend-item {
+  display: flex;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.trajectory-legend-item:hover {
+  background: rgba(56, 189, 248, 0.2);
+}
+
 
