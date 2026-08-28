@@ -624,6 +624,23 @@
               var pad = Math.max(1.0, span * 0.1);
               yConfig.range = [Math.floor(mm.min - pad), Math.ceil(mm.max + pad)];
               yConfig.autorange = false;
+            } else if ((normCh === 'steering' || normCh === 'steering angle') && mm && isFinite(mm.min) && isFinite(mm.max)) {
+              var span = mm.max - mm.min;
+              var pad = Math.max(1.0, span * 0.1);
+              var min = mm.min - pad;
+              var max = mm.max + pad;
+              var ticksFn = (typeof getSteeringTicks === 'function') ? getSteeringTicks : (global && global.getSteeringTicks);
+              if (ticksFn) {
+                var ticks = ticksFn(min, max);
+                yConfig.range = [max, min];
+                yConfig.autorange = false;
+                yConfig.tickmode = 'array';
+                yConfig.tickvals = ticks.tickvals;
+                yConfig.ticktext = ticks.ticktext;
+              } else {
+                yConfig.range = [max, min];
+                yConfig.autorange = false;
+              }
             } else if (isDeltaTime(ch) && mm && isFinite(mm.min) && isFinite(mm.max)) {
               var dtMin = Math.min(0, mm.min);
               var dtMax = Math.max(0.05, mm.max);

@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getMedian, parseLapTime, getPercentile } from './utils';
+import { getMedian, parseLapTime, getPercentile, getSteeringTicks } from './utils';
 
 describe('utils.js', () => {
     describe('getMedian', () => {
@@ -62,6 +62,35 @@ describe('utils.js', () => {
 
         it('returns large number for empty input', () => {
             expect(parseLapTime('')).toBe(999999);
+        });
+    });
+
+    describe('getSteeringTicks', () => {
+        it('formats negative ticks with R and positive ticks with L using absolute values', () => {
+            const { tickvals, ticktext } = getSteeringTicks(-30, 30);
+            expect(tickvals).toEqual([-30, -20, -10, 0, 10, 20, 30]);
+            expect(ticktext).toEqual(['30 R', '20 R', '10 R', '0', '10 L', '20 L', '30 L']);
+        });
+
+        it('handles asymmetric bounds and step selection correctly', () => {
+            const { tickvals, ticktext } = getSteeringTicks(-15, 45);
+            expect(tickvals.includes(0)).toBe(true);
+            expect(tickvals.includes(-20)).toBe(true);
+            expect(tickvals.includes(50)).toBe(true);
+            const idxNeg = tickvals.indexOf(-20);
+            const idxZero = tickvals.indexOf(0);
+            const idxPos = tickvals.indexOf(50);
+            expect(ticktext[idxNeg]).toBe('20 R');
+            expect(ticktext[idxZero]).toBe('0');
+            expect(ticktext[idxPos]).toBe('50 L');
+        });
+
+        it('handles non-finite inputs with default range', () => {
+            const { tickvals, ticktext } = getSteeringTicks(Infinity, -Infinity);
+            expect(tickvals.length).toBeGreaterThan(0);
+            expect(ticktext).toContain('0');
+            expect(ticktext).toContain('45 R');
+            expect(ticktext).toContain('45 L');
         });
     });
 });

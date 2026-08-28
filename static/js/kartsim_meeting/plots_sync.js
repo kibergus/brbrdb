@@ -20,7 +20,8 @@
  */
 import { state } from './state.js';
 import { getSpeedAtDistance, getBrakingPointsInRange, getPointAtDistance, getPointsAtDistancesMonotonic, getTurnTime, fetchTelemetryChannel } from './telemetry.js';
-import { parseLapTime } from '../utils.js';
+import { parseLapTime, getSteeringTicks } from '../utils.js';
+export { getSteeringTicks };
 import { debouncedUpdateURL } from './url_sync.js';
 import { updateAllPolylineColors } from './map.js';
 
@@ -1820,8 +1821,10 @@ export function renderSingleChannelPlot(activeTab) {
             ]
         };
 
-        if (state.currentActivePlotTab === 'control') {
+        if (state.currentActivePlotTab === 'pedals') {
             layout.yaxis.title = 'Inputs (%)';
+            layout.yaxis.range = [0, 105];
+            layout.yaxis.autorange = false;
             lapsA.forEach((lap, i) => {
                 const alpha = getLapAlpha(i, lapsA.length);
                 addTrace(data, lap, 'throttle', `rgba(34, 197, 94, ${alpha})`, 2);
@@ -1836,6 +1839,34 @@ export function renderSingleChannelPlot(activeTab) {
             layout.yaxis.title = 'Steering Wheel Angle (deg)';
             lapsA.forEach((lap, i) => addTrace(data, lap, 'steering', `rgba(251, 146, 60, ${getLapAlpha(i, lapsA.length)})`, 2));
             lapsB.forEach((lap, i) => addTrace(data, lap, 'steering', `rgba(56, 189, 248, ${getLapAlpha(i, lapsB.length, 0.8)})`, 1.5, 'dash'));
+
+            let minSteer = Infinity;
+            let maxSteer = -Infinity;
+            data.forEach(trace => {
+                if (trace.y) {
+                    for (let i = 0; i < trace.y.length; i++) {
+                        const val = trace.y[i];
+                        if (typeof val === 'number' && !isNaN(val)) {
+                            if (val < minSteer) minSteer = val;
+                            if (val > maxSteer) maxSteer = val;
+                        }
+                    }
+                }
+            });
+            if (minSteer === Infinity || maxSteer === -Infinity) {
+                minSteer = -45;
+                maxSteer = 45;
+            }
+            const span = maxSteer - minSteer;
+            const pad = Math.max(1, span * 0.1);
+            const steerMin = minSteer - pad;
+            const steerMax = maxSteer + pad;
+            const { tickvals, ticktext } = getSteeringTicks(steerMin, steerMax);
+            layout.yaxis.range = [steerMax, steerMin];
+            layout.yaxis.autorange = false;
+            layout.yaxis.tickmode = 'array';
+            layout.yaxis.tickvals = tickvals;
+            layout.yaxis.ticktext = ticktext;
         } else if (state.currentActivePlotTab === 'rps') {
             layout.yaxis.title = 'Rotation Speed (RPS)';
             layout.showlegend = true;
@@ -2413,16 +2444,16 @@ export function initExpandablePlots() {
         if (state.activePlotChannels) {
             state.activePlotChannels.forEach(tab => {
                 const gd = document.getElementById('plot-area-' + tab);
-                if (gd && gd.offsetParent !== null) Plotly.Plots.resize(gd);
+                if (gd && gd._fullLayout && gd.offsetParent !== null) Plotly.Plots.resize(gd);
             });
         }
         if (state.deltaPlotVisible) {
             const gd = document.getElementById('plot-area-delta');
-            if (gd && gd.offsetParent !== null) Plotly.Plots.resize(gd);
+            if (gd && gd._fullLayout && gd.offsetParent !== null) Plotly.Plots.resize(gd);
         }
         if (state.speedPlotVisible) {
             const gd = document.getElementById('plot-area-speed');
-            if (gd && gd.offsetParent !== null) Plotly.Plots.resize(gd);
+            if (gd && gd._fullLayout && gd.offsetParent !== null) Plotly.Plots.resize(gd);
         }
     });
 
@@ -2433,16 +2464,16 @@ export function initExpandablePlots() {
             if (state.activePlotChannels) {
                 state.activePlotChannels.forEach(tab => {
                     const gd = document.getElementById('plot-area-' + tab);
-                    if (gd && gd.offsetParent !== null) Plotly.Plots.resize(gd);
+                    if (gd && gd._fullLayout && gd.offsetParent !== null) Plotly.Plots.resize(gd);
                 });
             }
             if (state.deltaPlotVisible) {
                 const gd = document.getElementById('plot-area-delta');
-                if (gd && gd.offsetParent !== null) Plotly.Plots.resize(gd);
+                if (gd && gd._fullLayout && gd.offsetParent !== null) Plotly.Plots.resize(gd);
             }
             if (state.speedPlotVisible) {
                 const gd = document.getElementById('plot-area-speed');
-                if (gd && gd.offsetParent !== null) Plotly.Plots.resize(gd);
+                if (gd && gd._fullLayout && gd.offsetParent !== null) Plotly.Plots.resize(gd);
             }
         }
     });
@@ -2492,7 +2523,7 @@ export function updateSpeedYLim(skipRelayoutIfDragging = false) {
 }
 
 export function updateChannelYLim(tab, skipRelayoutIfDragging = false) {
-    if (tab === 'control' || tab === 'steering') return;
+    if (tab === 'pedals') return;
     const gd = document.getElementById('plot-area-' + tab);
     if (!gd || !gd.data || gd.data.length === 0) return;
 
@@ -2517,6 +2548,34 @@ export function updateChannelYLim(tab, skipRelayoutIfDragging = false) {
         });
         return { min, max };
     };
+
+    if (tab === 'steering') {
+        const bounds = getMinMax(gd.data);
+        if (bounds.min !== Infinity && bounds.max !== -Infinity) {
+            const span = bounds.max - bounds.min;
+            const padding = Math.max(1, span * 0.1);
+            const min = bounds.min - padding;
+            const max = bounds.max + padding;
+            const { tickvals, ticktext } = getSteeringTicks(min, max);
+            const newRange = [max, min];
+
+            let cur = null;
+            if (gd._fullLayout && gd._fullLayout.yaxis && gd._fullLayout.yaxis.range) {
+                cur = gd._fullLayout.yaxis.range;
+            }
+            const isDiff = !cur || Math.abs(cur[0] - newRange[0]) + Math.abs(cur[1] - newRange[1]) >= 0.01;
+            if (isDiff && !skipRelayoutIfDragging) {
+                Plotly.relayout(gd, {
+                    'yaxis.range': newRange,
+                    'yaxis.autorange': false,
+                    'yaxis.tickmode': 'array',
+                    'yaxis.tickvals': tickvals,
+                    'yaxis.ticktext': ticktext
+                });
+            }
+        }
+        return;
+    }
 
     if (tab === 'patch_vel') {
         const latTraces = gd.data.filter(t => !t.yaxis || t.yaxis === 'y');
@@ -2639,7 +2698,7 @@ export function updateExpandablePlotsVisibility() {
 
             plotIds.forEach(id => {
                 const gd = document.getElementById(id);
-                if (gd && gd.offsetParent !== null && window.Plotly && window.Plotly.Plots) {
+                if (gd && gd._fullLayout && gd.offsetParent !== null && window.Plotly && window.Plotly.Plots) {
                     Plotly.Plots.resize(gd);
                     if (range && range.length === 2) {
                         Plotly.relayout(gd, { 'xaxis.range': range, 'xaxis.autorange': false });

@@ -27,10 +27,8 @@ This reference outlines the available MCP server tools for fetching telemetry da
 - **Agent inspection tool**: Renders stacked multi-channel telemetry plot and returns base64 PNG.
 - **Plot Readability Guideline**: Keep `laps` under 3 (default: 2 laps - Benchmark Reference Lap vs Target Comparison Lap).
 - **`laps` is the ONLY way to select laps**: Pass a list of 4-element tuples `(date, track, session_id, lap_number)`.
-  Example: `laps=[("2026-06-25", "Llandow", "16_20_practice", 15), ("2026-07-28", "Llandow", "18_32_practice", 12)]`
-- Channels: `["Speed", "Throttle", "Brake", "Steering Angle", "Delta Time"]`. (If `Throttle` is not recorded on the kart, use `accel`/`acceleration` to analyze engine drive out of corners; inspect `Slip Angle` if available).
+- Channels: `["Speed", "Throttle", "Brake", "Steering Angle", "Delta Time"]`. (If `Throttle` or `Steering Angle` are not recorded on the kart, use `accel`/`acceleration` to analyze engine drive / braking transitions, and spatial GPS trajectory to analyze line geometry; treat any unmeasured steering/throttle actions as explicit hypotheses).
 
-### 7. `get_trajectory_plot(laps, start_m=None, end_m=None, color_mode="lap")`
 - **Agent inspection tool**: Renders X/Z GPS line trajectories for comparison over distance crop.
 - **Plot Readability Guideline**: Keep `laps` under 3 (default: 2 laps - Benchmark Reference Lap vs Target Comparison Lap).
 - **`laps` is the ONLY way to select laps**: Pass a list of 4-element tuples `(date, track, session_id, lap_number)`.

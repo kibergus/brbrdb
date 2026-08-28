@@ -79,10 +79,51 @@ export const getPercentile = (arr, percentile) => {
     return sorted[lower] * (1 - weight) + sorted[upper] * weight;
 };
 
+/**
+ * Computes tick values and formatted labels for steering angles.
+ * Labels use absolute values with 'R' for negative (right) and 'L' for positive (left).
+ * @param {number} min - Minimum steering angle.
+ * @param {number} max - Maximum steering angle.
+ * @returns {{ tickvals: number[], ticktext: string[] }}
+ */
+export function getSteeringTicks(min, max) {
+    if (!isFinite(min) || !isFinite(max)) {
+        min = -45;
+        max = 45;
+    }
+    const span = Math.max(10, max - min);
+    let step = 10;
+    if (span <= 25) step = 5;
+    else if (span <= 60) step = 10;
+    else if (span <= 120) step = 15;
+    else if (span <= 200) step = 20;
+    else if (span <= 350) step = 30;
+    else step = 45;
+
+    const start = Math.floor(min / step) * step;
+    const end = Math.ceil(max / step) * step;
+
+    const tickvals = [];
+    const ticktext = [];
+    for (let v = start; v <= end; v += step) {
+        tickvals.push(v);
+        const absVal = Math.abs(Math.round(v * 10) / 10);
+        if (absVal === 0 || Math.abs(v) < 1e-6) {
+            ticktext.push('0');
+        } else if (v < 0) {
+            ticktext.push(`${absVal} R`);
+        } else {
+            ticktext.push(`${absVal} L`);
+        }
+    }
+    return { tickvals, ticktext };
+}
+
 // Attach to window if running in a browser environment to make functions available globally
 if (typeof window !== 'undefined') {
     window.getMedian = getMedian;
     window.getPercentile = getPercentile;
     window.parseLapTime = parseLapTime;
     window.formatLapTime = formatLapTime;
+    window.getSteeringTicks = getSteeringTicks;
 }

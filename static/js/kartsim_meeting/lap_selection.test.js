@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded } from './lap_selection.js';
+import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer } from './lap_selection.js';
 import { state } from './state.js';
 
 vi.mock('./map.js', () => ({
@@ -255,4 +255,108 @@ describe('selectTurnAndSwitchToMap', () => {
         expect(mockFitBounds).toHaveBeenCalled();
     });
 });
+
+describe('lap_selection.js side panel collapse and resize', () => {
+    let mockSidePanel;
+    let mockTabMap;
+    let mockToggleBtn;
+    let mockResizer;
+
+    beforeEach(() => {
+        const classListSet = new Set();
+        mockSidePanel = {
+            style: { width: '380px' },
+            classList: {
+                add: (c) => classListSet.add(c),
+                remove: (c) => classListSet.delete(c),
+                contains: (c) => classListSet.has(c)
+            },
+            offsetWidth: 380,
+            getBoundingClientRect: () => ({ width: 380 })
+        };
+        const tabMapClasses = new Set();
+        mockTabMap = {
+            classList: {
+                add: (c) => tabMapClasses.add(c),
+                remove: (c) => tabMapClasses.delete(c),
+                contains: (c) => tabMapClasses.has(c)
+            }
+        };
+        mockToggleBtn = {
+            setAttribute: vi.fn(),
+            addEventListener: vi.fn()
+        };
+        mockResizer = {
+            classList: {
+                add: vi.fn(),
+                remove: vi.fn()
+            },
+            addEventListener: vi.fn()
+        };
+
+        vi.stubGlobal('document', {
+            querySelectorAll: vi.fn().mockReturnValue([]),
+            getElementById: vi.fn().mockImplementation((id) => {
+                if (id === 'tab-map') return mockTabMap;
+                if (id === 'side-panel-toggle-btn') return mockToggleBtn;
+                if (id === 'side-panel-resizer') return mockResizer;
+                return null;
+            }),
+            querySelector: vi.fn().mockImplementation((selector) => {
+                if (selector === '.map-side-panel') return mockSidePanel;
+                return null;
+            }),
+            body: { style: {} },
+            addEventListener: vi.fn()
+        });
+
+        vi.stubGlobal('localStorage', {
+            getItem: vi.fn(),
+            setItem: vi.fn()
+        });
+
+        state.sidePanelCollapsed = false;
+        state.sidePanelWidth = 380;
+    });
+
+    it('collapses side panel and updates button title and classList', () => {
+        collapseSidePanel(false);
+        expect(mockSidePanel.classList.contains('collapsed')).toBe(true);
+        expect(mockTabMap.classList.contains('side-panel-collapsed')).toBe(true);
+        expect(state.sidePanelCollapsed).toBe(true);
+        expect(mockToggleBtn.setAttribute).toHaveBeenCalledWith('title', 'Expand panel');
+        expect(localStorage.setItem).toHaveBeenCalledWith('kartsim_side_panel_collapsed', '1');
+    });
+
+    it('expands side panel and restores state and button title', () => {
+        collapseSidePanel(false);
+        expandSidePanel(false);
+        expect(mockSidePanel.classList.contains('collapsed')).toBe(false);
+        expect(mockTabMap.classList.contains('side-panel-collapsed')).toBe(false);
+        expect(state.sidePanelCollapsed).toBe(false);
+        expect(mockToggleBtn.setAttribute).toHaveBeenCalledWith('title', 'Collapse panel');
+        expect(localStorage.setItem).toHaveBeenCalledWith('kartsim_side_panel_collapsed', '0');
+    });
+
+    it('toggles side panel between expanded and collapsed', () => {
+        toggleSidePanel();
+        expect(mockSidePanel.classList.contains('collapsed')).toBe(true);
+        toggleSidePanel();
+        expect(mockSidePanel.classList.contains('collapsed')).toBe(false);
+    });
+
+    it('initSidePanelResizer restores saved width and collapsed state', () => {
+        localStorage.getItem.mockImplementation((key) => {
+            if (key === 'kartsim_side_panel_width') return '450';
+            if (key === 'kartsim_side_panel_collapsed') return '1';
+            return null;
+        });
+
+        initSidePanelResizer();
+        expect(mockSidePanel.style.width).toBe('450px');
+        expect(state.sidePanelWidth).toBe(450);
+        expect(mockSidePanel.classList.contains('collapsed')).toBe(true);
+    });
+});
+
 

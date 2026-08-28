@@ -68,6 +68,181 @@ export function showRightPanelTab(tabId) {
     debouncedUpdateURL();
 }
 
+export function triggerPlotsResize() {
+    const ids = [
+        'stats-plot-lap-times', 'stats-plot-turn-gaps', 'stats-plot-apex-speeds',
+        'telemetry-chart', 'acceleration-chart', 'slip_angle-chart',
+        'plot-area-speed', 'plot-area-delta'
+    ];
+    if (state.activePlotChannels) {
+        state.activePlotChannels.forEach(tab => {
+            ids.push('plot-area-' + tab);
+        });
+    }
+    ids.forEach(id => {
+        const gd = document.getElementById(id);
+        if (gd && typeof Plotly !== 'undefined' && Plotly.Plots && gd.offsetParent !== null) {
+            Plotly.Plots.resize(gd);
+        }
+    });
+    if (state.map && window.google && window.google.maps) {
+        google.maps.event.trigger(state.map, 'resize');
+    }
+}
+
+export function toggleSidePanel() {
+    const sidePanel = document.querySelector('.map-side-panel');
+    if (!sidePanel) return;
+    if (sidePanel.classList.contains('collapsed')) {
+        expandSidePanel();
+    } else {
+        collapseSidePanel();
+    }
+}
+
+export function collapseSidePanel(triggerResize = true) {
+    const sidePanel = document.querySelector('.map-side-panel');
+    const tabMap = document.getElementById('tab-map');
+    const toggleBtn = document.getElementById('side-panel-toggle-btn');
+    if (!sidePanel) return;
+
+    sidePanel.classList.add('collapsed');
+    if (tabMap) tabMap.classList.add('side-panel-collapsed');
+    state.sidePanelCollapsed = true;
+    try {
+        localStorage.setItem('kartsim_side_panel_collapsed', '1');
+    } catch (e) {}
+
+    if (toggleBtn) {
+        toggleBtn.setAttribute('title', 'Expand panel');
+    }
+
+    if (triggerResize) {
+        setTimeout(() => {
+            triggerPlotsResize();
+        }, 220);
+    }
+}
+
+export function expandSidePanel(triggerResize = true) {
+    const sidePanel = document.querySelector('.map-side-panel');
+    const tabMap = document.getElementById('tab-map');
+    const toggleBtn = document.getElementById('side-panel-toggle-btn');
+    if (!sidePanel) return;
+
+    sidePanel.classList.remove('collapsed');
+    if (tabMap) tabMap.classList.remove('side-panel-collapsed');
+    state.sidePanelCollapsed = false;
+    try {
+        localStorage.setItem('kartsim_side_panel_collapsed', '0');
+    } catch (e) {}
+
+    if (toggleBtn) {
+        toggleBtn.setAttribute('title', 'Collapse panel');
+    }
+
+    try {
+        const savedWidth = localStorage.getItem('kartsim_side_panel_width');
+        if (savedWidth) {
+            sidePanel.style.width = savedWidth + 'px';
+            state.sidePanelWidth = parseInt(savedWidth, 10);
+        } else if (!sidePanel.style.width) {
+            sidePanel.style.width = '380px';
+            state.sidePanelWidth = 380;
+        }
+    } catch (e) {
+        if (!sidePanel.style.width) {
+            sidePanel.style.width = '380px';
+        }
+    }
+
+    if (triggerResize) {
+        setTimeout(() => {
+            triggerPlotsResize();
+            showRightPanelTab(state.activeRightTab || 'cornering');
+        }, 220);
+    }
+}
+
+export function initSidePanelResizer() {
+    const sidePanel = document.querySelector('.map-side-panel');
+    const resizer = document.getElementById('side-panel-resizer');
+    const toggleBtn = document.getElementById('side-panel-toggle-btn');
+    if (!sidePanel) return;
+
+    let savedCollapsed = null;
+    let savedWidth = null;
+    try {
+        savedCollapsed = localStorage.getItem('kartsim_side_panel_collapsed');
+        savedWidth = localStorage.getItem('kartsim_side_panel_width');
+    } catch (e) {}
+
+    if (savedWidth) {
+        const parsed = parseInt(savedWidth, 10);
+        const maxAllowed = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth * 0.8 : 1600;
+        if (parsed >= 200 && parsed <= maxAllowed) {
+            sidePanel.style.width = parsed + 'px';
+            state.sidePanelWidth = parsed;
+        }
+    }
+
+    if (savedCollapsed === '1') {
+        collapseSidePanel(false);
+    }
+
+    if (!resizer) return;
+
+    let isResizing = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    resizer.addEventListener('mousedown', (e) => {
+        if (sidePanel.classList.contains('collapsed')) return;
+        isResizing = true;
+        startX = e.clientX;
+        startWidth = sidePanel.getBoundingClientRect().width;
+        sidePanel.classList.add('resizing');
+        document.body.style.cursor = 'ew-resize';
+        document.body.style.userSelect = 'none';
+        resizer.classList.add('active');
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+        const dx = startX - e.clientX;
+        const minWidth = 240;
+        const winWidth = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 1200;
+        const maxWidth = Math.max(minWidth, Math.min(winWidth - 300, Math.floor(winWidth * 0.75)));
+        const newWidth = Math.max(minWidth, Math.min(maxWidth, startWidth + dx));
+        sidePanel.style.width = newWidth + 'px';
+        state.sidePanelWidth = newWidth;
+
+        // Resize visible right panel charts during drag
+        const chartIds = ['telemetry-chart', 'acceleration-chart', 'slip_angle-chart'];
+        chartIds.forEach(id => {
+            const gd = document.getElementById(id);
+            if (gd && typeof Plotly !== 'undefined' && Plotly.Plots && gd.offsetParent !== null) {
+                Plotly.Plots.resize(gd);
+            }
+        });
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!isResizing) return;
+        isResizing = false;
+        sidePanel.classList.remove('resizing');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        resizer.classList.remove('active');
+        try {
+            localStorage.setItem('kartsim_side_panel_width', sidePanel.offsetWidth);
+        } catch (e) {}
+
+        triggerPlotsResize();
+    });
+}
+
 export function onSessionChange(sessionId) {
     state.selectedSessionId = sessionId;
     state.mapInitialized = false;
@@ -276,13 +451,13 @@ export function showTab(tabId) {
                         const ids = [
                             'telemetry-chart', 'acceleration-chart', 'slip_angle-chart',
                             'plot-area-speed', 'plot-area-delta',
-                            'plot-area-control', 'plot-area-steering', 'plot-area-rps',
+                            'plot-area-pedals', 'plot-area-steering', 'plot-area-rps',
                             'plot-area-gforce', 'plot-area-slide', 'plot-area-patch_vel',
                             'plot-area-force', 'plot-area-tyre_load', 'plot-area-slip_angle'
                         ];
                         ids.forEach(id => {
                             const gd = document.getElementById(id);
-                            if (gd && gd.offsetParent !== null && window.Plotly && window.Plotly.Plots) {
+                            if (gd && gd._fullLayout && gd.offsetParent !== null && window.Plotly && window.Plotly.Plots) {
                                 Plotly.Plots.resize(gd);
                             }
                         });

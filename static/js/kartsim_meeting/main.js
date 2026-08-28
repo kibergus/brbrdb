@@ -19,7 +19,7 @@
  * Main entry point for the kartsim meeting page.
  */
 import { state } from './state.js';
-import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, onSessionChange } from './lap_selection.js';
+import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, onSessionChange, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer } from './lap_selection.js';
 import { setMapType, setTrajectoryColorMode, toggleTrajDropdown, updateDistanceMarker } from './map.js';
 import { stepDistance } from './telemetry.js';
 import { initExpandablePlots } from './plots_sync.js';
@@ -42,6 +42,9 @@ window.setTrajectoryColorMode = setTrajectoryColorMode;
 window.toggleTrajDropdown = toggleTrajDropdown;
 window.toggleDeltaPlot = toggleDeltaPlot;
 window.toggleSpeedPlot = toggleSpeedPlot;
+window.toggleSidePanel = toggleSidePanel;
+window.collapseSidePanel = collapseSidePanel;
+window.expandSidePanel = expandSidePanel;
 
 document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('click', (e) => {
@@ -105,6 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     showTab(initialTab);
     initExpandablePlots();
+    initSidePanelResizer();
     initAllLapsHandlers();
 
     // Restore bottom plots state from URL

@@ -84,6 +84,8 @@ export const state = {
     
     // Right panel active tab state
     activeRightTab: 'cornering',
+    sidePanelWidth: 380,
+    sidePanelCollapsed: false,
     
     // Sync state
     _syncLastRange: null,

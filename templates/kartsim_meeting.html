@@ -245,7 +245,7 @@
                     <div class="resizer-handle" id="plot-resizer"></div>
                     <div class="expandable-plots-header">
                         <div class="plot-tabs">
-                            <button class="plot-tab" data-tab="control" id="tab-btn-control">Control</button>
+                            <button class="plot-tab" data-tab="pedals" id="tab-btn-pedals">Pedals</button>
                             <button class="plot-tab" data-tab="steering" id="tab-btn-steering">Steering</button>
                             <button class="plot-tab" data-tab="rps" id="tab-btn-rps">RPS</button>
                             <button class="plot-tab" data-tab="gforce" id="tab-btn-gforce">G-force</button>
@@ -269,7 +269,7 @@
                             <div id="plot-area-delta" class="plot-area-delta-chart" style="width: 100%; height: 100%;">
                             </div>
                         </div>
-                        <div id="plot-area-control" class="plot-area" style="width: 100%; height: 100%; display: none;">
+                        <div id="plot-area-pedals" class="plot-area" style="width: 100%; height: 100%; display: none;">
                         </div>
                         <div id="plot-area-steering" class="plot-area"
                             style="width: 100%; height: 100%; display: none;"></div>
@@ -323,53 +323,64 @@
                 </div>
                 {% endif %}
             </div>
-            <div class="map-side-panel" style="display: none;">
-                <div class="panel-title"
-                    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; border-bottom: none; padding-bottom: 0;">
-                    <span
-                        style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary);">Telemetry
-                        Analysis</span>
-                </div>
-                <div class="right-panel-tabs"
-                    style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
-                    <button class="right-panel-tab active" id="right-tab-btn-cornering"
-                        onclick="showRightPanelTab('cornering')">Cornering</button>
-                    <button class="right-panel-tab" id="right-tab-btn-acceleration"
-                        onclick="showRightPanelTab('acceleration')">Acceleration</button>
-                    <button class="right-panel-tab" id="right-tab-btn-slip_angle"
-                        onclick="showRightPanelTab('slip_angle')">Slip Angle</button>
-                </div>
-                <div id="cornering-chart-container" class="right-panel-tab-pane active"
-                    style="flex: 1; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; position: relative; display: flex; flex-direction: column;">
-                    <div id="telemetry-chart-placeholder"
-                        style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-style: italic; font-size: 0.9rem; text-align: center; padding: 1rem;">
-                        Select laps and move distance slider<br>to see speed and braking analysis
+            <div class="map-side-panel" id="map-side-panel" style="display: none;">
+                <div class="side-panel-resizer" id="side-panel-resizer" title="Drag to resize panel"></div>
+                <button class="side-panel-toggle-btn" id="side-panel-toggle-btn" onclick="toggleSidePanel()" title="Collapse panel" aria-label="Toggle side panel">
+                    <svg class="collapse-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="9 18 15 12 9 6"></polyline>
+                    </svg>
+                    <svg class="expand-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="15 18 9 12 15 6"></polyline>
+                    </svg>
+                </button>
+                <div class="side-panel-content">
+                    <div class="panel-title"
+                        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; border-bottom: none; padding-bottom: 0; padding-right: 32px;">
+                        <span
+                            style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-secondary);">Telemetry
+                            Analysis</span>
                     </div>
-                    <div id="telemetry-chart" style="flex: 1; width: 100%; display: none;"></div>
-                </div>
-                <div id="acceleration-chart-container" class="right-panel-tab-pane"
-                    style="flex: 1; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; position: relative; display: none; flex-direction: column;">
-                    <div id="acceleration-chart-placeholder"
-                        style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-style: italic; font-size: 0.9rem; text-align: center; padding: 1rem;">
-                        Select laps and move distance slider<br>to see acceleration vs speed
+                    <div class="right-panel-tabs"
+                        style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+                        <button class="right-panel-tab active" id="right-tab-btn-cornering"
+                            onclick="showRightPanelTab('cornering')">Cornering</button>
+                        <button class="right-panel-tab" id="right-tab-btn-acceleration"
+                            onclick="showRightPanelTab('acceleration')">Acceleration</button>
+                        <button class="right-panel-tab" id="right-tab-btn-slip_angle"
+                            onclick="showRightPanelTab('slip_angle')">Slip Angle</button>
                     </div>
-                    <div id="acceleration-chart" style="flex: 1; width: 100%; display: none;"></div>
-                </div>
-                <div id="slip_angle-chart-container" class="right-panel-tab-pane"
-                    style="flex: 1; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; position: relative; display: none; flex-direction: column;">
-                    <div id="slip_angle-color-selector-container" style="padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border-color); background: rgba(255,255,255,0.02); z-index: 10;">
-                        <label for="slip_angle-color-mode" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Color Mode:</label>
-                        <select id="slip_angle-color-mode" style="background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px; padding: 2px 6px; font-size: 0.75rem; outline: none; cursor: pointer;">
-                            <option value="brake_throttle">Brake / Throttle</option>
-                            <option value="longitudinal_accel">Longitudinal Acceleration</option>
-                            <option value="weight_transfer">Weight Transfer</option>
-                        </select>
+                    <div id="cornering-chart-container" class="right-panel-tab-pane active"
+                        style="flex: 1; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; position: relative; display: flex; flex-direction: column;">
+                        <div id="telemetry-chart-placeholder"
+                            style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-style: italic; font-size: 0.9rem; text-align: center; padding: 1rem;">
+                            Select laps and move distance slider<br>to see speed and braking analysis
+                        </div>
+                        <div id="telemetry-chart" style="flex: 1; width: 100%; display: none;"></div>
                     </div>
-                    <div id="slip_angle-chart-placeholder"
-                        style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-style: italic; font-size: 0.9rem; text-align: center; padding: 1rem;">
-                        Select laps and move distance slider<br>to see slip angle vs lateral force
+                    <div id="acceleration-chart-container" class="right-panel-tab-pane"
+                        style="flex: 1; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; position: relative; display: none; flex-direction: column;">
+                        <div id="acceleration-chart-placeholder"
+                            style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-style: italic; font-size: 0.9rem; text-align: center; padding: 1rem;">
+                            Select laps and move distance slider<br>to see acceleration vs speed
+                        </div>
+                        <div id="acceleration-chart" style="flex: 1; width: 100%; display: none;"></div>
                     </div>
-                    <div id="slip_angle-chart" style="flex: 1; width: 100%; display: none;"></div>
+                    <div id="slip_angle-chart-container" class="right-panel-tab-pane"
+                        style="flex: 1; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; position: relative; display: none; flex-direction: column;">
+                        <div id="slip_angle-color-selector-container" style="padding: 8px 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--border-color); background: rgba(255,255,255,0.02); z-index: 10;">
+                            <label for="slip_angle-color-mode" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Color Mode:</label>
+                            <select id="slip_angle-color-mode" style="background: var(--bg-dark); color: var(--text-main); border: 1px solid var(--border-color); border-radius: 4px; padding: 2px 6px; font-size: 0.75rem; outline: none; cursor: pointer;">
+                                <option value="brake_throttle">Brake / Throttle</option>
+                                <option value="longitudinal_accel">Longitudinal Acceleration</option>
+                                <option value="weight_transfer">Weight Transfer</option>
+                            </select>
+                        </div>
+                        <div id="slip_angle-chart-placeholder"
+                            style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-style: italic; font-size: 0.9rem; text-align: center; padding: 1rem;">
+                            Select laps and move distance slider<br>to see slip angle vs lateral force
+                        </div>
+                        <div id="slip_angle-chart" style="flex: 1; width: 100%; display: none;"></div>
+                    </div>
                 </div>
             </div>
         </div>

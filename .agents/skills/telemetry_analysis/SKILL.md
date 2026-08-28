@@ -1,6 +1,6 @@
 ---
 name: telemetry_analysis
-description: Analyzes karting telemetry data using MCP server tools and corner sub-agents, comparing reference benchmark vs target laps (<3 laps per plot) with Delta T inflection point analysis, causation chain investigation (throttle/accel, steering, slip angles, trajectory), and actionable coaching guidance in HTML reports.
+description: Analyzes karting telemetry data using MCP server tools and corner sub-agents, comparing reference benchmark vs target laps (<3 laps per plot) with Delta T inflection point analysis, data-grounded causation chain investigation with explicit confidence levels, and actionable coaching guidance in HTML reports.
 ---
 
 # Telemetry Analysis Skill
@@ -15,7 +15,7 @@ This skill provides an autonomous, turn-by-turn workflow for analyzing karting t
 Orchestrator Agent
  ├── 1. Data Discovery (list_sessions, get_track_info, get_pace_summary, get_aggregates, get_stats)
  ├── 2. Lap Selection (Keep <3 laps per plot: Benchmark vs Target Comparison Lap)
- ├── 3. Corner Sub-Agent Delegation (Delta T inflection analysis, telemetry causation chain, trajectory)
+ ├── 3. Corner Sub-Agent Delegation (Delta T inflection analysis, trajectory, data-grounded causation, confidence level)
  ├── 4. Synthesis (Identify 1 or 2 most important actionable coaching takeaways)
  └── 5. HTML Report Generation (writes reports/<session_id>_telemetry_report.html with TelemetryPlot widgets)
 ```
@@ -28,8 +28,9 @@ Orchestrator Agent
    - All session lists, track metadata, pace summaries, lap statistics, and telemetry plots **MUST be loaded through MCP server tools** (`list_sessions`, `get_track_info`, `get_pace_summary`, `get_stats`, `get_telemetry_plot`, `get_trajectory_plot`).
    - Agents **ARE ALLOWED and encouraged to post-process MCP output data using Python scripts** (e.g. executing lightweight inline Python scripts to sort, filter, calculate delta distributions, or identify specific target laps from MCP outputs).
 
-2. **Locate Target Sessions**:
-   Call `list_sessions(track=..., date=..., driver_name=...)` to list **ALL** available sessions for the target date and track (note: multiple sessions e.g. morning and evening practice/race sessions often exist on the same day).
+2. **Locate Target Sessions & Audit Available Channels**:
+   - Call `list_sessions(track=..., date=..., driver_name=...)` to list **ALL** available sessions for the target date and track (note: multiple sessions e.g. morning and evening practice/race sessions often exist on the same day).
+   - **Channel Audit**: Identify which telemetry channels are available in the session (e.g. `Speed`, `accel`, `Latitude`, `Longitude` vs full sensor suites with `Steering Angle`, `Throttle`, `Brake`, `RPM`, `Slip Angle`). Note missing channels up front so conclusions never claim unmeasured data as fact.
 
 3. **Fetch Track Metadata**:
    Call `get_track_info(track=...)` to retrieve lap length, sector boundaries, and named turn definitions (`start_m`, `end_m`, `apexes_m`).
@@ -60,11 +61,34 @@ Launch a dedicated sub-agent focusing exclusively on that turn index $N$ ($Turn\
    - Minimum apex speed ($km/h$)
    - Exit speed ($km/h$)
    - Straight exit speed ($km/h$)
-   - Apex maximum steering angle ($deg$)
+   - Apex maximum steering angle ($deg$, *if recorded*)
 
 ---
 
-## Lap-to-Lap Comparison & Root Cause Causation Methodology
+## Data-Grounded Causation Methodology & Confidence Communication
+
+All findings, diagnoses, and coaching takeaways MUST be strictly anchored in the actual telemetry channels recorded. **Never assert unmeasured physical driver actions or vehicle dynamics as factual certainty.**
+
+### Evidence Hierarchy & Confidence Levels
+
+When forming conclusions, categorize each finding into one of three confidence tiers:
+
+1. **Direct Telemetry Evidence (High Confidence)**:
+   - Directly measured and visible in available telemetry channels (e.g., speed trace drops 5 km/h earlier, Delta T steepens +0.15s between 40m–60m, GPS trajectory shows turn-in 3m earlier / apex clipped 1.2m wider).
+   - **Tone**: State as objective fact (e.g., *"The data shows minimum apex speed was 4.2 km/h lower on Lap 15, accounting for +0.14s of time loss."*).
+
+2. **Derived / Corroborated Findings (Medium Confidence)**:
+   - Inferences supported by surrogate or secondary channels when a primary sensor is absent (e.g., `accel` longitudinal acceleration channel showing positive drive begins 6 meters later, indicating delayed throttle pickup even if a direct pedal position sensor is not fitted).
+   - **Tone**: State the inference clearly alongside the supporting channel (e.g., *"Based on the longitudinal acceleration (`accel`) trace, positive drive was delayed by ~6m, indicating later throttle commitment."*).
+
+3. **Hypotheses & Plausible Scenarios (Low-to-Medium Confidence)**:
+   - Explanations of driver behavior or dynamics that **are not directly measured** (e.g., claiming a speed scrub was caused by "steering wheel snap / excessive steering lock" or "brake locking" when steering angle and brake pressure sensors are **not** present).
+   - **Strict Rule**: You **MUST NOT** claim an unmeasured cause as a definitive fact. You may offer it as a reasoned hypothesis, but **you must explicitly communicate the confidence level and state that the channel is not recorded**.
+   - **Tone / Phrasing Example**: *"Hypothesis (Medium Confidence — steering angle not recorded): The 4 km/h mid-apex speed drop without deceleration on the accel trace suggests possible tire scrub from an aggressive steering input or line pinch."*
+
+---
+
+## Lap-to-Lap Comparison & Root Cause Causation Workflow
 
 When comparing laps, the core objective is to determine **why time was lost** and formulate **actionable things the driver can do to be faster**:
 
@@ -72,20 +96,23 @@ When comparing laps, the core objective is to determine **why time was lost** an
 - Inspect the **Delta Time ($\Delta T$)** channel across the corner distance.
 - Pinpoint the **exact meter marks / locations where $\Delta T$ begins to climb or steepens significantly** (identifying where time is actively lost: entry phase, apex phase, or exit acceleration phase).
 
-### 2. Telemetry Channels Inspection & Causation Chain
-Around each point where time is lost, inspect the relevant telemetry channels to establish the **causation chain** (Driver Control Input $\rightarrow$ Kart Dynamics / Attitude $\rightarrow$ Speed Deficit $\rightarrow$ Time Delta):
+### 2. Telemetry Channels Inspection & Data-Grounded Causation Chain
+Around each point where time is lost, inspect the available telemetry channels to establish the **causation chain** (Driver Control / Line Choice $\rightarrow$ Kart Dynamics / Attitude $\rightarrow$ Speed Deficit $\rightarrow$ Time Delta):
+
 - **Throttle / Accelerator**:
-  - Check for delayed throttle pickup, hesitation, throttle breathing/lifting, or partial application.
-  - *Fallback if throttle channel is not available*: Inspect **longitudinal acceleration (`accel` / `acceleration`)** to evaluate when positive drive begins and how aggressively the kart accelerates out of the corner.
+  - *If Throttle channel is available*: Check for delayed throttle pickup, hesitation, throttle breathing/lifting, or partial application.
+  - *Fallback if throttle channel is not available*: Inspect **longitudinal acceleration (`accel` / `acceleration`)** to evaluate when positive drive begins and how aggressively the kart accelerates out of the corner. Clearly attribute observations to `accel` rather than direct pedal position.
 - **Steering Angle & Steering Inputs**:
-  - Check for excessive steering lock (causing front tire scrub and wiping off minimum apex speed).
-  - Look for sudden steering spikes, mid-corner steering corrections, or delayed steering unwind on corner exit.
-- **Slip Angles & Lateral Dynamics (if available)**:
-  - Inspect slip angles, lateral acceleration, or yaw rate to check for sliding, snap oversteer, rear instability, or excessive understeer scrub.
-- **Braking Dynamics (if available)**:
-  - Compare braking initiation point (meters), peak braking force, and trail-braking smoothness vs abrupt brake release or early overslowing.
-- **Other Available Channels**:
-  - Inspect Engine RPM (clutch slip, power band drop, or gearing effects) and speed deltas.
+  - *If Steering Angle channel is available*: Check for excessive steering lock (causing front tire scrub and wiping off minimum apex speed), sudden steering spikes, mid-corner steering corrections, or delayed steering unwind on exit.
+  - *If Steering Angle is NOT available*: **DO NOT claim steering snapping or excessive wheel lock as a proven fact.** Use GPS trajectory curvature and lateral/longitudinal acceleration to identify line pinching or speed scrub, and present any steering input theory explicitly as a hypothesis.
+- **Slip Angles & Lateral Dynamics**:
+  - *If available*: Inspect slip angles, lateral acceleration, or yaw rate to check for sliding, snap oversteer, rear instability, or excessive understeer scrub.
+  - *If unavailable*: Note lateral acceleration or trajectory widening as surrogate indicators, maintaining appropriate confidence language.
+- **Braking Dynamics**:
+  - *If Brake pressure/switch is available*: Compare braking initiation point (meters), peak braking force, and trail-braking smoothness vs abrupt brake release.
+  - *Fallback if brake channel is not available*: Inspect negative longitudinal acceleration (`accel`) dips to assess braking/deceleration zones and release transitions.
+- **Engine RPM & Speed**:
+  - Inspect Engine RPM (clutch slip, power band drop, or gearing effects) and speed deltas across the corner.
 
 ### 3. Trajectory & Line Analysis (Crucial for GPS-Only & All Telemetry)
 - Call `get_trajectory_plot(laps=[...], start_m=..., end_m=..., color_mode="delta_t")` and `color_mode="lap"`.
@@ -103,6 +130,7 @@ Around each point where time is lost, inspect the relevant telemetry channels to
 2. Rank turns by time delta and driver inconsistency.
 3. Identify the 1 or 2 highest-priority coaching takeaways across the entire lap.
 4. Translate telemetry causation findings into clear, actionable advice the driver can execute on track.
+5. **Verify Data Grounding & Confidence Calibration**: Ensure the final synthesis and executive summary strictly distinguish directly measured facts (e.g. apex speeds, braking points, spatial line width) from inferred dynamics or unmeasured hypotheses. Avoid presenting speculative driver inputs (such as unrecorded steering snaps or pedal lifts) as factual certainty.
 
 ---
 
@@ -122,6 +150,7 @@ ALL coaching text, explanations, and report summaries MUST be tailored for **you
      - Use *"scrubbing speed with too much steering lock"* instead of "tire scrub friction loss".
      - Use *"opening up the wheel on exit"* instead of "unwinding steering input angle".
      - Use *"straight-line braking"* and *"smooth trail braking"* instead of "deceleration phase transition".
+   - **Data Grounding in Coaching**: When giving coaching advice based on inferred or unrecorded dynamics, ground the takeaway in observable targets (e.g., "Keep your hands smooth and focus on a wider entry arc to avoid scrubbing rolling speed" rather than asserting "you snapped the steering wheel at meter 60").
 
 3. **Actionable Track Takeaways**:
    - Keep bullet points punchy, visual, and easy to remember when sitting in the kart on the dummy grid.
@@ -237,7 +266,7 @@ Generate a standalone HTML file in the reports directory at `<DATA_DIR>/reports/
 - **Time Delta Calculation**: Time deltas in report tables and annotations MUST always be calculated relative to the fastest lap present on the plot/report (the reference lap with delta = 0.000s).
 - **Cross-Session Benchmark Laps**: When selecting the fastest reference lap for a corner, ALWAYS scan across ALL sessions available for that date (e.g. morning practice, afternoon practice, heat/race sessions) so the benchmark represents the driver's absolute best performance of the day.
 - **GPS Coordinates for Trajectory Plots**: Spatial trajectory plots (`TrajectoryPlot.js` / `get_trajectory_plot`) MUST ALWAYS use `Longitude` and `Latitude` GPS coordinates (in degrees) as the primary spatial channels. Supports `color_mode: "delta_t"` to visually display time gained (green) or lost (red) relative to the reference lap.
-- **Trajectory-Driven Input Analysis**: Driver inputs (throttle modulation, throttle chops/lifting, steering snaps, oversteer corrections, and brake duration) MUST be analyzed as direct consequences of the driver's chosen racing line geometry (entry width, turn-in angle, apex proximity/clipping, mid-corner arc, and exit positioning).
+- **Trajectory-Driven Input Analysis & Grounding**: When analyzing driver behavior (throttle pickup, lifts, steering inputs, oversteer corrections, braking transitions), anchor all statements in observable telemetry and line geometry (entry width, turn-in angle, apex proximity/clipping, mid-corner arc, exit positioning). If steering or pedal sensors are not recorded, treat input mechanisms as hypotheses derived from trajectory and acceleration, not direct measurements.
 - **Dual Visualizations**: Reports MUST include both channel telemetry (`TelemetryPlot.js`) and spatial GPS trajectory visuals (`TrajectoryPlot.js`) for the distance crop.
 - **Color-Coded Lap Numbers in Text**: Whenever lap numbers are mentioned in text (body paragraphs, executive summary, coaching takeaways, coach summary boxes, or table cells), they MUST be styled using CSS classes matching their telemetry plot trace colors: `.lap_ref` for the benchmark reference lap (e.g. `<span class="lap_ref">Lap X</span>`), and `.lap_1`, `.lap_2`, ..., `.lap_10` for target laps in sequential plot order (e.g. `<span class="lap_1">Lap Y</span>`, `<span class="lap_2">Lap Z</span>`).
 - **Report Structure & Layout Requirements**:
