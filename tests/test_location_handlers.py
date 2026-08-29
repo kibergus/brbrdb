@@ -689,3 +689,119 @@ def test_get_track_progression() -> None:
         assert data['plots'][1]['condition'] == 'Damp'
         assert 'Dry Conditions' in data['plots'][0]['title']
         assert 'Damp Conditions' in data['plots'][1]['title']
+
+
+def test_telemetry_report_view() -> None:
+    app = Flask(__name__, template_folder='../templates')
+    app.register_blueprint(location_handlers.location_blueprint)
+    client = app.test_client()
+
+    # 404 for missing report
+    with patch('location_handlers.report_parser.load_report', return_value=None):
+        resp = client.get('/telemetry/report/non_existent_report')
+        assert resp.status_code == 404
+
+    # 400 for report missing league/track metadata
+    with patch(
+        'location_handlers.report_parser.load_report',
+        return_value=({"title": "Incomplete"}, {}, "<p>content</p>")
+    ):
+        resp = client.get('/telemetry/report/incomplete_report')
+        assert resp.status_code == 400
+
+    # Successful report rendering
+    mock_meta = {
+        "title": "Turn 4 Hairpin",
+        "league": "kartsim",
+        "class_name": "cadet",
+        "date": "2026-08-21",
+        "track": "Clay Pigeon",
+        "session_id": "18_09_practice"
+    }
+    mock_state = {
+        "tab": "map",
+        "sort": "turn",
+        "turn": 2,
+        "lapsA": ["lap-6"]
+    }
+    mock_body = "<div class='report-test-content'>Hairpin deep dive</div>"
+    mock_session = MagicMock()
+    mock_session.session_id = '18_09_practice'
+    mock_session.meeting_dir = '/tmp/fake_meeting'
+
+    with patch('location_handlers.report_parser.load_report', return_value=(mock_meta, mock_state, mock_body)), \
+         patch('location_handlers.db.find_sessions', return_value=[mock_session]), \
+         patch('location_handlers.db.load', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.load_penalties', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.list_meetings', return_value=[]), \
+         patch('location_handlers.db.has_telemetry', return_value=False), \
+         patch('location_handlers.render_template', return_value="RENDERED_REPORT") as mock_render:
+
+        resp = client.get('/telemetry/report/clay_pigeon_v2_hairpin')
+        assert resp.status_code == 200
+        assert resp.data.decode('utf-8') == "RENDERED_REPORT"
+        mock_render.assert_called_once()
+        call_kwargs = mock_render.call_args[1]
+        assert call_kwargs['is_report_mode'] is True
+        assert call_kwargs['report_title'] == "Turn 4 Hairpin"
+        assert call_kwargs['report_html'] == mock_body
+        assert call_kwargs['report_state'] == mock_state
+
+
+def test_telemetry_view_with_report_param() -> None:
+    app = Flask(__name__, template_folder='../templates')
+    app.register_blueprint(location_handlers.location_blueprint)
+    client = app.test_client()
+
+    mock_meta = {
+        "title": "Turn 4 Hairpin",
+        "league": "kartsim",
+        "class_name": "cadet",
+        "date": "2026-08-21",
+        "track": "Clay Pigeon"
+    }
+    mock_state = {"lapsA": ["lap-6"]}
+    mock_body = "<p>Report html</p>"
+    mock_session = MagicMock()
+    mock_session.session_id = '18_09_practice'
+    mock_session.meeting_dir = '/tmp/fake_meeting'
+
+    with patch('location_handlers.report_parser.load_report', return_value=(mock_meta, mock_state, mock_body)), \
+         patch('location_handlers.db.find_sessions', return_value=[mock_session]), \
+         patch('location_handlers.db.load', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.load_penalties', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.list_meetings', return_value=[]), \
+         patch('location_handlers.db.has_telemetry', return_value=False), \
+         patch('location_handlers.render_template', return_value="RENDERED_WITH_REPORT") as mock_render:
+
+        resp = client.get('/telemetry/kartsim/cadet/2026-08-21/Clay%20Pigeon?report=clay_pigeon_v2_hairpin')
+        assert resp.status_code == 200
+        assert resp.data.decode('utf-8') == "RENDERED_WITH_REPORT"
+        call_kwargs = mock_render.call_args[1]
+        assert call_kwargs['is_report_mode'] is True
+        assert call_kwargs['report_title'] == "Turn 4 Hairpin"
+        assert call_kwargs['report_html'] == mock_body
+
+
+def test_telemetry_report_content_view() -> None:
+    app = Flask(__name__, template_folder='../templates')
+    app.register_blueprint(location_handlers.location_blueprint)
+    client = app.test_client()
+
+    # 404 for missing report
+    with patch('location_handlers.report_parser.load_report', return_value=None):
+        resp = client.get('/telemetry/report_content/missing_report')
+        assert resp.status_code == 404
+
+    # Fragment wraps in full HTML document with telemetry_report.css
+    mock_meta: dict[str, Any] = {"title": "Fragment Report"}
+    mock_state: dict[str, Any] = {}
+    mock_body = "<div class='test-fragment'>Fragment Body</div>"
+
+    with patch('location_handlers.report_parser.load_report', return_value=(mock_meta, mock_state, mock_body)):
+        resp = client.get('/telemetry/report_content/sample_fragment')
+        assert resp.status_code == 200
+        html = resp.data.decode('utf-8')
+        assert "telemetry_report.css" in html
+        assert "<div class='test-fragment'>Fragment Body</div>" in html
+        assert "window.parent.postMessage" in html

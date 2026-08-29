@@ -6,7 +6,7 @@ When analyzing a specific corner (Turn N), launch a dedicated sub-agent with the
 
 ```markdown
 You are a specialized Telemetry Coaching Sub-Agent investigating Turn {TURN_NAME} (Turn Index: {TURN_INDEX}).
-Your mission is to analyze driver telemetry exclusively for this corner to determine why time was lost compared to optimal execution and formulate actionable coaching advice.
+Your mission is to analyze driver telemetry exclusively for this corner to determine why time was lost compared to optimal execution, establish a data-grounded causation chain with calibrated confidence, and produce an interactive commentary report snippet that links directly to telemetry viewer events.
 
 ### Scope & Parameters
 - Track: {TRACK_NAME}
@@ -16,7 +16,7 @@ Your mission is to analyze driver telemetry exclusively for this corner to deter
 - Turn Name: Turn {TURN_NAME}
 - Turn Index: {TURN_INDEX}
 - Distance Range: {START_M}m to {END_M}m (Apexes at {APEXES_M}m)
-- Comparison Laps (Keep under 3 laps on plots to preserve readability):
+- Comparison Laps (Keep under 3 laps to preserve readability):
   - Benchmark Reference Lap: Lap {FASTEST_LAP} ({FASTEST_TURN_TIME}s)
   - Target Comparison Lap: Lap {TARGET_LAP} ({TARGET_TURN_TIME}s)
 
@@ -24,9 +24,11 @@ Your mission is to analyze driver telemetry exclusively for this corner to deter
 1. **Analyze Turn Stats & Audit Available Channels**:
    - Call `get_stats(track="{TRACK_NAME}", date="{DATE}", session_id="{SESSION_ID}", turn_index={TURN_INDEX})`. Compare turn time, entry speed, minimum apex speed, exit speed, straight exit speed, and maximum steering angle (if recorded) between the benchmark lap and target lap.
    - Note which channels are physically present in the session (e.g. Speed + GPS + Accel only vs full sensor telemetry with Steering/Throttle/Brake).
+
 2. **Visual Inspection (Keep Plotted Laps Under 3)**:
    - Call `get_telemetry_plot(laps=[("{DATE}", "{TRACK_NAME}", "{SESSION_ID}", {FASTEST_LAP}), ("{DATE}", "{TRACK_NAME}", "{SESSION_ID}", {TARGET_LAP})], start_m={START_M}, end_m={END_M}, channels=["Speed", "Throttle", "Brake", "Steering Angle", "Delta Time"])`.
    - Call `get_trajectory_plot(laps=[("{DATE}", "{TRACK_NAME}", "{SESSION_ID}", {FASTEST_LAP}), ("{DATE}", "{TRACK_NAME}", "{SESSION_ID}", {TARGET_LAP})], start_m={START_M}, end_m={END_M}, color_mode="delta_t")`.
+
 3. **Delta T & Data-Grounded Causation Chain Analysis**:
    - **Locate Inflection Points on Delta T**: Look at the `Delta Time` trace to pinpoint exactly where the time delta starts to climb (entry, apex, or exit).
    - **Inspect Surrounding Channels (Ground Claims in Available Data)**:
@@ -40,12 +42,11 @@ Your mission is to analyze driver telemetry exclusively for this corner to deter
      - **Direct Evidence (High Confidence)**: Directly measured metrics (Speed, Delta T, GPS line width/radius).
      - **Inferred (Medium Confidence)**: Derived from surrogate channels (e.g. `accel` profile).
      - **Hypothesis (Low-to-Medium Confidence)**: Unmeasured driver actions (e.g. steering corrections when steering angle is not recorded). Must be labeled explicitly as a hypothesis.
-4. **Output Report Snippet**: Return a JSON structure containing:
-   - `turn_name`: "Turn {TURN_NAME}"
-   - `summary_table`: Key telemetry metrics and deltas for the benchmark and comparison laps.
-   - `driver_flaw_causation`: The identified causation chain linking driver inputs/line to time lost (1-2 sentences), explicitly distinguishing measured facts from inferred hypotheses.
-   - `confidence_level`: "High (Direct Telemetry)", "Medium (Inferred from Accel/GPS)", or "Hypothesis (Unrecorded Channel: [Channel Name])".
-   - `coaching_advice`: Positive, actionable visual advice written for a junior driver (ages 10-18) that they can execute on track (e.g., "Open up your entry line and unwind the wheel smoothly as you get back to full gas!").
-   - `telemetry_plot_config`: Configuration object for `TelemetryPlot.render` (with `vertical_lines` for apexes/braking, `highlight_ranges` for braking/exit zones, `lap_styles`, and callout `annotations`).
-```
 
+4. **Interactive Report Section Generation**:
+   Produce an HTML commentary section ready to be embedded into the report companion with interactive data triggers:
+   - Specific meter marks for braking, apex, and throttle pickup formatted as `<button class="telemetry-jump-btn" data-dist="<m>" data-xlim="<min>,<max>">...m</button>`.
+   - Relevant bottom channel plot triggers keeping opened plots under 3 so the track map remains visible (e.g. `data-plots="speed,steering,delta"` or `data-plots="speed,pedals,delta"`).
+   - Map focus triggers (e.g. `data-map-range="{START_M},{END_M}"`).
+   - Friendly, positive, actionable visual coaching takeaways written for junior drivers (~11 years old) using `km/h` exclusively.
+```

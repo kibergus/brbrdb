@@ -28,6 +28,7 @@ import pandas as pd
 import numpy as np
 import auth
 import struct
+import report_parser
 
 
 location_blueprint = Blueprint('location', __name__)
@@ -194,10 +195,18 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
     return laps_list, columns, driver_name
 
 
-@location_blueprint.route('/telemetry/<league>/<class_name>/<path:date>/<track>')
-def telemetry_view(league: str, class_name: str, date: str, track: str) -> str:
-    session_id = request.args.get('session_id')
-
+def _render_telemetry_meeting(
+    league: str,
+    class_name: str,
+    date: str,
+    track: str,
+    session_id: str | None = None,
+    is_report_mode: bool = False,
+    report_title: str | None = None,
+    report_html: str | None = None,
+    report_state: dict | None = None,
+    report_name: str | None = None
+) -> str:
     sessions = db.find_sessions(leagues=league, classes=class_name, date=date, track=track)
     if not sessions:
         abort(404)
@@ -278,8 +287,184 @@ def telemetry_view(league: str, class_name: str, date: str, track: str) -> str:
         prev_meeting_url=prev_meeting_url,
         next_meeting_url=next_meeting_url,
         prev_meeting_title=prev_meeting_title,
-        next_meeting_title=next_meeting_title
+        next_meeting_title=next_meeting_title,
+        is_report_mode=is_report_mode,
+        report_title=report_title,
+        report_html=report_html,
+        report_state=report_state or {},
+        report_name=report_name
     )
+
+
+@location_blueprint.route('/telemetry/<league>/<class_name>/<path:date>/<track>')
+def telemetry_view(league: str, class_name: str, date: str, track: str) -> str:
+    session_id = request.args.get('session_id')
+    report_param = request.args.get('report')
+    is_report_mode = False
+    report_title = None
+    report_html = None
+    report_state = None
+
+    if report_param:
+        res = report_parser.load_report(report_param)
+        if res:
+            meta, state, body = res
+            is_report_mode = True
+            report_title = meta.get('title', report_param)
+            report_html = body
+            report_state = state
+            if not session_id and meta.get('session_id'):
+                session_id = meta.get('session_id')
+
+    return _render_telemetry_meeting(
+        league=league,
+        class_name=class_name,
+        date=date,
+        track=track,
+        session_id=session_id,
+        is_report_mode=is_report_mode,
+        report_title=report_title,
+        report_html=report_html,
+        report_state=report_state,
+        report_name=report_param
+    )
+
+
+@location_blueprint.route('/telemetry/report/<path:report_name>')
+def telemetry_report_view(report_name: str) -> str:
+    res = report_parser.load_report(report_name)
+    if not res:
+        abort(404)
+
+    meta, state, body = res
+    league = meta.get('league')
+    class_name = meta.get('class_name') or meta.get('class')
+    date = meta.get('date')
+    track = meta.get('track')
+    session_id = request.args.get('session_id') or meta.get('session_id')
+
+    if (
+        not isinstance(league, str)
+        or not isinstance(class_name, str)
+        or not isinstance(date, str)
+        or not isinstance(track, str)
+    ):
+        abort(400)
+
+    report_title = meta.get('title', report_name)
+    if not isinstance(report_title, str):
+        report_title = str(report_name)
+
+    return _render_telemetry_meeting(
+        league=league,
+        class_name=class_name,
+        date=date,
+        track=track,
+        session_id=session_id,
+        is_report_mode=True,
+        report_title=report_title,
+        report_html=body,
+        report_state=state,
+        report_name=report_name
+    )
+
+
+@location_blueprint.route('/telemetry/report_content/<path:report_name>')
+def telemetry_report_content(report_name: str) -> Response:
+    res = report_parser.load_report(report_name)
+    if not res:
+        abort(404)
+
+    meta, state, body = res
+    postmessage_script = """
+<script>
+  window.Telemetry = {
+    jump: function(opts) {
+      window.parent.postMessage(Object.assign({ type: 'telemetry_jump' }, opts || {}), '*');
+    },
+    setRange: function(startM, endM) {
+      var r = (endM !== undefined) ? (startM + ',' + endM) : startM;
+      window.parent.postMessage({ type: 'telemetry_jump', xlim: r }, '*');
+    },
+    focusMap: function(startM, endM) {
+      var r = (endM !== undefined) ? (startM + ',' + endM) : startM;
+      window.parent.postMessage({ type: 'telemetry_jump', mapRange: r }, '*');
+    },
+    focusRange: function(startM, endM) {
+      var r = (endM !== undefined) ? (startM + ',' + endM) : startM;
+      window.parent.postMessage({ type: 'telemetry_jump', focusRange: r }, '*');
+    },
+    togglePlot: function(plot) {
+      window.parent.postMessage({ type: 'telemetry_jump', togglePlot: plot }, '*');
+    },
+    setPlots: function(plots) {
+      window.parent.postMessage({
+        type: 'telemetry_jump',
+        plots: Array.isArray(plots) ? plots.join(',') : plots
+      }, '*');
+    },
+    selectLaps: function(lapsA, lapsB) {
+      window.parent.postMessage({
+        type: 'telemetry_jump',
+        lapsA: Array.isArray(lapsA) ? lapsA.join(',') : lapsA,
+        lapsB: lapsB !== undefined ? (Array.isArray(lapsB) ? lapsB.join(',') : lapsB) : 'none'
+      }, '*');
+    }
+  };
+
+  document.addEventListener('click', function(e) {
+    var sel = '[data-dist], [data-xlim], [data-range], [data-plot-range], [data-map-range], ' +
+              '[data-map-focus], [data-center-map], [data-focus-map], [data-focus-range], [data-zoom-range], ' +
+              '[data-turn], [data-laps], [data-laps-a], [data-laps-b], [data-tab], [data-rtab], ' +
+              '[data-toggle-plot], [data-plots], [data-plot]';
+    var trigger = e.target.closest(sel);
+    if (!trigger) return;
+    var mapRange = trigger.dataset.mapRange || trigger.dataset.mapFocus ||
+                   trigger.dataset.centerMap || trigger.dataset.focusMap;
+    window.parent.postMessage({
+      type: 'telemetry_jump',
+      dist: trigger.dataset.dist,
+      xlim: trigger.dataset.xlim || trigger.dataset.range || trigger.dataset.plotRange,
+      mapRange: mapRange,
+      focusRange: trigger.dataset.focusRange || trigger.dataset.zoomRange,
+      turn: trigger.dataset.turn,
+      laps: trigger.dataset.laps,
+      lapsA: trigger.dataset.lapsA,
+      lapsB: trigger.dataset.lapsB,
+      tab: trigger.dataset.tab,
+      rtab: trigger.dataset.rtab,
+      togglePlot: trigger.dataset.togglePlot,
+      plots: trigger.dataset.plots || trigger.dataset.plot
+    }, '*');
+  });
+</script>
+"""
+    if '<html' not in body.lower() or '<head' not in body.lower():
+        title = meta.get('title', 'Telemetry Report')
+        css_url = url_for('static', filename='css/telemetry_report.css')
+        body = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{css_url}">
+</head>
+<body class="report-iframe-body">
+  {body}
+  {postmessage_script}
+</body>
+</html>"""
+    else:
+        if '</body>' in body:
+            body = body.replace('</body>', f'{postmessage_script}</body>')
+        else:
+            body = body + postmessage_script
+
+    return Response(body, mimetype='text/html')
 
 
 def _get_display_name(csv_file: str) -> str:

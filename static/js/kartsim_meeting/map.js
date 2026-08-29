@@ -490,6 +490,32 @@ export function clearLapPolylines() {
     state.lapPolylines = {};
 }
 
+export function matchesRequestedLap(requestedSet, lapId, session, lap) {
+    if (!requestedSet || requestedSet.size === 0) return false;
+    if (requestedSet.has(lapId)) return true;
+    for (const req of requestedSet) {
+        if (!req) continue;
+        const cleaned = String(req).replace(/\.csv(?=-|\b)/i, '').replace(/\.csv$/i, '').trim();
+        if (cleaned === lapId) return true;
+
+        const reqParts = cleaned.split('-');
+        const reqLapNum = parseInt(reqParts[reqParts.length - 1], 10);
+        if (!isNaN(reqLapNum) && lap && lap.lap_num === reqLapNum) {
+            const reqSid = reqParts.slice(0, -1).join('-');
+            if (!reqSid || reqSid === 'lap') return true;
+            if (session) {
+                const sid = session.session_id || '';
+                const sname = session.session_name || '';
+                if (sid === reqSid || sid.startsWith(reqSid) || reqSid.startsWith(sid)) return true;
+                if (sname && (sname.toLowerCase().includes(reqSid.toLowerCase()) || reqSid.toLowerCase().includes(sname.toLowerCase()))) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 let isFetchingTrackPoints = false;
 
 export function loadTrackPoints(overrideSessionId) {
@@ -522,8 +548,9 @@ export function loadTrackPoints(overrideSessionId) {
             if (lapList) lapList.innerHTML = '';
             const bounds = new google.maps.LatLngBounds();
 
+            const reportState = (window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
             const params = new URLSearchParams(window.location.search);
-            const hasExplicitTcol = params.has('tcol');
+            const hasExplicitTcol = params.has('tcol') || Boolean(reportState.tcol);
             if (!hasExplicitTcol) {
                 if (!hasBrakeChannel(sessionsData)) {
                     setTrajectoryColorMode('accel');
@@ -537,24 +564,41 @@ export function loadTrackPoints(overrideSessionId) {
 
             const urlLapsA = params.get('lapsA');
             const urlLapsB = params.get('lapsB');
-            let hasCustomLapsA = params.has('lapsA');
+            let hasCustomLapsA = params.has('lapsA') || Boolean(reportState.lapsA);
             let customLapsA = new Set();
-            if (urlLapsA && urlLapsA !== 'none') {
-                urlLapsA.split(',').forEach(id => {
-                    const trimmed = id ? id.trim() : '';
-                    if (trimmed && trimmed !== 'none') {
-                        customLapsA.add(trimmed);
-                    }
+            if (params.has('lapsA')) {
+                if (urlLapsA && urlLapsA !== 'none') {
+                    urlLapsA.split(',').forEach(id => {
+                        const trimmed = id ? id.trim() : '';
+                        if (trimmed && trimmed !== 'none') {
+                            customLapsA.add(trimmed);
+                        }
+                    });
+                }
+            } else if (reportState.lapsA) {
+                const arrA = Array.isArray(reportState.lapsA) ? reportState.lapsA : (reportState.lapsA === 'none' ? [] : String(reportState.lapsA).split(','));
+                arrA.forEach(id => {
+                    const trimmed = id ? String(id).trim() : '';
+                    if (trimmed && trimmed !== 'none') customLapsA.add(trimmed);
                 });
             }
-            let hasCustomLapsB = params.has('lapsB');
+
+            let hasCustomLapsB = params.has('lapsB') || Boolean(reportState.lapsB);
             let customLapsB = new Set();
-            if (urlLapsB && urlLapsB !== 'none') {
-                urlLapsB.split(',').forEach(id => {
-                    const trimmed = id ? id.trim() : '';
-                    if (trimmed && trimmed !== 'none') {
-                        customLapsB.add(trimmed);
-                    }
+            if (params.has('lapsB')) {
+                if (urlLapsB && urlLapsB !== 'none') {
+                    urlLapsB.split(',').forEach(id => {
+                        const trimmed = id ? id.trim() : '';
+                        if (trimmed && trimmed !== 'none') {
+                            customLapsB.add(trimmed);
+                        }
+                    });
+                }
+            } else if (reportState.lapsB) {
+                const arrB = Array.isArray(reportState.lapsB) ? reportState.lapsB : (reportState.lapsB === 'none' ? [] : String(reportState.lapsB).split(','));
+                arrB.forEach(id => {
+                    const trimmed = id ? String(id).trim() : '';
+                    if (trimmed && trimmed !== 'none') customLapsB.add(trimmed);
                 });
             }
 
@@ -614,7 +658,7 @@ export function loadTrackPoints(overrideSessionId) {
                     precalculateLapData(lap);
 
                     if (hasCustomLapsA) {
-                        if (customLapsA.has(lapId)) {
+                        if (matchesRequestedLap(customLapsA, lapId, session, lap)) {
                             state.groupASelection.add(lapId);
                         }
                     } else {
@@ -623,7 +667,7 @@ export function loadTrackPoints(overrideSessionId) {
                         }
                     }
                     if (hasCustomLapsB) {
-                        if (customLapsB.has(lapId)) {
+                        if (matchesRequestedLap(customLapsB, lapId, session, lap)) {
                             state.groupBSelection.add(lapId);
                         }
                     } else {
@@ -697,9 +741,13 @@ export function loadTrackPoints(overrideSessionId) {
             import('./lap_selection.js').then(ui => {
                 ui.updateVisibilityIcons();
 
+                const reportState = (window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
                 const params = new URLSearchParams(window.location.search);
-                const urlSort = params.get('sort');
+                const urlSort = params.get('sort') || reportState.sort;
                 if (urlSort) {
+                    if (urlSort === 'turn' && !params.has('turn') && reportState.turn !== undefined) {
+                        state.currentTurnIdx = reportState.turn;
+                    }
                     ui.setSort(urlSort);
                 } else {
                     ui.renderLapList();
@@ -716,6 +764,8 @@ export function loadTrackPoints(overrideSessionId) {
                             state.globalTelemetryXRange = [min, max];
                         }
                     }
+                } else if (reportState.xlim && Array.isArray(reportState.xlim) && reportState.xlim.length === 2) {
+                    state.globalTelemetryXRange = [parseFloat(reportState.xlim[0]), parseFloat(reportState.xlim[1])];
                 }
 
                 ui.updateFastestSelectedLap();
@@ -741,6 +791,7 @@ export function initMap() {
                 state.globalTelemetryXRange = [0, state.trackData.lap_length];
             }
 
+            const reportState = (window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
             const params = new URLSearchParams(window.location.search);
             const mapParam = params.get('map');
             let hasCustomMap = false;
@@ -757,6 +808,16 @@ export function initMap() {
                         customCenter = { lat, lng };
                         hasCustomMap = true;
                     }
+                }
+            } else if (reportState.map) {
+                if (Array.isArray(reportState.map) && reportState.map.length === 3) {
+                    customZoom = parseInt(reportState.map[0]);
+                    customCenter = { lat: parseFloat(reportState.map[1]), lng: parseFloat(reportState.map[2]) };
+                    hasCustomMap = true;
+                } else if (typeof reportState.map === 'object' && reportState.map.lat !== undefined && reportState.map.lng !== undefined) {
+                    customZoom = parseInt(reportState.map.zoom) || 16;
+                    customCenter = { lat: parseFloat(reportState.map.lat), lng: parseFloat(reportState.map.lng) };
+                    hasCustomMap = true;
                 }
             }
             state.hasCustomMapSet = hasCustomMap;
@@ -906,6 +967,7 @@ export function initTrackMarkers() {
 
             const slider = document.getElementById('distance-slider');
             const params = new URLSearchParams(window.location.search);
+            const reportState = (window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
             const xlimParam = params.get('xlim');
             let hasCustomXlim = false;
             if (xlimParam) {
@@ -918,17 +980,20 @@ export function initTrackMarkers() {
                         hasCustomXlim = true;
                     }
                 }
+            } else if (reportState.xlim && Array.isArray(reportState.xlim) && reportState.xlim.length === 2) {
+                state.globalTelemetryXRange = [parseFloat(reportState.xlim[0]), parseFloat(reportState.xlim[1])];
+                hasCustomXlim = true;
             }
             if (slider && data.lap_length) {
                 slider.max = data.lap_length;
                 slider.step = 0.01;
-                if (!hasCustomXlim) {
+                if (!hasCustomXlim && state.sortMode !== 'turn') {
                     state.globalTelemetryXRange = [0, data.lap_length];
                 }
             }
 
             let startDist = 0;
-            const distParam = params.get('dist');
+            const distParam = params.has('dist') ? params.get('dist') : (reportState.dist !== undefined ? String(reportState.dist) : null);
             if (distParam) {
                 const parsedDist = parseFloat(distParam);
                 if (!isNaN(parsedDist) && parsedDist >= 0 && parsedDist <= (data.lap_length || Infinity)) {
@@ -956,16 +1021,6 @@ export function initTrackMarkers() {
             });
 
             updateDistanceMarker(startDist);
-            import('./plots_sync.js').then(plots => {
-                plots.renderExpandablePlots();
-                plots.updateTelemetryPlots(startDist);
-            });
-            if (state.sortMode === 'turn') {
-                import('./lap_selection.js').then(ui => {
-                    ui.renderLapList();
-                    ui.updateFastestSelectedLap();
-                });
-            }
 
             state.trackMarkers.forEach(m => {
                 if (m.setMap) m.setMap(null);
@@ -996,14 +1051,35 @@ export function initTrackMarkers() {
                         turnSelector.appendChild(opt);
                     });
 
-                    const params = new URLSearchParams(window.location.search);
-                    const urlTurn = params.get('turn');
+                    const urlTurn = params.has('turn') ? params.get('turn') : (reportState.turn !== undefined ? String(reportState.turn) : null);
                     if (urlTurn !== null) {
                         const turnIdx = parseInt(urlTurn);
                         if (!isNaN(turnIdx) && turnIdx >= 0 && turnIdx < data.turns.length) {
                             turnSelector.value = turnIdx;
                             state.currentTurnIdx = turnIdx;
                         }
+                    } else if (state.currentTurnIdx !== undefined) {
+                        turnSelector.value = state.currentTurnIdx;
+                    }
+                }
+
+                if (state.sortMode === 'turn') {
+                    const turn = data.turns[state.currentTurnIdx || 0];
+                    if (turn && !hasCustomXlim) {
+                        let rangeEnd = turn.end;
+                        const nextTurn = data.turns[(state.currentTurnIdx || 0) + 1];
+                        if (nextTurn) {
+                            rangeEnd = nextTurn.start;
+                        } else if (data.lap_length) {
+                            rangeEnd = data.lap_length;
+                        }
+                        const rangeStart = Math.max(0, turn.start - 20);
+                        state.globalTelemetryXRange = [rangeStart, rangeEnd];
+                    }
+                    if (state.map) {
+                        import('./lap_selection.js').then(ui => {
+                            ui.focusMapOnTurn(state.currentTurnIdx || 0);
+                        });
                     }
                 }
 
@@ -1021,6 +1097,17 @@ export function initTrackMarkers() {
                         addTrackMarkerAtDistance(points, data.turn_start[idx], `T${idx + 1}`, '#10b981');
                     }
                     addTrackMarkerAtDistance(points, endDist, `T${idx + 1}`, '#10b981');
+                });
+            }
+
+            import('./plots_sync.js').then(plots => {
+                plots.renderExpandablePlots();
+                plots.updateTelemetryPlots(startDist);
+            });
+            if (state.sortMode === 'turn') {
+                import('./lap_selection.js').then(ui => {
+                    ui.renderLapList();
+                    ui.updateFastestSelectedLap();
                 });
             }
 

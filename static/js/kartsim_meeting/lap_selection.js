@@ -21,9 +21,9 @@
 import { state } from './state.js';
 import { parseLapTime } from '../utils.js';
 import { getTurnTime, animateSlider, getPointAtDistance } from './telemetry.js';
-import { updateTelemetryPlots, updateAccelerationPlot, updateSlipAnglePlot, renderExpandablePlots, updateExpandablePlotsVisibility } from './plots_sync.js';
+import { updateTelemetryPlots, updateAccelerationPlot, updateSlipAnglePlot, renderExpandablePlots, updateExpandablePlotsVisibility, togglePlot, setVisiblePlots } from './plots_sync.js';
 import { renderStatsPlots } from './stats_plots.js';
-import { initMap, loadTrackPoints, calculateBoundsZoom, updateAllPolylineColors, getReferenceLap } from './map.js';
+import { initMap, loadTrackPoints, calculateBoundsZoom, updateAllPolylineColors, getReferenceLap, updateDistanceMarker, setTrajectoryColorMode, matchesRequestedLap } from './map.js';
 import { debouncedUpdateURL } from './url_sync.js';
 
 export function showRightPanelTab(tabId) {
@@ -484,55 +484,57 @@ export function showTab(tabId) {
     }
 }
 
-export function getTurnBounds(turn) {
-    if (!turn || !state.trackData || !state.trackData.center_line || state.trackData.center_line.length === 0) {
+export function getDistanceRangeBounds(startDist, endDist, margin = 15) {
+    if (!state.trackData || !state.trackData.center_line || state.trackData.center_line.length === 0) {
         return null;
     }
     const points = state.trackData.center_line;
     const lapLength = state.trackData.lap_length || Infinity;
 
-    const startDist = (turn.start !== undefined && turn.start !== null) ? turn.start : 0;
-    const endDist = (turn.end !== undefined && turn.end !== null) ? turn.end : startDist;
+    const sDist = (startDist !== undefined && startDist !== null) ? parseFloat(startDist) : 0;
+    const eDist = (endDist !== undefined && endDist !== null) ? parseFloat(endDist) : sDist;
 
-    const margin = 15;
-    const s = Math.max(0, startDist - margin);
-    const e = endDist + margin;
+    const minD = Math.min(sDist, eDist);
+    const maxD = Math.max(sDist, eDist);
 
-    const turnPoints = [];
+    const s = Math.max(0, minD - margin);
+    const e = maxD + margin;
 
-    if (startDist <= endDist) {
+    const rangePoints = [];
+
+    if (minD <= maxD) {
         points.forEach(p => {
             if (p.dist >= s && p.dist <= e) {
-                turnPoints.push(p);
+                rangePoints.push(p);
             }
         });
     } else {
         points.forEach(p => {
             if (p.dist >= s || p.dist <= (e % lapLength)) {
-                turnPoints.push(p);
+                rangePoints.push(p);
             }
         });
     }
 
-    const ptStart = getPointAtDistance({ points }, startDist, ['lat', 'lng']);
+    const ptStart = getPointAtDistance({ points }, sDist, ['lat', 'lng']);
     if (ptStart && ptStart.lat !== undefined && ptStart.lng !== undefined) {
-        turnPoints.push(ptStart);
+        rangePoints.push(ptStart);
     }
-    const ptEnd = getPointAtDistance({ points }, endDist, ['lat', 'lng']);
+    const ptEnd = getPointAtDistance({ points }, eDist, ['lat', 'lng']);
     if (ptEnd && ptEnd.lat !== undefined && ptEnd.lng !== undefined) {
-        turnPoints.push(ptEnd);
+        rangePoints.push(ptEnd);
     }
 
-    if (turnPoints.length === 0) return null;
+    if (rangePoints.length === 0) return null;
 
     if (typeof window !== 'undefined' && window.google && window.google.maps && google.maps.LatLngBounds) {
         const bounds = new google.maps.LatLngBounds();
-        turnPoints.forEach(p => bounds.extend({ lat: p.lat, lng: p.lng }));
+        rangePoints.forEach(p => bounds.extend({ lat: p.lat, lng: p.lng }));
         return bounds;
     }
 
     let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-    turnPoints.forEach(p => {
+    rangePoints.forEach(p => {
         if (p.lat < minLat) minLat = p.lat;
         if (p.lat > maxLat) maxLat = p.lat;
         if (p.lng < minLng) minLng = p.lng;
@@ -544,6 +546,72 @@ export function getTurnBounds(turn) {
         getCenter: () => ({ lat: () => (minLat + maxLat) / 2, lng: () => (minLng + maxLng) / 2 }),
         isEmpty: () => false
     };
+}
+
+export function getTurnBounds(turn) {
+    if (!turn) return null;
+    const startDist = (turn.start !== undefined && turn.start !== null) ? turn.start : 0;
+    const endDist = (turn.end !== undefined && turn.end !== null) ? turn.end : startDist;
+    return getDistanceRangeBounds(startDist, endDist, 15);
+}
+
+export function focusMapOnRange(startDist, endDist, padding = 50) {
+    if (!state.map || !state.trackData) return;
+    let s = startDist;
+    let e = endDist;
+    if (typeof s === 'string' && s.includes(',') && e === undefined) {
+        const parts = s.split(',').map(v => parseFloat(v.trim()));
+        s = parts[0];
+        e = parts[1];
+    } else if (Array.isArray(s) && s.length === 2 && e === undefined) {
+        e = s[1];
+        s = s[0];
+    }
+    const bounds = getDistanceRangeBounds(s, e, 15);
+
+    let centerCoord = null;
+    if (s !== undefined && e !== undefined && state.trackData.center_line) {
+        const midDist = (parseFloat(s) + parseFloat(e)) / 2;
+        const pt = getPointAtDistance({ points: state.trackData.center_line }, midDist, ['lat', 'lng']);
+        if (pt && pt.lat !== undefined && pt.lng !== undefined) {
+            centerCoord = { lat: pt.lat, lng: pt.lng };
+        }
+    }
+
+    const apply = () => {
+        if (!state.map) return;
+        if (bounds && typeof state.map.fitBounds === 'function') {
+            state.map.fitBounds(bounds, padding);
+        } else if (centerCoord) {
+            if (typeof state.map.setCenter === 'function') state.map.setCenter(centerCoord);
+            if (typeof state.map.panTo === 'function') state.map.panTo(centerCoord);
+        }
+    };
+
+    apply();
+    if (typeof setTimeout === 'function') {
+        setTimeout(apply, 50);
+        setTimeout(apply, 150);
+        setTimeout(apply, 300);
+    }
+}
+
+export function setTelemetryRange(startDist, endDist) {
+    let range = null;
+    if (Array.isArray(startDist) && startDist.length === 2) {
+        range = [parseFloat(startDist[0]), parseFloat(startDist[1])];
+    } else if (startDist !== undefined && endDist !== undefined) {
+        range = [parseFloat(startDist), parseFloat(endDist)];
+    } else if (typeof startDist === 'string' && startDist.includes(',')) {
+        const parts = startDist.split(',').map(s => parseFloat(s.trim()));
+        if (parts.length === 2) range = parts;
+    }
+
+    if (range && !isNaN(range[0]) && !isNaN(range[1])) {
+        state.globalTelemetryXRange = range;
+        renderExpandablePlots();
+        debouncedUpdateURL();
+    }
 }
 
 export function focusMapOnTurn(turnIdx) {
@@ -656,16 +724,19 @@ export function setSort(mode) {
     
     const turnSelector = document.getElementById('turn-selector');
     if (turnSelector) {
-        if (turnSelector.value !== "") {
-            state.currentTurnIdx = parseInt(turnSelector.value || 0);
-        } else {
-            const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-            const urlTurn = params ? params.get('turn') : null;
-            if (urlTurn !== null && !isNaN(parseInt(urlTurn))) {
-                state.currentTurnIdx = parseInt(urlTurn);
-            }
-        }
         turnSelector.style.display = (mode === 'turn') ? 'block' : 'none';
+
+        const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+        const reportState = (typeof window !== 'undefined' && window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
+        const urlTurn = params && params.has('turn') ? params.get('turn') : (reportState.turn !== undefined ? String(reportState.turn) : null);
+        if (urlTurn !== null && !isNaN(parseInt(urlTurn))) {
+            state.currentTurnIdx = parseInt(urlTurn);
+            turnSelector.value = state.currentTurnIdx;
+        } else if (state.currentTurnIdx !== undefined) {
+            turnSelector.value = state.currentTurnIdx;
+        } else if (turnSelector.value !== "") {
+            state.currentTurnIdx = parseInt(turnSelector.value || 0);
+        }
         
         if (mode === 'turn' && state.trackData && state.trackData.turns) {
             const turns = state.trackData.turns;
@@ -1338,5 +1409,320 @@ export function toggleSpeedPlot() {
     updateExpandablePlotsVisibility();
     debouncedUpdateURL();
 }
+
+export function handleReportTriggerAction(data) {
+    if (!data) return;
+
+    // 1. Distance seek
+    if (data.dist !== undefined && data.dist !== null && data.dist !== '') {
+        const dist = parseFloat(data.dist);
+        if (!isNaN(dist)) {
+            state.playbackDistance = dist;
+            const slider = document.getElementById('distance-slider');
+            const display = document.getElementById('distance-display');
+            if (slider) slider.value = dist;
+            if (display) display.textContent = Math.round(dist) + 'm';
+            updateDistanceMarker(dist);
+        }
+    }
+
+    // 2. Telemetry X range (zoom / visible range in bottom plot)
+    const rangeData = data.xlim || data.range || data.plotRange;
+    if (rangeData) {
+        setTelemetryRange(rangeData);
+    }
+
+    // Map centering / focus over track segment (meters)
+    const mapRangeData = data.mapRange || data.mapFocus || data.centerMap || data.focusMap;
+    if (mapRangeData) {
+        focusMapOnRange(mapRangeData);
+    }
+
+    // Focus both plot range AND map centering
+    const focusRangeData = data.focusRange || data.zoomRange;
+    if (focusRangeData) {
+        setTelemetryRange(focusRangeData);
+        focusMapOnRange(focusRangeData);
+    }
+
+    // 3. Turn select
+    if (data.turn !== undefined && data.turn !== null && data.turn !== '') {
+        const turnIdx = parseInt(data.turn, 10);
+        if (!isNaN(turnIdx)) {
+            selectTurnAndSwitchToMap(turnIdx);
+        }
+    }
+
+    // 4. Lap selection
+    if (data.laps !== undefined && data.lapsA === undefined && data.lapsB === undefined) {
+        selectLaps(data.laps, 'none');
+    } else if (data.lapsA !== undefined || data.lapsB !== undefined) {
+        selectLaps(data.lapsA, data.lapsB);
+    }
+
+    // 5. Toggle single plot
+    if (data.togglePlot) {
+        togglePlot(data.togglePlot);
+    }
+
+    // 6. Set visible plots
+    if (data.plots !== undefined || data.plot !== undefined) {
+        setVisiblePlots(data.plots !== undefined ? data.plots : data.plot);
+    }
+
+    // 7. Switch tab (map/stats)
+    if (data.tab) {
+        showTab(data.tab);
+    }
+
+    // 8. Switch right tab
+    if (data.rtab) {
+        showRightPanelTab(data.rtab);
+    }
+
+    debouncedUpdateURL();
+}
+
+export function selectLaps(lapsA, lapsB) {
+    let changed = false;
+
+    if (lapsA !== undefined) {
+        state.groupASelection.clear();
+        if (lapsA && lapsA !== 'none') {
+            const arr = Array.isArray(lapsA) ? lapsA : String(lapsA).split(',');
+            const requested = new Set(arr.map(s => String(s).trim()).filter(Boolean));
+            if (state.allSessionsData && state.allSessionsData.length > 0) {
+                state.allSessionsData.forEach(session => {
+                    if (!session.laps) return;
+                    session.laps.forEach(lap => {
+                        const lapId = `${session.session_id}-${lap.lap_num}`;
+                        if (matchesRequestedLap(requested, lapId, session, lap)) {
+                            state.groupASelection.add(lapId);
+                        }
+                    });
+                });
+            } else {
+                requested.forEach(id => state.groupASelection.add(id));
+            }
+        }
+        changed = true;
+    }
+
+    if (lapsB !== undefined) {
+        state.groupBSelection.clear();
+        if (lapsB && lapsB !== 'none') {
+            const arr = Array.isArray(lapsB) ? lapsB : String(lapsB).split(',');
+            const requested = new Set(arr.map(s => String(s).trim()).filter(Boolean));
+            if (state.allSessionsData && state.allSessionsData.length > 0) {
+                state.allSessionsData.forEach(session => {
+                    if (!session.laps) return;
+                    session.laps.forEach(lap => {
+                        const lapId = `${session.session_id}-${lap.lap_num}`;
+                        if (matchesRequestedLap(requested, lapId, session, lap)) {
+                            state.groupBSelection.add(lapId);
+                        }
+                    });
+                });
+            } else {
+                requested.forEach(id => state.groupBSelection.add(id));
+            }
+        }
+        changed = true;
+    }
+
+    if (changed) {
+        updateFastestSelectedLap();
+        if (state.lapPolylines) {
+            Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+        }
+        updateAllPolylineColors();
+        renderLapList();
+        renderStatsPlots();
+        renderExpandablePlots();
+        showRightPanelTab(state.activeRightTab || 'report');
+        debouncedUpdateURL();
+    }
+}
+
+export function initReportInteractions() {
+    if (typeof window !== 'undefined' && window.addEventListener) {
+        window.addEventListener('message', (event) => {
+            if (!event.data || event.data.type !== 'telemetry_jump') return;
+            handleReportTriggerAction(event.data);
+        });
+    }
+
+    if (typeof document !== 'undefined' && document.getElementById) {
+        const reportContainer = document.getElementById('report-chart-container');
+        if (reportContainer) {
+            reportContainer.addEventListener('click', (e) => {
+                const trigger = e.target.closest(
+                    '[data-dist], [data-xlim], [data-range], [data-plot-range], [data-map-range], ' +
+                    '[data-map-focus], [data-center-map], [data-focus-map], [data-focus-range], [data-zoom-range], ' +
+                    '[data-turn], [data-laps], [data-laps-a], [data-laps-b], [data-tab], [data-rtab], ' +
+                    '[data-toggle-plot], [data-plots], [data-plot]'
+                );
+                if (!trigger) return;
+                handleReportTriggerAction({
+                    dist: trigger.dataset.dist,
+                    xlim: trigger.dataset.xlim || trigger.dataset.range || trigger.dataset.plotRange,
+                    mapRange: trigger.dataset.mapRange || trigger.dataset.mapFocus || trigger.dataset.centerMap || trigger.dataset.focusMap,
+                    focusRange: trigger.dataset.focusRange || trigger.dataset.zoomRange,
+                    turn: trigger.dataset.turn,
+                    laps: trigger.dataset.laps,
+                    lapsA: trigger.dataset.lapsA,
+                    lapsB: trigger.dataset.lapsB,
+                    tab: trigger.dataset.tab,
+                    rtab: trigger.dataset.rtab,
+                    togglePlot: trigger.dataset.togglePlot,
+                    plots: trigger.dataset.plots || trigger.dataset.plot
+                });
+            });
+        }
+    }
+}
+
+export function resetReportView(e) {
+    if (e && typeof e.stopPropagation === 'function') {
+        e.stopPropagation();
+    }
+    const reportState = (typeof window !== 'undefined' && window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
+
+    // 1. Clean URL query parameters
+    if (typeof window !== 'undefined' && window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', window.location.pathname);
+    }
+
+    // 2. Reset tab
+    const targetTab = reportState.tab || 'map';
+    showTab(targetTab);
+
+    // 3. Reset right tab
+    const targetRightTab = reportState.rtab || 'report';
+    showRightPanelTab(targetRightTab);
+
+    // 4. Reset side panel width and state
+    if (reportState.sidePanelWidth) {
+        state.sidePanelWidth = reportState.sidePanelWidth;
+        const sidePanel = document.getElementById('map-side-panel');
+        if (sidePanel) {
+            sidePanel.style.width = `${state.sidePanelWidth}px`;
+        }
+    }
+    expandSidePanel();
+
+    // 5. Reset bottom plots (speed, delta, channels)
+    state.deltaPlotVisible = Boolean(reportState.delta);
+    state.speedPlotVisible = Boolean(reportState.speed);
+    updateExpandablePlotsVisibility();
+
+    // Reset open channel plots
+    document.querySelectorAll('.plot-tab').forEach(tab => {
+        const plotType = tab.getAttribute('data-tab');
+        const container = document.getElementById(`plot-row-${plotType}`);
+        let shouldBeOpen = false;
+        if (reportState.plot) {
+            const plotList = Array.isArray(reportState.plot) ? reportState.plot : String(reportState.plot).split(',');
+            shouldBeOpen = plotList.map(p => p.trim()).includes(plotType);
+        }
+        if (container) {
+            if (shouldBeOpen) {
+                container.style.display = 'block';
+                tab.classList.add('active');
+            } else {
+                container.style.display = 'none';
+                tab.classList.remove('active');
+            }
+        }
+    });
+
+    // 6. Reset trajectory color mode & slip angle mode
+    if (reportState.tcol) {
+        setTrajectoryColorMode(reportState.tcol);
+    }
+    if (reportState.sacol) {
+        state.slipAngleColorMode = reportState.sacol;
+        const colorModeSelector = document.getElementById('slip_angle-color-mode');
+        if (colorModeSelector) colorModeSelector.value = reportState.sacol;
+    }
+
+    // 7. Reset lap selections
+    state.groupASelection.clear();
+    state.groupBSelection.clear();
+    const arrA = reportState.lapsA ? (Array.isArray(reportState.lapsA) ? reportState.lapsA : [reportState.lapsA]) : [];
+    const arrB = reportState.lapsB ? (Array.isArray(reportState.lapsB) ? reportState.lapsB : [reportState.lapsB]) : [];
+    const customLapsA = new Set(arrA.map(id => String(id).trim()));
+    const customLapsB = new Set(arrB.map(id => String(id).trim()));
+
+    if (state.allSessionsData) {
+        state.allSessionsData.forEach(session => {
+            if (!session.laps) return;
+            session.laps.forEach(lap => {
+                const lapId = `${session.session_id}-${lap.lap_num}`;
+                if (matchesRequestedLap(customLapsA, lapId, session, lap)) {
+                    state.groupASelection.add(lapId);
+                }
+                if (matchesRequestedLap(customLapsB, lapId, session, lap)) {
+                    state.groupBSelection.add(lapId);
+                }
+            });
+        });
+    }
+
+    // 8. Reset sort mode and turn
+    const targetSort = reportState.sort || 'turn';
+    if (reportState.turn !== undefined) {
+        state.currentTurnIdx = parseInt(reportState.turn);
+    }
+    setSort(targetSort);
+
+    // 9. Reset xlim
+    if (reportState.xlim && Array.isArray(reportState.xlim) && reportState.xlim.length === 2) {
+        state.globalTelemetryXRange = [parseFloat(reportState.xlim[0]), parseFloat(reportState.xlim[1])];
+    }
+
+    // 10. Reset distance cursor
+    const targetDist = reportState.dist !== undefined ? parseFloat(reportState.dist) : 0;
+    state.playbackDistance = targetDist;
+    state.currentTargetDist = targetDist;
+    const slider = document.getElementById('distance-slider');
+    const display = document.getElementById('distance-display');
+    if (slider) slider.value = targetDist;
+    if (display) display.textContent = Math.round(targetDist) + 'm';
+    updateDistanceMarker(targetDist);
+
+    // 11. Reset map zoom / center if in reportState or focus on turn
+    if (reportState.map && state.map) {
+        if (Array.isArray(reportState.map) && reportState.map.length === 3) {
+            state.map.setZoom(parseInt(reportState.map[0]));
+            state.map.setCenter({ lat: parseFloat(reportState.map[1]), lng: parseFloat(reportState.map[2]) });
+        }
+    } else if (state.sortMode === 'turn') {
+        focusMapOnTurn(state.currentTurnIdx || 0);
+    }
+
+    // 12. Re-render UI components
+    if (state.lapPolylines) {
+        Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+    }
+    updateAllPolylineColors();
+    renderLapList();
+    renderStatsPlots();
+    renderExpandablePlots();
+    showRightPanelTab(targetRightTab);
+}
+
+if (typeof window !== 'undefined') {
+    window.resetReportView = resetReportView;
+    window.selectLaps = selectLaps;
+    window.togglePlot = togglePlot;
+    window.setVisiblePlots = setVisiblePlots;
+    window.setTelemetryRange = setTelemetryRange;
+    window.focusMapOnRange = focusMapOnRange;
+    window.getDistanceRangeBounds = getDistanceRangeBounds;
+}
+
+
+
 
 

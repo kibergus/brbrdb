@@ -1,196 +1,117 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Telemetry Analysis Report - {{ session_id }}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/telemetry_report.css">
-  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-  <script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=geometry,marker"></script>
-  <script type="module" src="/static/js/stats_plots.js"></script>
-  <script src="/static/js/telemetry_plot.js"></script>
-  <script type="module" src="/static/js/trajectory_plot.js"></script>
-</head>
-<body>
-  <div class="container">
-    <header>
-      <h1 class="header-title">Karting Telemetry Coaching Report: {{ turn_name_or_scope }}</h1>
-      
-      <div class="summary-grid" style="grid-template-columns: 1.2fr 1fr 1fr; gap: 1.25rem;">
-        <div class="summary-text-card">
-          <p class="summary-paragraph">
-            This telemetry coaching report analyzes driver 
-            <a href="https://brbrdb.brbrkitten.com/drivers/{{ driver_slug }}" class="highlight-link">{{ driver_name }}</a> 
-            at <span class="highlight-text">{{ track_name }}</span> through 
-            <span class="highlight-text">{{ turn_name_or_scope }}</span>.
-          </p>
-          <p class="summary-paragraph">
-            Comparing target laps from session 
-            <a href="{{ target_session_url }}" class="highlight-link">{{ target_session_name }}</a> 
-            against benchmark lap(s) from session 
-            <a href="{{ benchmark_session_url }}" class="highlight-link">{{ benchmark_session_name }}</a>.
-          </p>
-          <p class="summary-paragraph">
-            <strong>Key Insight:</strong> {{ executive_summary_text }}
-          </p>
-        </div>
+<!-- {
+  "title": "{{ title }}",
+  "league": "{{ league }}",
+  "class_name": "{{ class_name }}",
+  "date": "{{ date }}",
+  "track": "{{ track_name }}",
+  "session_id": "{{ session_id }}",
+  "state": {
+    "tab": "map",
+    "sort": "turn",
+    "turn": {{ initial_turn_idx }},
+    "lapsA": ["{{ benchmark_lap_id }}", "{{ target_lap_id }}"],
+    "visA": true,
+    "xlim": [{{ initial_start_m }}, {{ initial_end_m }}],
+    "dist": {{ initial_dist_m }},
+    "delta": true,
+    "speed": true,
+    "plot": {{ initial_plots_json }},
+    "tcol": "pedals",
+    "rtab": "report",
+    "sidePanelWidth": 420
+  }
+} -->
 
-        <div class="summary-chart-card">
-          <div class="chart-card-title">{{ distribution_chart_title }}</div>
-          <div id="distribution-chart" style="width: 100%; height: 215px;"></div>
-        </div>
+<div class="report-content">
+  <div>
+    <h2>{{ report_heading }}</h2>
+    <p>
+      Comparing Benchmark 
+      <button class="telemetry-jump-btn" data-laps="{{ benchmark_lap_id }},{{ target_lap_id }}" data-dist="{{ benchmark_braking_m }}">
+        Lap {{ benchmark_lap_num }} ({{ benchmark_lap_time }})
+      </button> 
+      vs Target Comparison 
+      <button class="telemetry-jump-btn" data-laps="{{ benchmark_lap_id }},{{ target_lap_id }}" data-dist="{{ target_braking_m }}">
+        Lap {{ target_lap_num }} ({{ target_lap_time }})
+      </button>.
+    </p>
 
-        <div class="summary-chart-card" style="display: flex; align-items: center; justify-content: center;">
-          <div id="track-minimap-header" style="width: 100%; height: 100%;"></div>
-        </div>
-      </div>
-    </header>
-
-    <section class="selected-laps-section">
-      <h2 class="section-title">⏱️ Selected Analysis Laps</h2>
-      <table class="selected-laps-table">
-        <thead>
-          <tr>
-            <th>Lap Role</th>
-            <th>Lap</th>
-            <th>Turn Time</th>
-            <th>Time Delta</th>
-            <th>Selection Rationale & Focus</th>
-          </tr>
-        </thead>
-        <tbody>
-          <!-- Dynamic lap rows -->
-          {% for lap in selected_laps %}
-          <tr>
-            <td><span class="role-pill {{ lap.pill_class }}">{{ lap.role_label }}</span></td>
-            <td><a href="{{ lap.session_url }}" class="highlight-link">Lap {{ lap.lap_num }} ({{ lap.date }})</a></td>
-            <td>{{ lap.turn_time_str }}</td>
-            <td><span class="{{ lap.delta_class }}">{{ lap.delta_str }}</span></td>
-            <td>{{ lap.rationale }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </section>
-
-    <!-- Sticky & Collapsible Coaching Action Items Container -->
-    <div class="sticky-coaching-container">
-      <div class="sticky-coaching-card">
-        <div class="highlight-title">1. {{ takeaway_1_title }}</div>
-        <div class="highlight-body">{{ takeaway_1_body }}</div>
-      </div>
-      {% if takeaway_2_title %}
-      <div class="sticky-coaching-card">
-        <div class="highlight-title">2. {{ takeaway_2_title }}</div>
-        <div class="highlight-body">{{ takeaway_2_body }}</div>
-      </div>
-      {% endif %}
-    </div>
-
-    <section class="turn-analysis-section">
-      
-      <!-- Repeatable turn card block -->
-      <div class="turn-card" id="turn-card-1">
-        <div class="turn-header">
-          <div class="turn-name">Turn 1</div>
-          <span style="color: var(--text-muted); font-size: 0.9rem;">Distance: 12m – 120m</span>
-        </div>
-
-        <table class="turn-stats-table">
-          <thead>
-            <tr>
-              <th>Lap Type</th>
-              <th>Lap #</th>
-              <th>Turn Time</th>
-              <th>Entry Speed</th>
-              <th>Apex Min Speed</th>
-              <th>Exit Speed</th>
-              <th>Straight Exit Speed</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr style="color: var(--accent-success); font-weight: 600;">
-              <td>Fastest Lap</td>
-              <td>23</td>
-              <td>5.25s</td>
-              <td>81.1 km/h</td>
-              <td>61.2 km/h</td>
-              <td>73.9 km/h</td>
-              <td>89.4 km/h</td>
-            </tr>
-            <tr style="color: var(--accent-warning);">
-              <td>Median Lap</td>
-              <td>15</td>
-              <td>5.42s (+0.17s)</td>
-              <td>80.5 km/h</td>
-              <td>58.4 km/h</td>
-              <td>71.2 km/h</td>
-              <td>86.8 km/h</td>
-            </tr>
-            <tr style="color: var(--accent-danger);">
-              <td>75% Lap</td>
-              <td>8</td>
-              <td>5.58s (+0.33s)</td>
-              <td>79.2 km/h</td>
-              <td>56.1 km/h</td>
-              <td>69.8 km/h</td>
-              <td>84.5 km/h</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <!-- Interactive Telemetry Widget -->
-        <div class="telemetry-widget-container" id="telemetry-widget-turn-1"></div>
-
-        <div class="coaching-box">
-          <h4>Coaching Key Takeaway</h4>
-          <p>Braking initiated 8 meters too early on median/75% laps, causing coasting before apex and lower exit momentum. Focus on trail-braking to the apex and earlier throttle pickup.</p>
-        </div>
-      </div>
-    </section>
+    <!-- Contextual view button tied to corner overview -->
+    <p style="margin-top: 6px;">
+      <button class="telemetry-jump-btn" data-focus-range="{{ turn_start_m }},{{ turn_end_m }}" data-plots="speed,delta">
+        Focus Entire Turn ({{ turn_start_m }}m–{{ turn_end_m }}m)
+      </button>
+    </p>
   </div>
 
-  <script>
-    document.addEventListener('DOMContentLoaded', function() {
-      // 1. Render Distribution Chart from real DB data via StatsPlot building brick
-      StatsPlot.renderTurnViolin('#distribution-chart', {
-        league: "{{ league }}",
-        class_name: "{{ class_name }}",
-        track: "{{ track_name }}",
-        date: "{{ date }}",
-        turn_name: "{{ turn_name_or_scope }}",
-        highlight_laps: [
-          { session_id: "{{ benchmark_session_id }}", lap: {{ benchmark_lap_num }}, label: "Benchmark Lap {{ benchmark_lap_num }}", color: "#10b981", size: 11 },
-          { session_id: "{{ median_session_id }}", lap: {{ median_lap_num }}, label: "Median Lap {{ median_lap_num }}", color: "#f59e0b", size: 10 }
-        ]
-      });
+  <div>
+    <h3>1. The Big Picture & Pace Check</h3>
+    <p>
+      {{ summary_text }}
+    </p>
+    <div class="report-stats-grid">
+      <div class="report-stat-card">
+        <span class="label">Benchmark Turn Time</span>
+        <span class="value">{{ benchmark_turn_time }}</span>
+      </div>
+      <div class="report-stat-card">
+        <span class="label">Comparison Turn Time</span>
+        <span class="value">{{ target_turn_time }}</span>
+      </div>
+      <div class="report-stat-card">
+        <span class="label">Corner Delta</span>
+        <span class="value delta-negative">{{ corner_delta_str }}</span>
+      </div>
+      <div class="report-stat-card">
+        <span class="label">Apex V-Min</span>
+        <span class="value">{{ apex_vmin_str }}</span>
+      </div>
+    </div>
+  </div>
 
-      // 2. Render Header Track Minimap with Time Loss Color Coding
-      TrackMinimap.render('#track-minimap-header', {
-        league: "{{ league }}",
-        class_name: "{{ class_name }}",
-        track: "{{ track_name }}",
-        date: "{{ date }}",
-        highlight_turn: "{{ turn_name_or_scope }}",
-        padding: 12
-      });
+  <div>
+    <h3>2. Causation Chain & Evidence</h3>
+    <ul>
+      <li>
+        <span class="evidence-tag evidence-high">Direct Evidence</span>
+        <strong>Braking Point:</strong> On Benchmark Lap {{ benchmark_lap_num }}, braking begins at 
+        <button class="telemetry-jump-btn" data-dist="{{ benchmark_braking_m }}" data-xlim="{{ braking_xlim }}">
+          {{ benchmark_braking_m }}m
+        </button>. On Lap {{ target_lap_num }}, braking is initiated at 
+        <button class="telemetry-jump-btn" data-dist="{{ target_braking_m }}" data-xlim="{{ braking_xlim }}">
+          {{ target_braking_m }}m
+        </button>.
+      </li>
+      <li>
+        <span class="evidence-tag evidence-high">Direct Evidence</span>
+        <strong>Apex Minimum Speed:</strong> Minimum apex speed at 
+        <button class="telemetry-jump-btn" data-dist="{{ apex_m }}" data-xlim="{{ apex_xlim }}" data-plots="speed,steering">
+          {{ apex_m }}m (Apex)
+        </button> 
+        was {{ target_apex_speed }} km/h vs {{ benchmark_apex_speed }} km/h on Benchmark.
+      </li>
+      <li>
+        <span class="evidence-tag {{ throttle_evidence_tag_class }}">{{ throttle_evidence_label }}</span>
+        <strong>Throttle Commitment:</strong> Full throttle pickup occurred at 
+        <button class="telemetry-jump-btn" data-dist="{{ target_throttle_m }}" data-xlim="{{ exit_xlim }}">
+          {{ target_throttle_m }}m
+        </button> 
+        compared to 
+        <button class="telemetry-jump-btn" data-dist="{{ benchmark_throttle_m }}" data-xlim="{{ exit_xlim }}">
+          {{ benchmark_throttle_m }}m
+        </button> on Benchmark.
+      </li>
+    </ul>
+  </div>
 
-      // 3. Render Telemetry Plot
-      TelemetryPlot.render('#telemetry-widget-turn-1', {
-        session_id: "{{ session_id }}",
-        track: "{{ track_name }}",
-        date: "{{ date }}",
-        league: "{{ league }}",
-        class_name: "{{ class_name }}",
-        laps: [{{ benchmark_lap_num }}, {{ median_lap_num }}],
-        start_m: {{ turn_start_m }},
-        end_m: {{ turn_end_m }},
-        channels: ["Speed", "Throttle", "Brake", "Steering Angle", "Delta Time"]
-      });
-    });
-  </script>
-</body>
-</html>
+  <div>
+    <h3>3. Actionable Coaching Takeaways</h3>
+    <ol>
+      <li><strong>{{ takeaway_1_title }}:</strong> {{ takeaway_1_body }}</li>
+      <li><strong>{{ takeaway_2_title }}:</strong> {{ takeaway_2_body }}</li>
+      {% if takeaway_3_title %}
+      <li><strong>{{ takeaway_3_title }}:</strong> {{ takeaway_3_body }}</li>
+      {% endif %}
+    </ol>
+  </div>
+</div>

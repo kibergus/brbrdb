@@ -19,7 +19,7 @@
  * Main entry point for the kartsim meeting page.
  */
 import { state } from './state.js';
-import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, onSessionChange, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer } from './lap_selection.js';
+import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, initReportInteractions, onSessionChange, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer } from './lap_selection.js';
 import { setMapType, setTrajectoryColorMode, toggleTrajDropdown, updateDistanceMarker } from './map.js';
 import { stepDistance } from './telemetry.js';
 import { initExpandablePlots } from './plots_sync.js';
@@ -96,9 +96,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Initialize
+    const isReportMode = Boolean(window.KART_CONFIG && window.KART_CONFIG.isReportMode);
+    const reportState = (window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
+
     const params = new URLSearchParams(window.location.search);
-    const initialTab = params.get('tab') || 'stats';
-    const sidParam = params.get('session_id') || (window.KART_CONFIG && window.KART_CONFIG.sessionId);
+    const initialTab = params.get('tab') || reportState.tab || (isReportMode ? 'map' : 'stats');
+    const sidParam = params.get('session_id') || reportState.session_id || (window.KART_CONFIG && window.KART_CONFIG.sessionId);
     if (sidParam) {
         state.selectedSessionId = sidParam;
         const sessionSelector = document.getElementById('session-selector');
@@ -110,11 +113,23 @@ document.addEventListener('DOMContentLoaded', () => {
     initExpandablePlots();
     initSidePanelResizer();
     initAllLapsHandlers();
+    initReportInteractions();
 
-    // Restore bottom plots state from URL
-    const delta = params.get('delta');
-    const speed = params.get('speed');
-    let activePlot = params.get('plot');
+    if (isReportMode) {
+        if (reportState.sidePanelWidth) {
+            state.sidePanelWidth = reportState.sidePanelWidth;
+            const sidePanel = document.getElementById('map-side-panel');
+            if (sidePanel) {
+                sidePanel.style.width = `${state.sidePanelWidth}px`;
+            }
+        }
+        expandSidePanel();
+    }
+
+    // Restore bottom plots state from URL or reportState
+    const delta = params.has('delta') ? params.get('delta') : (reportState.delta ? '1' : null);
+    const speed = params.has('speed') ? params.get('speed') : (reportState.speed ? '1' : null);
+    let activePlot = params.get('plot') || (Array.isArray(reportState.plot) ? reportState.plot.join(',') : reportState.plot);
 
     if (delta === '1') {
         toggleDeltaPlot();
@@ -137,9 +152,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Restore Group A/B visibility state from URL
-    const visA = params.get('visA');
-    const visB = params.get('visB');
+    // Restore Group A/B visibility state from URL or reportState
+    const visA = params.has('visA') ? params.get('visA') : (reportState.visA !== undefined ? (reportState.visA ? '1' : '0') : null);
+    const visB = params.has('visB') ? params.get('visB') : (reportState.visB !== undefined ? (reportState.visB ? '1' : '0') : null);
     if (visA !== null) {
         const targetVisA = visA === '1';
         if (state.groupAVisible !== targetVisA) {
@@ -153,8 +168,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Restore slip angle color mode from URL
-    const sacol = params.get('sacol') || 'brake_throttle';
+    // Restore slip angle color mode from URL or reportState
+    const sacol = params.get('sacol') || reportState.sacol || 'brake_throttle';
     const colorModeSelector = document.getElementById('slip_angle-color-mode');
     if (colorModeSelector) {
         colorModeSelector.value = sacol;
@@ -168,14 +183,38 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Restore right panel tab from URL
-    const rtab = params.get('rtab') || 'cornering';
+    // Restore right panel tab from URL or reportState
+    const rtab = params.get('rtab') || reportState.rtab || (isReportMode ? 'report' : 'cornering');
     showRightPanelTab(rtab);
 
-    // Restore trajectory color mode from URL
-    const tcol = params.get('tcol');
+    // Restore trajectory color mode from URL or reportState
+    const tcol = params.get('tcol') || reportState.tcol;
     if (tcol && ['pedals', 'speed', 'accel', 'gforce_lon', 'gforce_lat', 'lap', 'delta_t'].includes(tcol)) {
         setTrajectoryColorMode(tcol);
+    }
+
+    // Restore distance if specified in URL or reportState
+    const distParam = params.get('dist');
+    if (distParam !== null) {
+        const d = parseFloat(distParam);
+        if (!isNaN(d)) {
+            state.playbackDistance = d;
+            const slider = document.getElementById('distance-slider');
+            const display = document.getElementById('distance-display');
+            if (slider) slider.value = d;
+            if (display) display.textContent = Math.round(d) + 'm';
+            updateDistanceMarker(d);
+        }
+    } else if (reportState.dist !== undefined) {
+        const d = parseFloat(reportState.dist);
+        if (!isNaN(d)) {
+            state.playbackDistance = d;
+            const slider = document.getElementById('distance-slider');
+            const display = document.getElementById('distance-display');
+            if (slider) slider.value = d;
+            if (display) display.textContent = Math.round(d) + 'm';
+            updateDistanceMarker(d);
+        }
     }
 
     window.addEventListener('resize', () => {

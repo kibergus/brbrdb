@@ -13,7 +13,7 @@
 <a href="{{ url_for('class_view', league=league, class_name=class_name) }}">
     {{get_class_info(class_name).name}}
 </a> /
-{{ date }} - {{ track }}
+{{ date }} - {{ track }}{% if is_report_mode and report_title %} / <span style="color: var(--accent);">Report: {{ report_title }}</span>{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -342,15 +342,38 @@
                     </div>
                     <div class="right-panel-tabs"
                         style="display: flex; gap: 0.5rem; margin-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
-                        <button class="right-panel-tab active" id="right-tab-btn-cornering"
+                        {% if is_report_mode %}
+                        <div class="report-tab-wrapper">
+                            <button class="right-panel-tab active" id="right-tab-btn-report"
+                                onclick="showRightPanelTab('report')">Report</button>
+                            <button class="report-reset-btn" id="report-reset-btn"
+                                title="Reset report view to initial state"
+                                onclick="resetReportView(event)">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                                    <path d="M3 3v5h5"/>
+                                </svg>
+                            </button>
+                        </div>
+                        {% endif %}
+                        <button class="right-panel-tab {% if not is_report_mode %}active{% endif %}" id="right-tab-btn-cornering"
                             onclick="showRightPanelTab('cornering')">Cornering</button>
                         <button class="right-panel-tab" id="right-tab-btn-acceleration"
                             onclick="showRightPanelTab('acceleration')">Acceleration</button>
                         <button class="right-panel-tab" id="right-tab-btn-slip_angle"
                             onclick="showRightPanelTab('slip_angle')">Slip Angle</button>
                     </div>
-                    <div id="cornering-chart-container" class="right-panel-tab-pane active"
+                    {% if is_report_mode %}
+                    <div id="report-chart-container" class="right-panel-tab-pane active"
                         style="flex: 1; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; position: relative; display: flex; flex-direction: column;">
+                        <iframe id="report-iframe" class="report-iframe"
+                            src="{{ url_for('location.telemetry_report_content', report_name=report_name) }}"
+                            style="width: 100%; height: 100%; border: none; background: transparent;"
+                            title="Telemetry Report"></iframe>
+                    </div>
+                    {% endif %}
+                    <div id="cornering-chart-container" class="right-panel-tab-pane {% if not is_report_mode %}active{% endif %}"
+                        style="flex: 1; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.2); overflow: hidden; position: relative; {% if is_report_mode %}display: none;{% else %}display: flex;{% endif %} flex-direction: column;">
                         <div id="telemetry-chart-placeholder"
                             style="flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); font-style: italic; font-size: 0.9rem; text-align: center; padding: 1rem;">
                             Select laps and move distance slider<br>to see speed and braking analysis
@@ -392,7 +415,9 @@
         getTrackPointsUrl: "{{ url_for('location.get_track_points', league=league, class_name=class_name, date=date, track=track) | safe }}",
         getTrackDataUrl: "{{ url_for('location.get_track_data', track=track) | safe }}",
         trackName: "{{ track }}",
-        sessionId: "{{ selected_session_id or '' }}"
+        sessionId: "{{ selected_session_id or '' }}",
+        isReportMode: {{ 'true' if is_report_mode else 'false' }},
+        reportState: {{ report_state | tojson if report_state else 'null' }}
     };
 </script>
 <script type="module" src="{{ url_for('static', filename='js/kartsim_meeting/main.js') }}"></script>

@@ -16,8 +16,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer } from './lap_selection.js';
+import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds } from './lap_selection.js';
 import { state } from './state.js';
+import * as plotsSync from './plots_sync.js';
 
 vi.mock('./map.js', () => ({
     initMap: vi.fn(),
@@ -25,7 +26,9 @@ vi.mock('./map.js', () => ({
     updateDistanceMarker: vi.fn(),
     calculateBoundsZoom: vi.fn(() => 15),
     updateAllPolylineColors: vi.fn(),
-    getReferenceLap: vi.fn(() => null)
+    getReferenceLap: vi.fn(() => null),
+    setTrajectoryColorMode: vi.fn(),
+    matchesRequestedLap: vi.fn((set, id) => set.has(id))
 }));
 
 vi.mock('./plots_sync.js', () => ({
@@ -35,7 +38,9 @@ vi.mock('./plots_sync.js', () => ({
     renderExpandablePlots: vi.fn(),
     startSyncLoop: vi.fn(),
     updateDeltaYLim: vi.fn(),
-    updateExpandablePlotsVisibility: vi.fn()
+    updateExpandablePlotsVisibility: vi.fn(),
+    togglePlot: vi.fn(),
+    setVisiblePlots: vi.fn()
 }));
 
 vi.mock('./stats_plots.js', () => ({
@@ -358,5 +363,248 @@ describe('lap_selection.js side panel collapse and resize', () => {
         expect(mockSidePanel.classList.contains('collapsed')).toBe(true);
     });
 });
+
+describe('lap_selection.js showRightPanelTab and Report Mode', () => {
+    let mockBtnReport, mockBtnCornering;
+    let mockPaneReport, mockPaneCornering;
+
+    beforeEach(() => {
+        mockBtnReport = { classList: { add: vi.fn(), remove: vi.fn() } };
+        mockBtnCornering = { classList: { add: vi.fn(), remove: vi.fn() } };
+        mockPaneReport = { classList: { add: vi.fn(), remove: vi.fn() }, style: {} };
+        mockPaneCornering = { classList: { add: vi.fn(), remove: vi.fn() }, style: {} };
+
+        vi.stubGlobal('document', {
+            querySelectorAll: vi.fn().mockImplementation((selector) => {
+                if (selector === '.right-panel-tab') return [mockBtnReport, mockBtnCornering];
+                if (selector === '.right-panel-tab-pane') return [mockPaneReport, mockPaneCornering];
+                return [];
+            }),
+            getElementById: vi.fn().mockImplementation((id) => {
+                if (id === 'right-tab-btn-report') return mockBtnReport;
+                if (id === 'right-tab-btn-cornering') return mockBtnCornering;
+                if (id === 'report-chart-container') return mockPaneReport;
+                if (id === 'cornering-chart-container') return mockPaneCornering;
+                return null;
+            })
+        });
+    });
+
+    it('activates report tab and shows report pane when showRightPanelTab("report") is called', () => {
+        showRightPanelTab('report');
+        expect(state.activeRightTab).toBe('report');
+        expect(mockBtnReport.classList.add).toHaveBeenCalledWith('active');
+        expect(mockPaneReport.classList.add).toHaveBeenCalledWith('active');
+        expect(mockPaneReport.style.display).toBe('flex');
+    });
+
+    it('handles interactive report triggers in initReportInteractions', () => {
+        let clickListener = null;
+        const mockReportContainer = {
+            addEventListener: vi.fn().mockImplementation((event, listener) => {
+                if (event === 'click') clickListener = listener;
+            })
+        };
+
+        const mockSlider = { value: 0 };
+        const mockDisplay = { textContent: '' };
+
+        vi.stubGlobal('document', {
+            getElementById: vi.fn().mockImplementation((id) => {
+                if (id === 'report-chart-container') return mockReportContainer;
+                if (id === 'distance-slider') return mockSlider;
+                if (id === 'distance-display') return mockDisplay;
+                return null;
+            })
+        });
+
+        initReportInteractions();
+        expect(mockReportContainer.addEventListener).toHaveBeenCalledWith('click', expect.any(Function));
+
+        // Simulate click on a jump button with data-dist and data-xlim
+        const mockTarget = {
+            closest: vi.fn().mockReturnValue({
+                dataset: {
+                    dist: '725.5',
+                    xlim: '700,800'
+                }
+            })
+        };
+
+        clickListener({ target: mockTarget });
+        expect(state.playbackDistance).toBe(725.5);
+        expect(mockSlider.value).toBe(725.5);
+        expect(mockDisplay.textContent).toBe('726m');
+        expect(state.globalTelemetryXRange).toEqual([700, 800]);
+    });
+
+    it('handles postMessage events from the report iframe', () => {
+        let messageListener = null;
+        vi.stubGlobal('window', {
+            addEventListener: vi.fn().mockImplementation((event, listener) => {
+                if (event === 'message') messageListener = listener;
+            })
+        });
+
+        const mockSlider = { value: 0 };
+        const mockDisplay = { textContent: '' };
+
+        vi.stubGlobal('document', {
+            getElementById: vi.fn().mockImplementation((id) => {
+                if (id === 'distance-slider') return mockSlider;
+                if (id === 'distance-display') return mockDisplay;
+                return null;
+            })
+        });
+
+        initReportInteractions();
+        expect(window.addEventListener).toHaveBeenCalledWith('message', expect.any(Function));
+
+        messageListener({
+            data: {
+                type: 'telemetry_jump',
+                dist: '316.5',
+                xlim: '290,380'
+            }
+        });
+
+        expect(state.playbackDistance).toBe(316.5);
+        expect(mockSlider.value).toBe(316.5);
+        expect(mockDisplay.textContent).toBe('317m');
+        expect(state.globalTelemetryXRange).toEqual([290, 380]);
+    });
+
+    it('resets report state when resetReportView is called', () => {
+        const replaceState = vi.fn();
+        vi.stubGlobal('window', {
+            location: { pathname: '/telemetry/report/sample' },
+            history: { replaceState },
+            KART_CONFIG: {
+                reportState: {
+                    tab: 'map',
+                    rtab: 'report',
+                    sort: 'turn',
+                    turn: 2,
+                    lapsA: ['lap-6'],
+                    lapsB: ['lap-5'],
+                    xlim: [280, 420],
+                    dist: 340,
+                    delta: true,
+                    speed: true,
+                    sidePanelWidth: 420
+                }
+            }
+        });
+
+        const mockSidePanel = { style: {} };
+        const mockSlider = { value: 0 };
+        const mockDisplay = { textContent: '' };
+
+        vi.stubGlobal('document', {
+            getElementById: vi.fn().mockImplementation((id) => {
+                if (id === 'map-side-panel') return mockSidePanel;
+                if (id === 'distance-slider') return mockSlider;
+                if (id === 'distance-display') return mockDisplay;
+                return null;
+            }),
+            querySelectorAll: vi.fn().mockReturnValue([]),
+            querySelector: vi.fn().mockReturnValue(null)
+        });
+
+        state.allSessionsData = [
+            {
+                session_id: 'sess',
+                laps: [
+                    { lap_num: 6, is_valid: true, lap_time: '1:00.000' },
+                    { lap_num: 5, is_valid: true, lap_time: '1:00.500' }
+                ]
+            }
+        ];
+
+        resetReportView();
+        expect(replaceState).toHaveBeenCalledWith(null, '', '/telemetry/report/sample');
+        expect(state.activeRightTab).toBe('report');
+        expect(state.sortMode).toBe('turn');
+        expect(state.currentTurnIdx).toBe(2);
+        expect(state.globalTelemetryXRange).toEqual([280, 420]);
+        expect(state.playbackDistance).toBe(340);
+        expect(mockSlider.value).toBe(340);
+        expect(mockDisplay.textContent).toBe('340m');
+    });
+
+    it('handles togglePlot trigger action', () => {
+        handleReportTriggerAction({ togglePlot: 'steering' });
+        expect(plotsSync.togglePlot).toHaveBeenCalledWith('steering');
+    });
+
+    it('handles plots / setVisiblePlots trigger action', () => {
+        handleReportTriggerAction({ plots: 'speed,steering,gforce' });
+        expect(plotsSync.setVisiblePlots).toHaveBeenCalledWith('speed,steering,gforce');
+
+        handleReportTriggerAction({ plot: 'delta,pedals' });
+        expect(plotsSync.setVisiblePlots).toHaveBeenCalledWith('delta,pedals');
+    });
+
+    it('handles selectLaps trigger action with group A and group B', () => {
+        state.allSessionsData = [
+            {
+                session_id: '18_09_practice',
+                laps: [
+                    { lap_num: 6, is_valid: true },
+                    { lap_num: 5, is_valid: true }
+                ]
+            }
+        ];
+
+        selectLaps(['18_09_practice-6'], ['18_09_practice-5']);
+        expect(state.groupASelection.has('18_09_practice-6')).toBe(true);
+        expect(state.groupBSelection.has('18_09_practice-5')).toBe(true);
+
+        handleReportTriggerAction({ laps: '18_09_practice-6' });
+        expect(state.groupASelection.has('18_09_practice-6')).toBe(true);
+        expect(state.groupBSelection.size).toBe(0);
+    });
+
+    it('sets visible range in the bottom plot with setTelemetryRange and triggers', () => {
+        setTelemetryRange(250, 400);
+        expect(state.globalTelemetryXRange).toEqual([250, 400]);
+
+        setTelemetryRange([300, 450]);
+        expect(state.globalTelemetryXRange).toEqual([300, 450]);
+
+        handleReportTriggerAction({ range: '280,390' });
+        expect(state.globalTelemetryXRange).toEqual([280, 390]);
+    });
+
+    it('computes distance range bounds and focuses map over track range in meters', () => {
+        state.trackData = {
+            lap_length: 1000,
+            center_line: [
+                { dist: 0, lat: 51.0, lng: -0.1 },
+                { dist: 100, lat: 51.001, lng: -0.099 },
+                { dist: 200, lat: 51.002, lng: -0.098 },
+                { dist: 300, lat: 51.003, lng: -0.097 }
+            ]
+        };
+
+        const bounds = getDistanceRangeBounds(100, 200);
+        expect(bounds).not.toBeNull();
+        expect(bounds.getCenter().lat()).toBeCloseTo(51.0015, 3);
+
+        const fitBounds = vi.fn();
+        state.map = { fitBounds };
+
+        focusMapOnRange(100, 200);
+        expect(fitBounds).toHaveBeenCalled();
+
+        handleReportTriggerAction({ mapRange: '100,200' });
+        expect(fitBounds).toHaveBeenCalledTimes(2);
+
+        handleReportTriggerAction({ focusRange: '150,250' });
+        expect(state.globalTelemetryXRange).toEqual([150, 250]);
+        expect(fitBounds).toHaveBeenCalledTimes(3);
+    });
+});
+
 
 

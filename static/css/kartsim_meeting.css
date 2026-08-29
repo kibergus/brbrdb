@@ -830,5 +830,47 @@ body {
     cursor: pointer !important;
 }
 
+.report-iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: transparent;
+}
 
+.report-tab-wrapper {
+    display: flex;
+    align-items: center;
+    position: relative;
+    border-bottom: 2px solid var(--accent);
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 4px 4px 0 0;
+}
+
+.report-tab-wrapper .right-panel-tab {
+    border-bottom: none !important;
+    background: transparent !important;
+    padding-right: 4px;
+}
+
+.report-reset-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 6px 8px 6px 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: color 0.15s, transform 0.2s, background 0.15s;
+}
+
+.report-reset-btn:hover {
+    color: var(--accent);
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.report-reset-btn:active svg {
+    transform: rotate(-180deg);
+}
 

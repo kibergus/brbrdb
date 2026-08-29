@@ -2225,18 +2225,18 @@ export function updateExpandablePlotsIndicator() {
         state.activePlotChannels.forEach(tab => {
             const id = 'plot-area-' + tab;
             const el = document.getElementById(id);
-            if (el && el._fullLayout) Plotly.relayout(el, update);
+            if (el && el._fullLayout && typeof el.emit === 'function') Plotly.relayout(el, update);
         });
     }
     if (state.deltaPlotVisible) {
         const id = 'plot-area-delta';
         const el = document.getElementById(id);
-        if (el && el._fullLayout) Plotly.relayout(el, update);
+        if (el && el._fullLayout && typeof el.emit === 'function') Plotly.relayout(el, update);
     }
     if (state.speedPlotVisible) {
         const id = 'plot-area-speed';
         const el = document.getElementById(id);
-        if (el && el._fullLayout) Plotly.relayout(el, update);
+        if (el && el._fullLayout && typeof el.emit === 'function') Plotly.relayout(el, update);
     }
 }
 
@@ -2287,7 +2287,7 @@ export function _syncPlotsFrame() {
         if (id === sourceId) return Promise.resolve(); // Skip the source of the change to avoid double-application/jitter
 
         const el = document.getElementById(id);
-        if (!el || !el._fullLayout) return Promise.resolve();
+        if (!el || !el._fullLayout || typeof el.emit !== 'function') return Promise.resolve();
 
         const cur = el._fullLayout.xaxis.range;
         if (_rangesEqual(cur, state._syncLastRange)) return Promise.resolve();
@@ -2333,7 +2333,7 @@ export function startSyncLoop() {
 export function updateDeltaYLim(skipRelayoutIfDragging = false) {
     if (!state.deltaPlotVisible) return;
     const gd = document.getElementById('plot-area-delta');
-    if (!gd || !gd.data || gd.data.length === 0) return;
+    if (!gd || !gd.data || gd.data.length === 0 || !gd._fullLayout || typeof gd.emit !== 'function') return;
 
     const range = state.globalTelemetryXRange;
     if (!range || range.length < 2) return;
@@ -2482,7 +2482,7 @@ export function initExpandablePlots() {
 export function updateSpeedYLim(skipRelayoutIfDragging = false) {
     if (!state.speedPlotVisible) return;
     const gd = document.getElementById('plot-area-speed');
-    if (!gd || !gd.data || gd.data.length === 0) return;
+    if (!gd || !gd.data || gd.data.length === 0 || !gd._fullLayout || typeof gd.emit !== 'function') return;
 
     const range = state.globalTelemetryXRange;
     if (!range || range.length < 2) return;
@@ -2525,7 +2525,7 @@ export function updateSpeedYLim(skipRelayoutIfDragging = false) {
 export function updateChannelYLim(tab, skipRelayoutIfDragging = false) {
     if (tab === 'pedals') return;
     const gd = document.getElementById('plot-area-' + tab);
-    if (!gd || !gd.data || gd.data.length === 0) return;
+    if (!gd || !gd.data || gd.data.length === 0 || !gd._fullLayout || typeof gd.emit !== 'function') return;
 
     const range = state.globalTelemetryXRange;
     if (!range || range.length < 2) return;
@@ -2698,7 +2698,7 @@ export function updateExpandablePlotsVisibility() {
 
             plotIds.forEach(id => {
                 const gd = document.getElementById(id);
-                if (gd && gd._fullLayout && gd.offsetParent !== null && window.Plotly && window.Plotly.Plots) {
+                if (gd && gd._fullLayout && typeof gd.emit === 'function' && gd.offsetParent !== null && window.Plotly && window.Plotly.Plots) {
                     Plotly.Plots.resize(gd);
                     if (range && range.length === 2) {
                         Plotly.relayout(gd, { 'xaxis.range': range, 'xaxis.autorange': false });
@@ -2707,6 +2707,70 @@ export function updateExpandablePlotsVisibility() {
             });
         }, 150);
     }
+}
+
+export function togglePlot(plotName) {
+    if (!plotName) return;
+    const p = String(plotName).trim().toLowerCase();
+    if (p === 'delta') {
+        state.deltaPlotVisible = !state.deltaPlotVisible;
+    } else if (p === 'speed') {
+        state.speedPlotVisible = !state.speedPlotVisible;
+    } else {
+        let channel = p;
+        if (channel === 'lat_force') channel = 'force';
+        else if (channel === 'lat_patch_vel' || channel === 'long_patch_vel') channel = 'patch_vel';
+
+        if (state.activePlotChannels.has(channel)) {
+            state.activePlotChannels.delete(channel);
+            const targetArea = document.getElementById('plot-area-' + channel);
+            if (targetArea && typeof window !== 'undefined' && window.Plotly && window.Plotly.purge) {
+                window.Plotly.purge(targetArea);
+            }
+        } else {
+            state.activePlotChannels.add(channel);
+        }
+    }
+    updateExpandablePlotsVisibility();
+    debouncedUpdateURL();
+}
+
+export function setVisiblePlots(plotNames) {
+    state.activePlotChannels.forEach(channel => {
+        const targetArea = document.getElementById('plot-area-' + channel);
+        if (targetArea && typeof window !== 'undefined' && window.Plotly && window.Plotly.purge) {
+            window.Plotly.purge(targetArea);
+        }
+    });
+    state.activePlotChannels.clear();
+
+    if (plotNames === undefined || plotNames === null) {
+        state.deltaPlotVisible = false;
+        state.speedPlotVisible = false;
+        updateExpandablePlotsVisibility();
+        debouncedUpdateURL();
+        return;
+    }
+
+    const raw = String(plotNames).trim();
+    if (!raw || raw === 'none' || raw === '0' || raw === 'false') {
+        state.deltaPlotVisible = false;
+        state.speedPlotVisible = false;
+    } else {
+        const list = (Array.isArray(plotNames) ? plotNames : raw.split(',')).map(s => String(s).trim().toLowerCase());
+        state.deltaPlotVisible = list.includes('delta');
+        state.speedPlotVisible = list.includes('speed');
+        list.forEach(item => {
+            if (!item || item === 'delta' || item === 'speed') return;
+            let channel = item;
+            if (channel === 'lat_force') channel = 'force';
+            else if (channel === 'lat_patch_vel' || channel === 'long_patch_vel') channel = 'patch_vel';
+            state.activePlotChannels.add(channel);
+        });
+    }
+
+    updateExpandablePlotsVisibility();
+    debouncedUpdateURL();
 }
 
 function renderCustomLegend(tab, targetEl) {
