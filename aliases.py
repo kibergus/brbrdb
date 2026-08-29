@@ -43,6 +43,9 @@ _LEAGUE_NAMES = {
     'fat_world_finals': 'FAT World Finals',
     'fat_us_ca': 'FAT US CA',
     'fat_us_mw': 'FAT US MW',
+    'fat_us_tx': 'FAT US TX',
+    'fat_de': 'FAT DE',
+    'fat_other': 'FAT Other',
     'fekc': 'Forest Edge',
     'drs': 'DRS',
     'skrc': 'Shenington KC',
@@ -59,6 +62,9 @@ _LEAGUE_COLORS = {
     'fat_world_finals': '#1D4296',
     'fat_us_ca': '#1D4296',
     'fat_us_mw': '#1D4296',
+    'fat_us_tx': '#1D4296',
+    'fat_de': '#1D4296',
+    'fat_other': '#1D4296',
     'kartsim': '#3498db',  # blue
     'fekc': '#9b59b6',  # purple
     'drs': '#55b0cb',   # DRS Cyan
@@ -136,10 +142,10 @@ def get_league_group(league_id: str) -> str:
         return 'kartsim'
     if league_id.startswith('club100'):
         return 'club100'
-    if league_id in ('fat_us_ca', 'fat_us_mw'):
+    if league_id.startswith('fat_us'):
         return 'fat_us'
-    if league_id == 'fat_world_finals':
-        return 'fat_world_finals'
+    if league_id in ('fat_world_finals', 'fat_de'):
+        return 'fat_other'
     if league_id.startswith('fat'):
         return 'fat'
     return 'other'
@@ -152,7 +158,7 @@ def group_leagues(leagues: list[str]) -> list[tuple[str, list[str]]]:
         'club100': [],
         'fat': [],
         'fat_us': [],
-        'fat_world_finals': [],
+        'fat_other': [],
         'other': []
     }
     for league_id in leagues:
@@ -168,7 +174,7 @@ def group_leagues(leagues: list[str]) -> list[tuple[str, list[str]]]:
         ('club100', groups['club100']),
         ('fat', groups['fat']),
         ('fat_us', groups['fat_us']),
-        ('fat_world_finals', groups['fat_world_finals']),
+        ('fat_other', groups['fat_other']),
         ('other', groups['other'])
     ]
     # Filter empty groups

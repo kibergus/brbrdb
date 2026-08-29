@@ -499,3 +499,34 @@ def test_kartsim_track_sessions_view_no_hero() -> None:
         assert resp.status_code == 200
         html = resp.get_data(as_text=True)
         assert 'Driver Selection Required' in html
+
+
+def test_league_helpers() -> None:
+    assert aliases.get_league_name('fat_us_tx') == 'FAT US TX'
+    assert aliases.get_league_name('fat_de') == 'FAT DE'
+    assert aliases.get_league_name('fat_us_ca') == 'FAT US CA'
+    assert aliases.get_league_name('fat_us_mw') == 'FAT US MW'
+    assert aliases.get_league_name('club100') == 'Club 100'
+
+    assert aliases.get_league_color('fat_us_tx') == '#1D4296'
+    assert aliases.get_league_color('fat_de') == '#1D4296'
+    assert aliases.get_league_color('club100') == '#E31E24'
+
+    assert aliases.get_league_group('fat_us_tx') == 'fat_us'
+    assert aliases.get_league_group('fat_us_ca') == 'fat_us'
+    assert aliases.get_league_group('fat_us_mw') == 'fat_us'
+    assert aliases.get_league_group('fat_de') == 'fat_other'
+    assert aliases.get_league_group('fat_pro') == 'fat'
+    assert aliases.get_league_group('fat_world_finals') == 'fat_other'
+    assert aliases.get_league_group('club100_north') == 'club100'
+    assert aliases.get_league_group('kartsim') == 'kartsim'
+    assert aliases.get_league_group('fekc') == 'other'
+
+    grouped = aliases.group_leagues(['fat_us_tx', 'fat_de', 'club100', 'fekc'])
+    group_map = dict(grouped)
+    assert 'fat_us' in group_map
+    assert 'fat_us_tx' in group_map['fat_us']
+    assert 'fat_other' in group_map
+    assert 'fat_de' in group_map['fat_other']
+    assert 'club100' in group_map
+    assert 'other' in group_map
