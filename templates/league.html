@@ -1,5 +1,7 @@
 {% extends "layout.html" %}
 
+{% block title %}{{ get_league_name(league) }} {{ get_class_info(class_name).name }} - BrBrDb{% endblock %}
+
 {% block container_class %}{% endblock %}
 
 {% block breadcrumb %}

@@ -1,5 +1,7 @@
 {% extends "layout.html" %}
 
+{% block title %}{{ get_league_name(league) }} - BrBrDb{% endblock %}
+
 {% block breadcrumb %}
 <a href="{{ url_for('league_list') }}">Leagues</a> / {{ get_league_name(league) }}
 {% endblock %}

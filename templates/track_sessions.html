@@ -1,5 +1,7 @@
 {% extends "layout.html" %}
 
+{% block title %}{{ get_league_name(league) }} {{ get_class_info(class_name).name }} - {{ track }} - BrBrDb{% endblock %}
+
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/track_sessions.css') }}">
 {% endblock %}

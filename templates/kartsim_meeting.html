@@ -1,5 +1,7 @@
 {% extends "layout.html" %}
 
+{% block title %}{{ date }} - {{ track }}{% if is_report_mode and report_title %} - {{ report_title }}{% endif %} - BrBrDb{% endblock %}
+
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/kartsim_meeting.css') }}">
 <script
