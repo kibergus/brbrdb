@@ -455,16 +455,68 @@ def augment_championship_data(championship: dict, league: str, class_name: str, 
         entry['drop_rounds'] = drop_rounds
         entry['missed_rounds'] = missed_rounds
 
+        # Calculate driver average for existing attended rounds
+        attended_past_rounds = [r for r in past_rounds if r not in missed_rounds]
+        if attended_past_rounds:
+            driver_avg = int(round(sum(round_totals[r] for r in attended_past_rounds) / len(attended_past_rounds)))
+        else:
+            driver_avg = 0
+
+        # Maximum possible points: remaining rounds yield max points (34), dropping lowest 2
+        max_round_points = championship.get('max_round_points', 34)
+        all_round_scores_max = [
+            round_totals.get(r, 0) if r in past_rounds else max_round_points
+            for r in rounds_list
+        ]
+        sorted_max = sorted(all_round_scores_max)
+        num_drops_max = min(drop_rounds_count, len(sorted_max))
+        max_total = sum(sorted_max[num_drops_max:])
+
+        # Estimated points: remaining rounds yield driver average, dropping lowest 2
+        all_round_scores_est = [
+            round_totals.get(r, 0) if r in past_rounds else driver_avg
+            for r in rounds_list
+        ]
+        sorted_est = sorted(all_round_scores_est)
+        num_drops_est = min(drop_rounds_count, len(sorted_est))
+        est_total = sum(sorted_est[num_drops_est:])
+
+        entry['max_points'] = str(max_total)
+        entry['est_points'] = str(est_total)
+
     # Re-sort based on updated totals and re-assign positions
-    def get_sort_val(e: dict) -> float:
+    def get_sort_val(e: dict) -> tuple[float, float]:
         try:
-            return float(e.get('total_all_rounds', '0'))
+            to_count = float(e.get('total_to_count', '0'))
         except ValueError:
-            return 0.0
+            to_count = 0.0
+        try:
+            total_all = float(e.get('total_all_rounds', '0'))
+        except ValueError:
+            total_all = 0.0
+        return (to_count, total_all)
 
     championship['standings'].sort(key=get_sort_val, reverse=True)
+
+    def get_count_score(e: dict) -> int:
+        try:
+            val = e.get('total_to_count') or e.get('total_all_rounds') or '0'
+            return int(float(val))
+        except ValueError:
+            return 0
+
+    leader_score = get_count_score(championship['standings'][0]) if championship['standings'] else 0
+
     for i, entry in enumerate(championship['standings']):
         entry['pos'] = str(i + 1)
+        curr_score = get_count_score(entry)
+        if i == 0:
+            entry['gap_leader'] = '-'
+            entry['gap_next'] = '-'
+        else:
+            prev_score = get_count_score(championship['standings'][i - 1])
+            entry['gap_leader'] = str(max(0, leader_score - curr_score))
+            entry['gap_next'] = str(max(0, prev_score - curr_score))
 
 
 def get_gallery_url() -> str:

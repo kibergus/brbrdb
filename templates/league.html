@@ -360,11 +360,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 <tr>
                     <th rowspan="2" class="pos-col">Pos</th>
                     <th rowspan="2" class="driver-name">Driver</th>
-                    <th rowspan="2">Total<br><small>(to count)</small></th>
+                    <th rowspan="2" class="total-header">
+                        <span class="total-header-main" title="Total championship points counting the best rounds (excluding 2 drop rounds)">Total<br><small>(to count)</small></span>
+                        <div class="total-header-sub">
+                            <span class="proj-hint" title="Points gap to championship leader">leader</span>
+                            <span class="proj-sep">|</span>
+                            <span class="proj-hint" title="Points gap to next driver ahead">next</span>
+                        </div>
+                    </th>
+                    <th rowspan="2" class="total-header">
+                        <span class="total-header-main" title="Total points across all rounds">all rounds</span>
+                        <div class="total-header-sub">
+                            <span class="proj-hint" title="Maximum possible total if remaining rounds yield max points (34), excluding 2 drop rounds">max</span>
+                            <span class="proj-sep">|</span>
+                            <span class="proj-hint" title="Estimated total if remaining rounds yield driver's average points per round, excluding 2 drop rounds">est</span>
+                        </div>
+                    </th>
                     {% for round in ns.all_rounds %}
                     <th colspan="{{ ns.sub_sessions|length }}" class="round-header">{{ round }}</th>
                     {% endfor %}
-                    <th rowspan="2">Total<br><small>(all rounds)</small></th>
                 </tr>
                 <tr>
                     {% for round in ns.all_rounds %}
@@ -390,7 +404,37 @@ document.addEventListener('DOMContentLoaded', function() {
                         <span>{{ entry.name }}</span>
                         {% endif %}
                     </td>
-                    <td rowspan="2" class="total-col">{{ entry.total_to_count if entry.total_to_count != '0' else entry.total_all_rounds }}</td>
+                    <td rowspan="2" class="total-all-cell">
+                        <div class="total-all-top" title="Total points to count (excluding 2 drop rounds)">
+                            {{ entry.total_to_count if entry.total_to_count != '0' else entry.total_all_rounds }}
+                        </div>
+                        {% if entry.gap_leader is defined and entry.gap_next is defined %}
+                        <div class="total-all-bottom">
+                            <span class="proj-val" title="{% if entry.gap_leader == '-' %}Leader{% else %}Gap to leader: {{ entry.gap_leader }} pts{% endif %}">{{ entry.gap_leader }}</span>
+                            <span class="proj-sep">|</span>
+                            <span class="proj-val" title="{% if entry.gap_next == '-' %}Leader{% else %}Gap to next driver ahead: {{ entry.gap_next }} pts{% endif %}">{{ entry.gap_next }}</span>
+                        </div>
+                        {% endif %}
+                    </td>
+                    <td rowspan="2" class="total-all-cell">
+                        <div class="total-all-top" title="Total points scored across all rounds so far">
+                            {% if entry.total_all_rounds_official and entry.total_all_rounds != entry.total_all_rounds_official %}
+                                {{ entry.total_all_rounds_official }}
+                                <span class="preliminary-text" style="font-size: 0.85em; font-weight: normal; margin-left: 0.2rem;" title="Including provisional results: {{ entry.total_all_rounds }}">
+                                    ({{ entry.total_all_rounds }})
+                                </span>
+                            {% else %}
+                                {{ entry.total_all_rounds }}
+                            {% endif %}
+                        </div>
+                        {% if entry.max_points is defined and entry.est_points is defined %}
+                        <div class="total-all-bottom">
+                            <span class="proj-val" title="Maximum possible points: {{ entry.max_points }}">{{ entry.max_points }}</span>
+                            <span class="proj-sep">|</span>
+                            <span class="proj-val" title="Estimated points: {{ entry.est_points }}">{{ entry.est_points }}</span>
+                        </div>
+                        {% endif %}
+                    </td>
                     
                     {% for round_name in ns.all_rounds %}
                         {% set round_data = entry.rounds.get(round_name, {}) %}
@@ -418,17 +462,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             </td>
                         {% endfor %}
                     {% endfor %}
-
-                    <td rowspan="2" class="total-col">
-                        {% if entry.total_all_rounds_official and entry.total_all_rounds != entry.total_all_rounds_official %}
-                            {{ entry.total_all_rounds_official }}
-                            <span class="preliminary-text" style="font-size: 0.85em; font-weight: normal; margin-left: 0.2rem;" title="Including provisional results: {{ entry.total_all_rounds }}">
-                                ({{ entry.total_all_rounds }})
-                            </span>
-                        {% else %}
-                            {{ entry.total_all_rounds }}
-                        {% endif %}
-                    </td>
                 </tr>
                 <tr>
                     {% for round_name in ns.all_rounds %}

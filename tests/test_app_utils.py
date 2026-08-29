@@ -244,11 +244,15 @@ def test_augment_championship_data_all_drivers_and_provisional() -> None:
         assert standings[0]['total_all_rounds'] == '58'
         assert standings[0]['total_all_rounds_official'] == '33'
         assert standings[0]['total_to_count'] == '33'
+        assert standings[0]['gap_leader'] == '-'
+        assert standings[0]['gap_next'] == '-'
 
         assert standings[1]['name'] == 'Driver B'
         assert standings[1]['total_all_rounds'] == '18'
         assert standings[1]['total_all_rounds_official'] == '18'
         assert standings[1]['total_to_count'] == '18'
+        assert standings[1]['gap_leader'] == '15'
+        assert standings[1]['gap_next'] == '15'
 
 
 def test_session_breadcrumbs() -> None:
@@ -461,6 +465,58 @@ def test_augment_championship_data_drop_rounds() -> None:
         drop_rounds_list = driver_a.get('drop_rounds')
         assert isinstance(drop_rounds_list, list)
         assert set(drop_rounds_list) == {'R3', 'R2'}
+
+        # Verify max_points and est_points
+        # Past round scores: R1=34, R2=24, R3=0. Remaining round: R4.
+        # Max: [34, 24, 0, 34] -> sorted: [0, 24, 34, 34] -> drop lowest 2 (0, 24) -> 34 + 34 = 68
+        assert driver_a.get('max_points') == '68'
+        # Est: Driver attended R1 (34) and R2 (24) -> avg = round(58/2) = 29
+        # Est scores: [34, 24, 0, 29] -> sorted: [0, 24, 29, 34] -> drop lowest 2 (0, 24) -> 29 + 34 = 63
+        assert driver_a.get('est_points') == '63'
+
+
+def test_augment_championship_data_sort_by_total_to_count() -> None:
+    with patch('app.db') as mock_db:
+        mock_db.list_meetings.return_value = []
+        mock_db.find_sessions.return_value = []
+        mock_db.load.return_value = pd.DataFrame()
+
+        # Driver 1 has higher total_all_rounds (170) but lower total_to_count (123)
+        # Driver 2 has lower total_all_rounds (165) but higher total_to_count (127)
+        championship = {
+            'drop_rounds': 2,
+            'standings': [
+                {
+                    'name': 'Driver LowCount HighAll',
+                    'total_to_count': '123',
+                    'total_all_rounds': '170',
+                    'rounds': {
+                        'R1': {'PF': {'points': '30'}},
+                    }
+                },
+                {
+                    'name': 'Driver HighCount LowAll',
+                    'total_to_count': '127',
+                    'total_all_rounds': '165',
+                    'rounds': {
+                        'R1': {'PF': {'points': '30'}},
+                    }
+                }
+            ]
+        }
+
+        app.augment_championship_data(championship, 'fat_pro', 'cadet', '2026')
+
+        standings = cast(List[Dict[str, Any]], championship['standings'])
+        assert standings[0]['name'] == 'Driver HighCount LowAll'
+        assert standings[0]['pos'] == '1'
+        assert standings[0]['gap_leader'] == '-'
+        assert standings[0]['gap_next'] == '-'
+
+        assert standings[1]['name'] == 'Driver LowCount HighAll'
+        assert standings[1]['pos'] == '2'
+        assert standings[1]['gap_leader'] == '4'
+        assert standings[1]['gap_next'] == '4'
 
 
 def test_kartsim_class_view_no_hero() -> None:
