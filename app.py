@@ -72,11 +72,22 @@ def teardown_db(exception: Any = None) -> None:
 
 @app.before_request
 def _require_login() -> werkzeug_wrappers.Response | tuple[str, int] | None:
-    """Global auth gate — skipped for localhost, static files, auth, about, and gallery endpoints."""
-    if request.endpoint in ('auth', 'static', 'about', 'favicon') or (
+    """Global auth gate — skipped for localhost, static files, auth, about, settings, and gallery endpoints."""
+    if request.endpoint in (
+        'auth', 'static', 'about', 'favicon', 'settings', 'save_settings', 'auth_builder'
+    ) or (
         request.endpoint and request.endpoint.startswith('gallery.')
     ):
         return None
+
+    # MCP API endpoints require an explicit authenticated API key (or localhost)
+    if request.path.startswith('/api/mcp'):
+        if not auth.get_current_key() and request.remote_addr not in auth._LOCALHOST_ADDRS:
+            return make_response(
+                json.dumps({'error': 'Unauthorized: Invalid or missing API key.'}),
+                401,
+                {'Content-Type': 'application/json'}
+            )
 
     acl = auth.get_current_acl()
     if not acl:
@@ -88,18 +99,45 @@ def _require_login() -> werkzeug_wrappers.Response | tuple[str, int] | None:
             )
         return redirect(url_for('auth', next=request.full_path if request.query_string else request.path))
 
-    view_args = request.view_args or {}
-    has_kartsim = (
-        view_args.get('league') == 'kartsim' or
+    # 1. Telemetry access check - guided by see_telemetry ONLY
+    is_telemetry = (
+        request.path.startswith('/telemetry') or
         request.path.startswith('/api/telemetry') or
         request.path.startswith('/api/track_data') or
-        'kartsim' in request.args.getlist('leagues') or
-        request.args.get('league') == 'kartsim' or
-        any('kartsim' in s for s in request.args.getlist('session'))
+        request.path.startswith('/api/track_progression') or
+        request.path.startswith('/kartsim_meeting') or
+        request.path.startswith('/api/kartsim_meeting_data')
     )
-    if has_kartsim:
-        if not acl.get('kartsim_data'):
-            abort(403, description='Access to KartSim data is restricted')
+    if is_telemetry:
+        if not acl.get('see_telemetry'):
+            abort(403, description='Access to telemetry data is restricted')
+        return None
+
+    # 2. Driver access check
+    is_drivers = (
+        request.endpoint in ('drivers', 'driver_view', 'drivers_list') or
+        (request.endpoint and request.endpoint.startswith('plots.driver_')) or
+        request.path.startswith('/drivers') or
+        request.path.startswith('/driver/') or
+        request.path.startswith('/driver_plot') or
+        request.path.startswith('/driver_percentile_plot')
+    )
+    if is_drivers and not acl.get('see_drivers'):
+        abort(403, description='Access to drivers is restricted')
+
+    # 3. League access check
+    view_args = request.view_args or {}
+    target_leagues: set[str] = set()
+    if 'league' in view_args and isinstance(view_args['league'], str):
+        target_leagues.add(view_args['league'])
+    if request.args.get('league'):
+        target_leagues.add(request.args['league'])
+    for lg in request.args.getlist('leagues'):
+        target_leagues.add(lg)
+
+    for lg in target_leagues:
+        if not auth.can_see_league(acl, lg):
+            abort(403, description='Access to league is restricted')
 
     return None
 
@@ -171,8 +209,8 @@ def auth_route() -> werkzeug_wrappers.Response | str:
         next_url = url_for('index')
 
     if request.method == 'POST':
-        key = request.form.get('key', '')
-        if key in valid_keys:
+        key = request.form.get('key', '').strip()
+        if key and key in valid_keys:
             resp = make_response(redirect(next_url))
             resp.set_cookie(
                 auth.AUTH_COOKIE,
@@ -201,7 +239,7 @@ def auth_route() -> werkzeug_wrappers.Response | str:
 
     # If already logged in, just go to next_url
     current_key = request.cookies.get(auth.AUTH_COOKIE)
-    if current_key in valid_keys:
+    if current_key and current_key in valid_keys:
         return redirect(next_url)
 
     return render_template('auth.html', next_url=next_url)
@@ -553,9 +591,11 @@ def index() -> werkzeug_wrappers.Response:
 
 @app.route('/league')
 def league_list() -> str:
-    leagues = db.list_leagues()
-    if not auth.get_current_acl().get('kartsim_data'):
-        leagues = [lg for lg in leagues if lg != 'kartsim']
+    acl = auth.get_current_acl()
+    leagues = [
+        lg for lg in db.list_leagues()
+        if auth.can_see_league(acl, lg) and (lg != 'kartsim' or acl.get('see_telemetry'))
+    ]
     grouped_leagues = aliases.group_leagues(leagues)
     return render_template('league_list.html', grouped_leagues=grouped_leagues)
 
@@ -1227,11 +1267,13 @@ def track_sessions_view(league: str, class_name: str, track: str, track_conditio
 
 @app.route('/driver/<name>')
 def driver_view(name: str) -> str:
+    acl = auth.get_current_acl()
+    if not acl.get('see_drivers'):
+        abort(403, description='Access to drivers is restricted')
     # Load all data to find this driver across all sessions
     # This will be fast after the first load due to lru_cache in RaceDB
     df = db.load()
-    if not auth.get_current_acl().get('kartsim_data'):
-        df = df[df['League'] != 'kartsim']
+    df = df[df['League'].apply(lambda lg: auth.can_see_league(acl, lg))]
     if df.empty:
         abort(404)
 
@@ -1387,6 +1429,9 @@ def driver_view(name: str) -> str:
 
 @app.route('/drivers')
 def drivers_list() -> str:
+    acl = auth.get_current_acl()
+    if not acl.get('see_drivers'):
+        abort(403, description='Access to drivers is restricted')
     driver_names = db.get_driver_names()
 
     # Group by first letter

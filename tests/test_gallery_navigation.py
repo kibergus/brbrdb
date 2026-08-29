@@ -84,18 +84,16 @@ def populated_db_conn(ephemeral_postgres: dict) -> Generator:
 def test_gallery_root_view(populated_db_conn: Any) -> None:
     client = app.app.test_client()
     mock_keys = {
-        'test_key_with_kartsim': {
+        'test_key_with_gallery': {
             'see_gallery': True,
-            'kartsim_data': True,
         },
-        'test_key_no_kartsim': {
-            'see_gallery': True,
-            'kartsim_data': False,
+        'test_key_no_gallery': {
+            'see_gallery': False,
         }
     }
     with patch('auth.load_keys', return_value=mock_keys):
-        # 1. Access root gallery WITH kartsim access
-        client.set_cookie('auth_key', 'test_key_with_kartsim')
+        # 1. Access root gallery WITH see_gallery access
+        client.set_cookie('auth_key', 'test_key_with_gallery')
         response = client.get('/gallery', environ_base={'REMOTE_ADDR': '192.168.1.100'})
         assert response.status_code == 200
         html = response.get_data(as_text=True)
@@ -106,14 +104,10 @@ def test_gallery_root_view(populated_db_conn: Any) -> None:
         assert '/gallery?league=rotax' in html
         assert '/gallery?league=kartsim' in html
 
-        # 2. Access root gallery WITHOUT kartsim access
-        client.set_cookie('auth_key', 'test_key_no_kartsim')
+        # 2. Access root gallery WITHOUT see_gallery access -> 403
+        client.set_cookie('auth_key', 'test_key_no_gallery')
         response = client.get('/gallery', environ_base={'REMOTE_ADDR': '192.168.1.100'})
-        assert response.status_code == 200
-        html = response.get_data(as_text=True)
-        assert 'Piston Cup' in html or 'piston_cup' in html
-        assert 'Rotax' in html or 'rotax' in html
-        assert '/gallery?league=kartsim' not in html
+        assert response.status_code == 403
 
 
 def test_gallery_league_view(populated_db_conn: Any) -> None:
@@ -121,7 +115,6 @@ def test_gallery_league_view(populated_db_conn: Any) -> None:
     mock_keys = {
         'test_key': {
             'see_gallery': True,
-            'kartsim_data': True,
         }
     }
     with patch('auth.load_keys', return_value=mock_keys):
@@ -142,11 +135,11 @@ def test_gallery_league_view(populated_db_conn: Any) -> None:
         response_invalid = client.get('/gallery?league=invalid_league', environ_base={'REMOTE_ADDR': '192.168.1.100'})
         assert response_invalid.status_code == 404
 
-        # 3. Access restricted kartsim without permission
-        mock_keys_no_ks = {'test_key': {'see_gallery': True, 'kartsim_data': False}}
-        with patch('auth.load_keys', return_value=mock_keys_no_ks):
-            response_ks = client.get('/gallery?league=kartsim', environ_base={'REMOTE_ADDR': '192.168.1.100'})
-            assert response_ks.status_code == 403
+        # 3. Access without see_gallery permission -> 403
+        mock_keys_no_gal = {'test_key': {'see_gallery': False}}
+        with patch('auth.load_keys', return_value=mock_keys_no_gal):
+            response_gal = client.get('/gallery?league=kartsim', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+            assert response_gal.status_code == 403
 
 
 def test_gallery_meeting_breadcrumbs(populated_db_conn: Any) -> None:
@@ -154,7 +147,7 @@ def test_gallery_meeting_breadcrumbs(populated_db_conn: Any) -> None:
     mock_keys = {
         'test_key': {
             'see_gallery': True,
-            'kartsim_data': True,
+            'see_leagues': ['*'],
         }
     }
     with patch('auth.load_keys', return_value=mock_keys):
@@ -178,7 +171,7 @@ def test_gallery_hamburger_menu_session_link(populated_db_conn: Any) -> None:
     mock_keys = {
         'test_key': {
             'see_gallery': True,
-            'kartsim_data': True,
+            'see_leagues': ['*'],
         }
     }
     with patch('auth.load_keys', return_value=mock_keys):
@@ -229,7 +222,7 @@ def test_context_aware_gallery_link(populated_db_conn: Any) -> None:
     mock_keys = {
         'test_key': {
             'see_gallery': True,
-            'kartsim_data': True,
+            'see_leagues': ['*'],
         }
     }
     with patch('auth.load_keys', return_value=mock_keys):

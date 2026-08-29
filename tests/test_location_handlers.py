@@ -170,7 +170,7 @@ def test_get_track_points_route(
     app.register_blueprint(location_handlers.location_blueprint)
     client = app.test_client()
 
-    mock_get_current_acl.return_value = {'kartsim_data': True}
+    mock_get_current_acl.return_value = {'see_telemetry': True}
 
     # Mocking DB sessions
     mock_session = MagicMock()
@@ -457,7 +457,7 @@ Time,Latitude,Longitude,Record,Lap
     mock_session = MagicMock()
     mock_session.meeting_dir = str(tmp_path)
     mock_db.find_sessions.return_value = [mock_session]
-    mock_get_current_acl.return_value = {'kartsim_data': True}
+    mock_get_current_acl.return_value = {'see_telemetry': True}
 
     # 1. Test directory traversal attempt
     url_traversal = (
@@ -468,8 +468,8 @@ Time,Latitude,Longitude,Record,Lap
     assert response.status_code == 403
     assert b"Unauthorized or invalid session ID" in response.data
 
-    # 2. Test kartsim_data permission restriction
-    mock_get_current_acl.return_value = {'kartsim_data': False}
+    # 2. Test see_telemetry permission restriction
+    mock_get_current_acl.return_value = {'see_telemetry': False}
     url_restricted = (
         '/api/telemetry/channel?league=kartsim&class_name=X30'
         '&date=2026-05-10&track=Rowrah&session_id=S1_hero_a.csv&channel=Time'
@@ -489,7 +489,7 @@ def test_get_track_points_security(
     app.register_blueprint(location_handlers.location_blueprint)
     client = app.test_client()
 
-    mock_get_current_acl.return_value = {'kartsim_data': False}
+    mock_get_current_acl.return_value = {'see_telemetry': False}
 
     response = client.get('/api/telemetry?league=kartsim&class_name=X30&date=2026-05-10&track=Rowrah')
     assert response.status_code == 403
@@ -523,7 +523,7 @@ Time,Latitude,Longitude,Record,Lap,Steering Wheel Angle (deg)
     mock_session = MagicMock()
     mock_session.meeting_dir = str(tmp_path)
     mock_db.find_sessions.return_value = [mock_session]
-    mock_get_current_acl.return_value = {'kartsim_data': True}
+    mock_get_current_acl.return_value = {'see_telemetry': True}
 
     url = (
         '/api/telemetry/channel?league=kartsim&class_name=X30'
@@ -621,7 +621,7 @@ Time,Latitude,Longitude,Record,Lap,GForceLat
     mock_session = MagicMock()
     mock_session.meeting_dir = str(tmp_path)
     mock_db.find_sessions.return_value = [mock_session]
-    mock_get_current_acl.return_value = {'kartsim_data': True}
+    mock_get_current_acl.return_value = {'see_telemetry': True}
 
     # Case A: league is kartsim (should smooth: [2.0, 2.5, 3.0, 3.5, 4.0])
     url_smooth = (

@@ -184,7 +184,7 @@ def test_stream_upload_flow() -> None:
                 'drivers': ['Driver A'],
                 'leagues': ['*']
             },
-            'kartsim_data': True
+            'see_telemetry': True
         }
     }
 
@@ -277,7 +277,7 @@ def test_stream_upload_missing_or_invalid_params() -> None:
                 'drivers': ['Driver A'],
                 'leagues': ['*']
             },
-            'kartsim_data': True
+            'see_telemetry': True
         }
     }
 
@@ -627,7 +627,7 @@ def test_stream_upload_pruning_and_merging(tmp_path: Path) -> None:
                 'drivers': ['Driver A'],
                 'leagues': ['*']
             },
-            'kartsim_data': True
+            'see_telemetry': True
         }
     }
 

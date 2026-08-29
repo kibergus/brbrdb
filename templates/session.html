@@ -169,8 +169,12 @@
                     </div>
                 </td>
                 <td style="font-weight: 600;">
+                    {% if get_current_acl().get('see_drivers') %}
                     <a href="{{ url_for('driver_view', name=driver.name) }}"
                         style="color: inherit; text-decoration: none;">{{ driver.name }}</a>
+                    {% else %}
+                    <span>{{ driver.name }}</span>
+                    {% endif %}
                     {% if driver.is_fastest %}
                     <span class="badge badge-blue" style="margin-left: 0.5rem">Fastest</span>
                     {% endif %}

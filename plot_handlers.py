@@ -17,6 +17,7 @@ import hashlib
 import pandas as pd
 from flask import Blueprint, Response, request, abort, jsonify
 from typing import TypedDict, Any, Sequence, Iterable, Hashable, Set
+import auth
 import plots
 from database import db
 from race_tools import sanitize
@@ -214,6 +215,9 @@ def violin_plot(league: str, class_name: str, date: str, track: str, session_id:
     Supports 'drivers' query parameter for a comma-separated list of driver names to filter by.
     Supports 'sessions' query parameter for a comma-separated list of session indices (if no session_id).
     """
+    acl = auth.get_current_acl()
+    if not auth.can_see_league(acl, league):
+        abort(403, description='Access to this league is restricted')
     aspect = request.args.get('aspect')
     drivers_arg = request.args.get('drivers')
     sessions_arg = request.args.get('sessions')
@@ -268,6 +272,9 @@ def _get_track_plot_bytes(
 @plots_blueprint.route('/track_plot/<league>/<class_name>/<track>/<track_conditions>.png')
 def track_plot(league: str, class_name: str, track: str, track_conditions: str | None) -> Response:
     """Serve a single combined violin plot for all dates at a track."""
+    acl = auth.get_current_acl()
+    if not auth.can_see_league(acl, league):
+        abort(403, description='Access to this league is restricted')
     selected_year = request.args.get('year')
     aspect = request.args.get('aspect')
 
@@ -449,6 +456,9 @@ def driver_plot(name: str) -> Response:
     """Serve a chronological violin plot of for a specific driver.
     Supports 'leagues', 'classes', 'track' and 'year' query parameters for filtering.
     """
+    acl = auth.get_current_acl()
+    if not acl.get('see_drivers'):
+        abort(403, description='Access to drivers is restricted')
     leagues = tuple(request.args.getlist('leagues'))
     classes = tuple(request.args.getlist('classes'))
     track = request.args.get('track')
@@ -506,6 +516,9 @@ def _get_driver_percentile_plot_bytes(
 @plots_blueprint.route('/driver_percentile_plot/<name>.png')
 def driver_percentile_plot(name: str) -> Response:
     """Serve a chronological violin plot of gaps to 5th percentile for a specific driver."""
+    acl = auth.get_current_acl()
+    if not acl.get('see_drivers'):
+        abort(403, description='Access to drivers is restricted')
     leagues = tuple(request.args.getlist('leagues'))
     classes = tuple(request.args.getlist('classes'))
     track = request.args.get('track')
@@ -521,6 +534,9 @@ def driver_percentile_plot(name: str) -> Response:
 @plots_blueprint.route('/api/training_data/<league>/<class_name>')
 def training_data_api(league: str, class_name: str) -> Response | tuple[Response, int]:
     """Return training time data as JSON for hero drivers."""
+    acl = auth.get_current_acl()
+    if not auth.can_see_league(acl, league):
+        return jsonify({'error': 'Access to this league is restricted'}), 403
     selected_year = request.args.get('year')
     hero_names = tuple(get_hero_names())
     if not hero_names:

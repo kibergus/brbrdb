@@ -74,6 +74,35 @@ def test_can_upload_league_list() -> None:
     assert auth.can_upload_session_for_league(acl, 'other') is False
 
 
+def test_can_see_league_wildcard() -> None:
+    acl = {
+        'see_leagues': ['*']
+    }
+    assert auth.can_see_league(acl, 'kartsim') is True
+    assert auth.can_see_league(acl, 'rotax') is True
+    assert auth.can_see_league(acl, 'any_other') is True
+
+
+def test_can_see_league_list() -> None:
+    acl = {
+        'see_leagues': ['kartsim', 'rotax']
+    }
+    assert auth.can_see_league(acl, 'kartsim') is True
+    assert auth.can_see_league(acl, 'rotax') is True
+    assert auth.can_see_league(acl, 'fkl') is False
+
+
+def test_can_see_league_empty() -> None:
+    acl_empty: dict[str, Any] = {}
+    assert auth.can_see_league(acl_empty, 'rotax') is False
+
+    acl_none: dict[str, Any] = {'see_leagues': None}
+    assert auth.can_see_league(acl_none, 'rotax') is False
+
+    acl_empty_list: dict[str, Any] = {'see_leagues': []}
+    assert auth.can_see_league(acl_empty_list, 'rotax') is False
+
+
 def test_require_login_redirect() -> None:
     # Test that requests are redirected to auth when not logged in (from non-localhost)
     client = app.app.test_client()
@@ -92,28 +121,210 @@ def test_static_files_bypass_auth() -> None:
         assert response.status_code == 200
 
 
-def test_kartsim_data_restricted() -> None:
-    # Test that accessing kartsim resources is blocked if kartsim_data permission is false
+def test_settings_and_auth_builder_bypass_auth() -> None:
+    # Test that /settings, /save_settings, and /auth_builder can be accessed without a key
+    client = app.app.test_client()
+    with patch('auth.load_keys', return_value={}):
+        resp_settings = client.get('/settings', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_settings.status_code == 200
+
+        resp_save = client.post(
+            '/save_settings',
+            data={'hero_pilot': 'Test Pilot'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_save.status_code == 302
+
+        resp_builder = client.get('/auth_builder', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_builder.status_code == 200
+
+
+def test_anonymous_user_acl() -> None:
     client = app.app.test_client()
     mock_keys = {
-        'no_kartsim_key': {
+        '': {
+            'comment': 'Anonymous',
+            'see_videos': False,
+            'see_gallery': False,
+            'see_telemetry': False,
+            'see_drivers': False,
+            'see_leagues': ['*'],
+            'upload_sessions': {}
+        },
+        'user_key': {
             'see_videos': True,
-            'kartsim_data': False,
-            'upload_sessions': None
+            'see_gallery': True,
+            'see_telemetry': True,
+            'see_drivers': True,
+            'see_leagues': ['*'],
+            'upload_sessions': {}
         }
     }
     with patch('auth.load_keys', return_value=mock_keys):
-        client.set_cookie('auth_key', 'no_kartsim_key')
+        # 1. Anonymous user (no key, remote IP) gets anonymous ACL
+        resp_league = client.get('/league', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_league.status_code == 200
 
-        # Accessing kartsim meeting list or kartsim route should be forbidden
-        # Let's mock a remote IP to bypass the default localhost bypass in order to test the key
-        response = client.get('/league/kartsim/last', environ_base={'REMOTE_ADDR': '192.168.1.100'})
-        assert response.status_code == 403
+        # Drivers is forbidden for anonymous
+        resp_drivers = client.get('/drivers', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_drivers.status_code == 403
 
-        # Accessing non-kartsim league should be allowed (e.g. redirecting or loading)
-        response_non = client.get('/league/other/last', environ_base={'REMOTE_ADDR': '192.168.1.100'})
-        # Should not be a 403 forbidden
-        assert response_non.status_code != 403
+        # Telemetry is forbidden for anonymous
+        resp_telemetry = client.get(
+            '/telemetry/rotax/cadet/2026-03-15/Llandow',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_telemetry.status_code == 403
+
+        # 2. Authenticated user with user_key can access drivers
+        client.set_cookie('auth_key', 'user_key')
+        resp_drivers_auth = client.get('/drivers', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_drivers_auth.status_code == 200
+
+
+def test_see_drivers_permission() -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'no_drivers_key': {
+            'see_drivers': False,
+            'see_leagues': ['*'],
+        },
+        'has_drivers_key': {
+            'see_drivers': True,
+            'see_leagues': ['*'],
+        }
+    }
+    with patch('auth.load_keys', return_value=mock_keys):
+        # 1. Without see_drivers -> 403 Forbidden for drivers endpoints
+        client.set_cookie('auth_key', 'no_drivers_key')
+        resp_drivers = client.get('/drivers', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_drivers.status_code == 403
+
+        resp_driver = client.get('/driver/Alexey', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_driver.status_code == 403
+
+        resp_plot = client.get('/driver_plot/Alexey.png', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_plot.status_code == 403
+
+        resp_p5_plot = client.get('/driver_percentile_plot/Alexey.png', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_p5_plot.status_code == 403
+
+        # Navbar should NOT include drivers link
+        resp_about = client.get('/about', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_about.status_code == 200
+        assert 'Drivers' not in resp_about.get_data(as_text=True)
+
+        # 2. With see_drivers -> allowed
+        client.set_cookie('auth_key', 'has_drivers_key')
+        resp_drivers_ok = client.get('/drivers', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_drivers_ok.status_code == 200
+
+        resp_about_ok = client.get('/about', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_about_ok.status_code == 200
+        assert 'Drivers' in resp_about_ok.get_data(as_text=True)
+
+
+def test_see_leagues_permission() -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'rotax_only_key': {
+            'see_leagues': ['rotax'],
+            'see_drivers': True,
+        },
+        'all_leagues_key': {
+            'see_leagues': ['*'],
+            'see_drivers': True,
+        }
+    }
+    with patch('auth.load_keys', return_value=mock_keys):
+        # 1. Rotax only key
+        client.set_cookie('auth_key', 'rotax_only_key')
+        # Accessing rotax should not be 403
+        resp_rotax = client.get('/league/rotax', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_rotax.status_code != 403
+
+        # Accessing kartsim should be 403
+        resp_kartsim = client.get('/league/kartsim/last', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_kartsim.status_code == 403
+
+        # Meeting for restricted league should be 403
+        resp_meeting = client.get(
+            '/meeting/kartsim/cadet/2026-05-10/Rowrah',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_meeting.status_code == 403
+
+        # League list should only list rotax, not kartsim
+        resp_league_list = client.get('/league', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_league_list.status_code == 200
+        html = resp_league_list.get_data(as_text=True)
+        assert 'KartSim' not in html
+
+        # 2. Wildcard all leagues key
+        client.set_cookie('auth_key', 'all_leagues_key')
+        resp_all = client.get('/league/kartsim/last', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_all.status_code != 403
+
+
+def test_see_telemetry_restricted() -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'no_telemetry_key': {
+            'see_telemetry': False,
+            'see_leagues': ['*'],
+        },
+        'has_telemetry_key': {
+            'see_telemetry': True,
+            'see_leagues': ['*'],
+        }
+    }
+    with patch('auth.load_keys', return_value=mock_keys):
+        client.set_cookie('auth_key', 'no_telemetry_key')
+
+        # 1. Telemetry API endpoint should be 403 for any league
+        resp_api = client.get('/api/telemetry', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_api.status_code == 403
+
+        # 2. Telemetry view page should be 403 for non-kartsim league as well
+        resp_view_rotax = client.get(
+            '/telemetry/rotax/cadet/2026-03-15/Llandow',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_view_rotax.status_code == 403
+
+        # 3. Telemetry view page for kartsim should be 403
+        resp_view_ks = client.get(
+            '/telemetry/kartsim/cadet/2026-05-10/Rowrah',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_view_ks.status_code == 403
+
+        # 4. League list with see_telemetry: False hides KartSim
+        resp_league_no_tel = client.get('/league', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_league_no_tel.status_code == 200
+        assert 'KartSim' not in resp_league_no_tel.get_data(as_text=True)
+
+        # 5. League list with see_telemetry: True shows KartSim
+        client.set_cookie('auth_key', 'has_telemetry_key')
+        resp_league_has_tel = client.get('/league', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert resp_league_has_tel.status_code == 200
+        assert 'KartSim' in resp_league_has_tel.get_data(as_text=True)
+
+        # 6. Key with see_telemetry: True but see_leagues restricting kartsim can still view telemetry
+        mock_keys_tel_only = {
+            'telemetry_key': {
+                'see_telemetry': True,
+                'see_leagues': ['rotax'],
+            }
+        }
+        with patch('auth.load_keys', return_value=mock_keys_tel_only):
+            client.set_cookie('auth_key', 'telemetry_key')
+            resp_ks_telemetry = client.get(
+                '/telemetry/kartsim/cadet/2026-05-10/Rowrah',
+                environ_base={'REMOTE_ADDR': '192.168.1.100'}
+            )
+            # Should not be 403 Forbidden because telemetry is guided by see_telemetry only
+            assert resp_ks_telemetry.status_code != 403
 
 
 def test_api_endpoints_require_login_401() -> None:
@@ -132,9 +343,11 @@ def test_gallery_restricted() -> None:
     mock_keys = {
         'no_gallery_key': {
             'see_gallery': False,
+            'see_leagues': ['*'],
         },
         'has_gallery_key': {
             'see_gallery': True,
+            'see_leagues': ['*'],
         }
     }
     with patch('auth.load_keys', return_value=mock_keys):

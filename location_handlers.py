@@ -207,6 +207,10 @@ def _render_telemetry_meeting(
     report_state: dict | None = None,
     report_name: str | None = None
 ) -> str:
+    acl = auth.get_current_acl()
+    if not acl.get('see_telemetry'):
+        abort(403, description='Access to telemetry data is restricted')
+
     sessions = db.find_sessions(leagues=league, classes=class_name, date=date, track=track)
     if not sessions:
         abort(404)
@@ -583,9 +587,9 @@ def _compute_lap_segments(laps: list, sector_ends: list, turns: list) -> None:
 
 @location_blueprint.route('/api/telemetry')
 def get_track_points() -> Response | tuple[Response, int]:
-    # Check kartsim_data permission
+    # Check see_telemetry permission
     acl = auth.get_current_acl()
-    if not acl.get('kartsim_data'):
+    if not acl.get('see_telemetry'):
         return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
 
     league = request.args.get('league')
@@ -713,9 +717,9 @@ def smooth_telemetry_data(values: list[float]) -> list[float]:
 
 @location_blueprint.route('/api/telemetry/channel')
 def get_telemetry_channel() -> Response | tuple[Response, int]:
-    # Check kartsim_data permission
+    # Check see_telemetry permission
     acl = auth.get_current_acl()
-    if not acl.get('kartsim_data'):
+    if not acl.get('see_telemetry'):
         return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
 
     league = request.args.get('league')

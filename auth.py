@@ -31,8 +31,8 @@ def load_keys() -> dict[str, dict[str, Any]]:
         return json.load(f)
 
 
-def get_current_acl() -> dict[str, Any]:
-    """Return the ACL configuration for the current authenticated key or localhost."""
+def get_current_key() -> str | None:
+    """Return the raw authentication key provided in the request, or None."""
     # Support multiple key sources to accommodate different clients:
     # 1. 'X-API-Key': Custom header used by existing API routes.
     # 2. 'key' query param: Required for SSE (EventSource) connections without custom header support.
@@ -43,22 +43,48 @@ def get_current_acl() -> dict[str, Any]:
     if not key and request.headers.get('Authorization', '').startswith('Bearer '):
         key = request.headers.get('Authorization', '')[7:].strip()
 
+    return key.strip() if (key and key.strip()) else None
+
+
+def get_current_acl() -> dict[str, Any]:
+    """Return the ACL configuration for the current authenticated key, localhost, or anonymous."""
+    key = get_current_key()
     valid_keys = load_keys()
-    if key in valid_keys:
-        return valid_keys[key]
+
+    if key:
+        # Explicit key provided: must exist in keys.json
+        if key in valid_keys:
+            return valid_keys[key]
+        # Invalid key supplied -> unauthorized
+        return {}
 
     if request.remote_addr in _LOCALHOST_ADDRS:
         # Default all permissions for local development
         return {
             'see_videos': True,
             'see_gallery': True,
-            'kartsim_data': True,
+            'see_telemetry': True,
+            'see_drivers': True,
+            'see_leagues': ['*'],
             'upload_sessions': {
                 'drivers': ['*'],
                 'leagues': ['*']
             }
         }
+
+    # Fallback to anonymous permissions if configured in keys.json under empty key
+    if '' in valid_keys:
+        return valid_keys['']
+
     return {}
+
+
+def can_see_league(acl: dict[str, Any], league: str) -> bool:
+    """Check if the ACL allows viewing data for the given league."""
+    see_leagues = acl.get('see_leagues')
+    if not see_leagues or not isinstance(see_leagues, list):
+        return False
+    return '*' in see_leagues or league in see_leagues
 
 
 def can_upload_session_for_driver(acl: dict[str, Any], driver_name: str) -> bool:

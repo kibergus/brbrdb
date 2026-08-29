@@ -260,10 +260,6 @@ def _gallery_root() -> str:
         ''')
         rows = cur.fetchall()
 
-    # Filter out kartsim if not allowed
-    if not auth.get_current_acl().get('kartsim_data'):
-        rows = [r for r in rows if r[0] != 'kartsim']
-
     leagues_with_media = sorted(
         [
             {
@@ -286,9 +282,6 @@ def _gallery_league(league: str) -> str:
     """Render the league gallery page listing all meetings that have media."""
     if league not in db.list_leagues():
         abort(404, description="League not found")
-
-    if league == 'kartsim' and not auth.get_current_acl().get('kartsim_data'):
-        abort(403, description="Access to KartSim is restricted")
 
     with db.conn.cursor() as cur:
         cur.execute('''
@@ -744,9 +737,8 @@ def _sort_albums_chronologically(albums: set[str], sessions: list) -> list[str]:
 
 def has_meeting_gallery(league: str, meeting_date: str) -> bool:
     """Return True if photos or videos exist in DB for the given league and meeting date."""
-    if not auth.get_current_acl().get('see_gallery'):
-        return False
-    if league == 'kartsim' and not auth.get_current_acl().get('kartsim_data'):
+    acl = auth.get_current_acl()
+    if not acl.get('see_gallery'):
         return False
     if not db or not db.conn:
         return False
@@ -766,9 +758,8 @@ def has_meeting_gallery(league: str, meeting_date: str) -> bool:
 
 def has_league_gallery(league: str) -> bool:
     """Return True if photos or videos exist in DB for the given league."""
-    if not auth.get_current_acl().get('see_gallery'):
-        return False
-    if league == 'kartsim' and not auth.get_current_acl().get('kartsim_data'):
+    acl = auth.get_current_acl()
+    if not acl.get('see_gallery'):
         return False
     if not db or not db.conn:
         return False
