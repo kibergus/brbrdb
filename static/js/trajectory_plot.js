@@ -15,7 +15,7 @@
  * ==============================================================================
  */
 
-import { parseLapTime } from './utils.js';
+import { parseLapTime, attachSmoothWheelZoom } from './utils.js';
 
 const DEFAULT_COLORS = ['#10b981', '#f43f5e', '#38bdf8', '#f59e0b', '#a855f7', '#ec4899', '#14b8a6'];
 
@@ -477,6 +477,8 @@ export class TrajectoryPlot {
         this.map = new google.maps.Map(mapDiv, {
             mapTypeId: (this.currentMapType === 'kartsim') ? 'solid_dark' : 'satellite',
             gestureHandling: 'greedy',
+            scrollwheel: false,
+            isFractionalZoomEnabled: true,
             disableDefaultUI: false,
             zoomControl: true,
             mapTypeControl: false,
@@ -484,6 +486,8 @@ export class TrajectoryPlot {
             streetViewControl: false,
             fullscreenControl: true
         });
+
+        attachSmoothWheelZoom(this.map, mapDiv);
 
         if (this.map.mapTypes) {
             this.map.mapTypes.set('solid_dark', new SolidBackgroundMapType());

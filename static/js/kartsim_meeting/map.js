@@ -20,7 +20,7 @@
  */
 import { state } from './state.js';
 import { findSegmentIndex, precalculateLapData, fetchTelemetryChannel, getPointAtDistance, getTurnTime } from './telemetry.js';
-import { parseLapTime } from '../utils.js';
+import { parseLapTime, attachSmoothWheelZoom } from '../utils.js';
 import { debouncedUpdateURL } from './url_sync.js';
 
 export const LAP_PALETTE = [
@@ -829,10 +829,14 @@ export function initMap() {
                 mapId: 'KART_ANALYSIS_MAP',
                 tilt: 0,
                 gestureHandling: 'greedy',
+                scrollwheel: false,
+                isFractionalZoomEnabled: true,
                 streetViewControl: false,
                 mapTypeControl: false,
                 fullscreenControl: false
             });
+
+            attachSmoothWheelZoom(state.map, mapContainer);
 
             state.map.addListener('idle', () => {
                 debouncedUpdateURL();

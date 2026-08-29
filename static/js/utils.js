@@ -119,6 +119,227 @@ export function getSteeringTicks(min, max) {
     return { tickvals, ticktext };
 }
 
+/**
+ * Helper to get max zoom from Google Map instance and active map type.
+ */
+function getMapMaxZoom(map, fallback = 21) {
+    if (!map) return fallback;
+    const mapMax = (typeof map.get === 'function') ? map.get('maxZoom') : null;
+    if (typeof mapMax === 'number' && isFinite(mapMax)) return mapMax;
+    const typeId = (typeof map.getMapTypeId === 'function') ? map.getMapTypeId() : null;
+    if (typeId && map.mapTypes && typeof map.mapTypes.get === 'function') {
+        const mt = map.mapTypes.get(typeId);
+        if (mt && typeof mt.maxZoom === 'number' && isFinite(mt.maxZoom)) return mt.maxZoom;
+    }
+    return fallback;
+}
+
+/**
+ * Helper to get min zoom from Google Map instance and active map type.
+ */
+function getMapMinZoom(map, fallback = 3) {
+    if (!map) return fallback;
+    const mapMin = (typeof map.get === 'function') ? map.get('minZoom') : null;
+    if (typeof mapMin === 'number' && isFinite(mapMin)) return mapMin;
+    const typeId = (typeof map.getMapTypeId === 'function') ? map.getMapTypeId() : null;
+    if (typeId && map.mapTypes && typeof map.mapTypes.get === 'function') {
+        const mt = map.mapTypes.get(typeId);
+        if (mt && typeof mt.minZoom === 'number' && isFinite(mt.minZoom)) return mt.minZoom;
+    }
+    return fallback;
+}
+
+/**
+ * Attaches smooth animated mouse wheel zooming to a Google Map container.
+ * Google Maps default wheel zoom jumps abruptly by 1.0 zoom per notch.
+ * This handler fractional-zooms around the cursor position with requestAnimationFrame easing
+ * and 2x smoother sensitivity (~0.5 zoom per notch).
+ *
+ * @param {google.maps.Map} map - Google Maps instance
+ * @param {HTMLElement} container - DOM container holding the map
+ * @param {Object} [options] - Configuration options (minZoom, maxZoom, sensitivity)
+ * @returns {Function} Cleanup function to remove event listeners and cancel animations
+ */
+export function attachSmoothWheelZoom(map, container, options = {}) {
+    if (!map || !container || typeof container.addEventListener !== 'function') return () => {};
+
+    let effectiveMaxZoom = options.maxZoom !== undefined ? options.maxZoom : getMapMaxZoom(map, 21);
+    let effectiveMinZoom = options.minZoom !== undefined ? options.minZoom : getMapMinZoom(map, 3);
+    const sensitivity = options.sensitivity !== undefined ? options.sensitivity : 0.5;
+
+    let targetZoom = null;
+    let animZoom = null;
+    let anchorWorldPoint = null;
+    let anchorScreenX = 0;
+    let anchorScreenY = 0;
+    let rafId = null;
+
+    const cancelAnimation = () => {
+        if (rafId !== null) {
+            if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rafId);
+            rafId = null;
+        }
+        targetZoom = null;
+        animZoom = null;
+        anchorWorldPoint = null;
+    };
+
+    const animate = () => {
+        if (targetZoom === null || animZoom === null) {
+            rafId = null;
+            return;
+        }
+
+        const isAsyncRaf = typeof requestAnimationFrame === 'function';
+        const diff = targetZoom - animZoom;
+        if (!isAsyncRaf || Math.abs(diff) < 0.005) {
+            animZoom = targetZoom;
+        } else {
+            animZoom += diff * 0.25;
+        }
+
+        // Apply zoom
+        if (typeof map.setZoom === 'function') {
+            map.setZoom(animZoom);
+        }
+
+        const projection = (typeof map.getProjection === 'function') ? map.getProjection() : null;
+        const rect = (typeof container.getBoundingClientRect === 'function') ? container.getBoundingClientRect() : null;
+
+        if (projection && rect && rect.width > 0 && rect.height > 0 && anchorWorldPoint) {
+            const width = rect.width;
+            const height = rect.height;
+            const offsetX = anchorScreenX - width / 2;
+            const offsetY = anchorScreenY - height / 2;
+
+            const scale = Math.pow(2, -animZoom);
+            const newCenterX = anchorWorldPoint.x - offsetX * scale;
+            const newCenterY = anchorWorldPoint.y - offsetY * scale;
+
+            const PointClass = (typeof google !== 'undefined' && google.maps && google.maps.Point)
+                ? google.maps.Point
+                : function (x, y) { this.x = x; this.y = y; };
+
+            const newCenterLatLng = projection.fromPointToLatLng(new PointClass(newCenterX, newCenterY));
+            if (newCenterLatLng && typeof map.setCenter === 'function') {
+                map.setCenter(newCenterLatLng);
+            }
+        }
+
+        if (Math.abs(targetZoom - animZoom) < 0.001) {
+            const finalActualZoom = (typeof map.getZoom === 'function') ? map.getZoom() : null;
+            if (typeof finalActualZoom === 'number' && isFinite(finalActualZoom)) {
+                if (targetZoom > finalActualZoom + 0.05) {
+                    effectiveMaxZoom = finalActualZoom;
+                } else if (targetZoom < finalActualZoom - 0.05) {
+                    effectiveMinZoom = finalActualZoom;
+                }
+            }
+            cancelAnimation();
+        } else if (isAsyncRaf) {
+            rafId = requestAnimationFrame(animate);
+        } else {
+            cancelAnimation();
+        }
+    };
+
+    const handleWheel = (event) => {
+        if (!event) return;
+        if (typeof event.preventDefault === 'function') event.preventDefault();
+        if (typeof event.stopPropagation === 'function') event.stopPropagation();
+
+        const currentMapZoom = (typeof map.getZoom === 'function') ? map.getZoom() : null;
+        if (currentMapZoom === null || currentMapZoom === undefined || isNaN(currentMapZoom)) return;
+
+        let dy = (event.deltaY !== undefined) ? event.deltaY : 0;
+        if (event.deltaMode === 1) {
+            dy *= 33.33; // DOM_DELTA_LINE to pixels
+        } else if (event.deltaMode === 2) {
+            dy *= 800;   // DOM_DELTA_PAGE to pixels
+        }
+
+        const deltaZoom = -dy * (sensitivity / 120);
+
+        // If at max zoom and scrolling in, or at min zoom and scrolling out, do nothing
+        if (deltaZoom > 0 && currentMapZoom >= effectiveMaxZoom - 1e-4) {
+            return;
+        }
+        if (deltaZoom < 0 && currentMapZoom <= effectiveMinZoom + 1e-4) {
+            return;
+        }
+
+        const currentBaseZoom = (targetZoom !== null) ? targetZoom : currentMapZoom;
+        const nextTargetZoom = Math.min(effectiveMaxZoom, Math.max(effectiveMinZoom, currentBaseZoom + deltaZoom));
+
+        if (Math.abs(nextTargetZoom - currentBaseZoom) < 1e-4) {
+            return;
+        }
+
+        const rect = (typeof container.getBoundingClientRect === 'function') ? container.getBoundingClientRect() : null;
+        const width = rect && rect.width ? rect.width : (container.clientWidth || 800);
+        const height = rect && rect.height ? rect.height : (container.clientHeight || 600);
+
+        anchorScreenX = (event.clientX !== undefined && rect) ? event.clientX - rect.left : width / 2;
+        anchorScreenY = (event.clientY !== undefined && rect) ? event.clientY - rect.top : height / 2;
+
+        const projection = (typeof map.getProjection === 'function') ? map.getProjection() : null;
+        const currentCenter = (typeof map.getCenter === 'function') ? map.getCenter() : null;
+
+        if (projection && currentCenter) {
+            const centerPt = projection.fromLatLngToPoint(currentCenter);
+            if (centerPt && typeof centerPt.x === 'number' && typeof centerPt.y === 'number') {
+                const activeZoom = (animZoom !== null) ? animZoom : currentMapZoom;
+                const activeScale = Math.pow(2, -activeZoom);
+                const offsetX = anchorScreenX - width / 2;
+                const offsetY = anchorScreenY - height / 2;
+                anchorWorldPoint = {
+                    x: centerPt.x + offsetX * activeScale,
+                    y: centerPt.y + offsetY * activeScale
+                };
+            }
+        }
+
+        targetZoom = nextTargetZoom;
+        if (animZoom === null) {
+            animZoom = currentMapZoom;
+        }
+
+        if (rafId === null) {
+            if (typeof requestAnimationFrame === 'function') {
+                rafId = requestAnimationFrame(animate);
+            } else {
+                animate();
+            }
+        }
+    };
+
+    const handlePointerDown = () => {
+        cancelAnimation();
+    };
+
+    let mapTypeListener = null;
+    if (typeof map.addListener === 'function') {
+        mapTypeListener = map.addListener('maptypeid_changed', () => {
+            effectiveMaxZoom = options.maxZoom !== undefined ? options.maxZoom : getMapMaxZoom(map, 21);
+            effectiveMinZoom = options.minZoom !== undefined ? options.minZoom : getMapMinZoom(map, 3);
+        });
+    }
+
+    container.addEventListener('wheel', handleWheel, { passive: false, capture: true });
+    container.addEventListener('mousedown', handlePointerDown, { passive: true });
+    container.addEventListener('touchstart', handlePointerDown, { passive: true });
+
+    return () => {
+        cancelAnimation();
+        container.removeEventListener('wheel', handleWheel, { capture: true });
+        container.removeEventListener('mousedown', handlePointerDown);
+        container.removeEventListener('touchstart', handlePointerDown);
+        if (mapTypeListener && typeof mapTypeListener.remove === 'function') {
+            mapTypeListener.remove();
+        }
+    };
+}
+
 // Attach to window if running in a browser environment to make functions available globally
 if (typeof window !== 'undefined') {
     window.getMedian = getMedian;
@@ -126,4 +347,6 @@ if (typeof window !== 'undefined') {
     window.parseLapTime = parseLapTime;
     window.formatLapTime = formatLapTime;
     window.getSteeringTicks = getSteeringTicks;
+    window.attachSmoothWheelZoom = attachSmoothWheelZoom;
 }
+
