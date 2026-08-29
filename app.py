@@ -16,7 +16,7 @@
 from typing import Any
 from urllib.parse import urlparse, urljoin
 from flask import (
-    Flask, render_template, render_template_string, abort, url_for, redirect,
+    Flask, render_template, abort, url_for, redirect,
     request, make_response, Response, g, send_from_directory
 )
 from werkzeug import wrappers as werkzeug_wrappers
@@ -52,31 +52,6 @@ app.register_blueprint(mcp_handlers.mcp_blueprint)
 COOKIE_MAX_AGE = 6 * 30 * 24 * 60 * 60
 app.register_blueprint(location_handlers.location_blueprint)
 app.register_blueprint(upload_handlers.upload_blueprint)
-
-REPORTS_DIR = os.path.join(config['data_dir'], 'reports')
-
-
-@app.route('/reports/<path:filename>')
-def serve_report(filename: str) -> Response:
-    """Serve a generated HTML telemetry report from the reports directory.
-
-    Reports are rendered through Jinja2 so that template variables (e.g.
-    {{ google_maps_api_key }}) are substituted at serve time from config,
-    keeping credentials out of stored files.
-    """
-    os.makedirs(REPORTS_DIR, exist_ok=True)
-    safe_path = os.path.realpath(os.path.join(REPORTS_DIR, filename))
-    if not safe_path.startswith(os.path.realpath(REPORTS_DIR) + os.sep):
-        abort(403)
-    if not os.path.isfile(safe_path):
-        abort(404)
-    with open(safe_path, 'r', encoding='utf-8') as f:
-        template_str = f.read()
-    rendered = render_template_string(
-        template_str,
-        google_maps_api_key=config.get('google_maps_api_key', ''),
-    )
-    return Response(rendered, mimetype='text/html')
 
 
 @app.route('/favicon.ico')
