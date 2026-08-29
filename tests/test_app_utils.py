@@ -539,6 +539,35 @@ def test_kartsim_class_view_hero_no_sessions() -> None:
             assert 'Driver Selection Required' in html
 
 
+def test_kartsim_class_view_condition_pills_link_to_telemetry() -> None:
+    client = app.app.test_client()
+    mock_df = pd.DataFrame([{
+        'League': 'kartsim',
+        'Class': 'iame_waterswift_restricted_cadet_uk',
+        'Date': '2026-08-29',
+        'TrackName': 'Clay Pigeon',
+        'Name': 'Test Driver',
+        'SessionID': '14_59_practice'
+    }])
+    mock_session = MagicMock()
+    mock_session.track_conditions = 'Dry'
+
+    mock_meetings = [('iame_waterswift_restricted_cadet_uk', '2026-08-29', 'Clay Pigeon')]
+    with patch('plot_handlers.get_hero_names', return_value=['Test Driver']), \
+         patch('app.db.load', return_value=mock_df), \
+         patch('app.db.list_meetings', return_value=mock_meetings), \
+         patch('app.db.find_sessions', return_value=[mock_session]):
+        resp = client.get('/league/kartsim/iame_waterswift_restricted_cadet_uk')
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        expected_url = (
+            '/telemetry/kartsim/iame_waterswift_restricted_cadet_uk'
+            '/2026-08-29/Clay%20Pigeon?track_conditions=Dry'
+        )
+        assert expected_url in html
+        assert '/track_sessions/kartsim' not in html
+
+
 def test_kartsim_league_view_no_hero() -> None:
     client = app.app.test_client()
     with patch('plot_handlers.get_hero_names', return_value=[]):

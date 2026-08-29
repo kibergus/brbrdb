@@ -1,6 +1,6 @@
 {% extends "layout.html" %}
 
-{% block title %}{{ date }} - {{ track }}{% if is_report_mode and report_title %} - {{ report_title }}{% endif %} - BrBrDb{% endblock %}
+{% block title %}{{ date }} - {{ track }}{% if track_conditions %} ({{ track_conditions }}){% endif %}{% if is_report_mode and report_title %} - {{ report_title }}{% endif %} - BrBrDb{% endblock %}
 
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/kartsim_meeting.css') }}">
@@ -15,7 +15,7 @@
 <a href="{{ url_for('class_view', league=league, class_name=class_name) }}">
     {{get_class_info(class_name).name}}
 </a> /
-{{ date }} - {{ track }}{% if is_report_mode and report_title %} / <span style="color: var(--accent);">Report: {{ report_title }}</span>{% endif %}
+{{ date }} - {{ track }}{% if track_conditions %} ({{ track_conditions }}){% endif %}{% if is_report_mode and report_title %} / <span style="color: var(--accent);">Report: {{ report_title }}</span>{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -75,7 +75,7 @@
                         <option value="all" {% if not selected_session_id or selected_session_id == 'all' %}selected{% endif %}>All Sessions</option>
                         {% for s in telemetry_sessions %}
                         <option value="{{ s.session_id }}" {% if selected_session_id == s.session_id %}selected{% endif %}>
-                            {{ s.session_name }}
+                            {% if s.session_start_datetime and ' ' in s.session_start_datetime and s.session_start_datetime.split(' ')[1] not in s.session_name %}{{ s.session_start_datetime.split(' ')[1] }} {% endif %}{{ s.session_name }}
                         </option>
                         {% endfor %}
                     </select>
@@ -414,7 +414,7 @@
 
 <script>
     window.KART_CONFIG = {
-        getTrackPointsUrl: "{{ url_for('location.get_track_points', league=league, class_name=class_name, date=date, track=track) | safe }}",
+        getTrackPointsUrl: "{{ url_for('location.get_track_points', league=league, class_name=class_name, date=date, track=track, **({'track_conditions': track_conditions} if track_conditions else {})) | safe }}",
         getTrackDataUrl: "{{ url_for('location.get_track_data', track=track) | safe }}",
         trackName: "{{ track }}",
         sessionId: "{{ selected_session_id or '' }}",

@@ -25,6 +25,7 @@ import pandas as pd
 from flask import Flask
 
 import location_handlers
+import app as flask_app
 
 
 class MockSession:
@@ -805,3 +806,116 @@ def test_telemetry_report_content_view() -> None:
         assert "telemetry_report.css" in html
         assert "<div class='test-fragment'>Fragment Body</div>" in html
         assert "window.parent.postMessage" in html
+
+
+def test_telemetry_view_session_selector_time(tmp_path: Path) -> None:
+    client = flask_app.app.test_client()
+
+    meeting_dir = tmp_path / "meeting"
+    meeting_dir.mkdir()
+    telemetry_dir = meeting_dir / "telemetry"
+    telemetry_dir.mkdir()
+    sample_csv = (
+        "Format,RaceBox CSV\nData Source,KartSim\nConfiguration,Alice\n\n"
+        "Record,Time,Latitude,Longitude,Lap\n1,2026-08-29T14:59:00Z,50.0,-1.0,1\n"
+    )
+    (telemetry_dir / "14_59_practice.csv").write_text(sample_csv)
+    (telemetry_dir / "18_09_practice.csv").write_text(sample_csv)
+
+    s1 = MagicMock()
+    s1.session_id = '14_59_practice'
+    s1.session_name = 'Practice'
+    s1.session_start_datetime = '2026-08-29 14:59'
+    s1.meeting_dir = str(meeting_dir)
+
+    s2 = MagicMock()
+    s2.session_id = '18_09_practice'
+    s2.session_name = 'Practice'
+    s2.session_start_datetime = '2026-08-29 18:09'
+    s2.meeting_dir = str(meeting_dir)
+
+    with patch('location_handlers.db.find_sessions', return_value=[s1, s2]), \
+         patch('location_handlers.db.load', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.load_penalties', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.list_meetings', return_value=[]), \
+         patch('location_handlers.db.has_telemetry', return_value=True):
+        resp = client.get('/telemetry/kartsim/cadet/2026-08-29/Clay%20Pigeon')
+        assert resp.status_code == 200
+        html = resp.data.decode('utf-8')
+        assert '14:59 Practice' in html
+        assert '18:09 Practice' in html
+
+
+def test_telemetry_view_filter_track_conditions(tmp_path: Path) -> None:
+    client = flask_app.app.test_client()
+
+    meeting_dir = tmp_path / "meeting"
+    meeting_dir.mkdir()
+    telemetry_dir = meeting_dir / "telemetry"
+    telemetry_dir.mkdir()
+    sample_csv = (
+        "Format,RaceBox CSV\nData Source,KartSim\nConfiguration,Alice\n\n"
+        "Record,Time,Latitude,Longitude,Lap\n1,2026-08-29T14:59:00Z,50.0,-1.0,1\n"
+    )
+    (telemetry_dir / "14_59_practice.csv").write_text(sample_csv)
+
+    s1 = MagicMock()
+    s1.session_id = '14_59_practice'
+    s1.session_name = 'Practice'
+    s1.session_start_datetime = '2026-08-29 14:59'
+    s1.track_conditions = 'Dry'
+    s1.meeting_dir = str(meeting_dir)
+
+    def find_sessions_side_effect(**kwargs: Any) -> list[MagicMock]:
+        if kwargs.get('track_conditions') == 'Dry':
+            return [s1]
+        return []
+
+    with patch('location_handlers.db.find_sessions', side_effect=find_sessions_side_effect), \
+         patch('location_handlers.db.load', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.load_penalties', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.list_meetings', return_value=[]), \
+         patch('location_handlers.db.has_telemetry', return_value=True):
+        resp = client.get('/telemetry/kartsim/cadet/2026-08-29/Clay%20Pigeon?track_conditions=Dry')
+        assert resp.status_code == 200
+        html = resp.data.decode('utf-8')
+        assert '14:59 Practice' in html
+        assert 'track_conditions=Dry' in html
+
+
+def test_get_track_points_filter_track_conditions(tmp_path: Path) -> None:
+    client = flask_app.app.test_client()
+
+    meeting_dir = tmp_path / "meeting"
+    meeting_dir.mkdir()
+    telemetry_dir = meeting_dir / "telemetry"
+    telemetry_dir.mkdir()
+    sample_csv = (
+        "Format,RaceBox CSV\nData Source,KartSim\nConfiguration,Alice\n\n"
+        "Record,Time,Latitude,Longitude,Lap\n1,2026-08-29T14:59:00Z,50.0,-1.0,1\n"
+    )
+    (telemetry_dir / "14_59_practice.csv").write_text(sample_csv)
+    (telemetry_dir / "18_09_practice.csv").write_text(sample_csv)
+
+    s1 = MagicMock()
+    s1.session_id = '14_59_practice'
+    s1.meeting_dir = str(meeting_dir)
+
+    def find_sessions_side_effect(**kwargs: Any) -> list[MagicMock]:
+        if kwargs.get('track_conditions') == 'Dry':
+            return [s1]
+        return []
+
+    with patch('location_handlers.db.find_sessions', side_effect=find_sessions_side_effect), \
+         patch('location_handlers.db.load', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.get_track', return_value={'sector_end': [], 'turns': []}), \
+         patch('location_handlers.plot_handlers.get_hero_names', return_value=[]):
+        url = (
+            '/api/telemetry?league=kartsim&class_name=cadet'
+            '&date=2026-08-29&track=Clay%20Pigeon&track_conditions=Dry'
+        )
+        resp = client.get(url)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data) == 1
+        assert data[0]['session_id'] == '14_59_practice'

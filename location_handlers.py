@@ -201,6 +201,7 @@ def _render_telemetry_meeting(
     date: str,
     track: str,
     session_id: str | None = None,
+    track_conditions: str | None = None,
     is_report_mode: bool = False,
     report_title: str | None = None,
     report_html: str | None = None,
@@ -211,14 +212,21 @@ def _render_telemetry_meeting(
     if not acl.get('see_telemetry'):
         abort(403, description='Access to telemetry data is restricted')
 
-    sessions = db.find_sessions(leagues=league, classes=class_name, date=date, track=track)
+    sessions = db.find_sessions(
+        leagues=league, classes=class_name, date=date, track=track,
+        track_conditions=track_conditions
+    )
     if not sessions:
         abort(404)
 
     hero_names = plot_handlers.get_hero_names()
-    df = db.load(leagues=league, classes=class_name, date=date, track=track, driver_names=tuple(hero_names))
+    df = db.load(
+        leagues=league, classes=class_name, date=date, track=track,
+        driver_names=tuple(hero_names), track_conditions=track_conditions
+    )
     df_pen = db.load_penalties(
-        leagues=league, classes=class_name, date=date, track=track, driver_names=tuple(hero_names)
+        leagues=league, classes=class_name, date=date, track=track,
+        driver_names=tuple(hero_names), track_conditions=track_conditions
     )
     plot_titles = plot_handlers.get_meeting_plot_titles(df, df_pen)
 
@@ -243,7 +251,8 @@ def _render_telemetry_meeting(
         league=league,
         class_name=class_name,
         date=prev_meeting[1],
-        track=prev_meeting[2]
+        track=prev_meeting[2],
+        track_conditions=track_conditions
     ) if prev_meeting else ''
 
     next_meeting_url = url_for(
@@ -251,7 +260,8 @@ def _render_telemetry_meeting(
         league=league,
         class_name=class_name,
         date=next_meeting[1],
-        track=next_meeting[2]
+        track=next_meeting[2],
+        track_conditions=track_conditions
     ) if next_meeting else ''
 
     prev_meeting_title = f'{prev_meeting[1]} - {prev_meeting[2]}' if prev_meeting else ''
@@ -281,6 +291,7 @@ def _render_telemetry_meeting(
         class_name=class_name,
         date=date,
         track=track,
+        track_conditions=track_conditions,
         sessions=sessions,
         telemetry_sessions=telemetry_sessions,
         selected_session_id=session_id,
@@ -304,6 +315,7 @@ def _render_telemetry_meeting(
 def telemetry_view(league: str, class_name: str, date: str, track: str) -> str:
     session_id = request.args.get('session_id')
     report_param = request.args.get('report')
+    track_conditions = request.args.get('track_conditions') or request.args.get('conditions')
     is_report_mode = False
     report_title = None
     report_html = None
@@ -326,6 +338,7 @@ def telemetry_view(league: str, class_name: str, date: str, track: str) -> str:
         date=date,
         track=track,
         session_id=session_id,
+        track_conditions=track_conditions,
         is_report_mode=is_report_mode,
         report_title=report_title,
         report_html=report_html,
@@ -597,11 +610,15 @@ def get_track_points() -> Response | tuple[Response, int]:
     date = request.args.get('date')
     track = request.args.get('track')
     filter_session_id = request.args.get('session_id')
+    track_conditions = request.args.get('track_conditions') or request.args.get('conditions')
 
     if not league or not class_name or not date or not track:
         return jsonify({'error': 'Missing parameters'}), 400
 
-    sessions = db.find_sessions(leagues=league, classes=class_name, date=date, track=track)
+    sessions = db.find_sessions(
+        leagues=league, classes=class_name, date=date, track=track,
+        track_conditions=track_conditions
+    )
     if not sessions:
         return jsonify([])
 
@@ -618,12 +635,17 @@ def get_track_points() -> Response | tuple[Response, int]:
     hero_names = plot_handlers.get_hero_names()
     sanitized_heroes = [sanitize.sanitize_filename(h) for h in hero_names]
 
-    df_official = db.load(leagues=league, classes=class_name, date=date, track=track)
+    df_official = db.load(
+        leagues=league, classes=class_name, date=date, track=track,
+        track_conditions=track_conditions
+    )
     track_data = db.get_track(track) or {}
 
     sector_ends = track_data.get('sector_end', [])
     turns = track_data.get('turns', [])
     lap_length = track_data.get('lap_length')
+
+    valid_sids = {s.session_id for s in sessions}
 
     for csv_file in csv_files:
         if sanitized_heroes:
@@ -632,6 +654,10 @@ def get_track_points() -> Response | tuple[Response, int]:
                 continue
 
         matching_sid = _match_session(csv_file, sessions)
+        if track_conditions:
+            if not matching_sid or matching_sid not in valid_sids:
+                continue
+
         if filter_session_id and filter_session_id != 'all':
             if matching_sid != filter_session_id and csv_file != filter_session_id:
                 continue

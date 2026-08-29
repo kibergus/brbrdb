@@ -301,8 +301,13 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="d-flex flex-wrap gap-2" style="position: relative; z-index: 2;">
             {% set conditions_list = cond_str.split(',') %}
             {% for cond in conditions_list %}
+            {% if league == 'kartsim' %}
+            <a href="{{ url_for('location.telemetry_view', league=league, class_name=class_name, date=date, track=track, track_conditions=cond) }}"
+                class="badge badge-blue" style="text-decoration: none;">{{ cond }}</a>
+            {% else %}
             <a href="{{ url_for('track_sessions_view', league=league, class_name=class_name, track=track, track_conditions=cond, year=selected_year) }}"
                 class="badge badge-blue" style="text-decoration: none;">{{ cond }}</a>
+            {% endif %}
             {% endfor %}
         </div>
     </div>
