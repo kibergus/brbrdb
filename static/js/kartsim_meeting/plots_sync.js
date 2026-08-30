@@ -2129,15 +2129,23 @@ export function renderSingleChannelPlot(activeTab) {
 
                     const clickedTrace = plotData[clickedTraceIndex];
                     const clickedName = clickedTrace.name;
+                    const baseName = clickedName ? clickedName.replace(/ \(B\)$/, '') : clickedName;
 
                     const currentVisible = clickedTrace.visible;
                     const nextVisible = (currentVisible === 'legendonly') ? true : 'legendonly';
+
+                    state.plotTraceVisibility = state.plotTraceVisibility || {};
+                    state.plotTraceVisibility[activeTab] = state.plotTraceVisibility[activeTab] || {};
+                    if (baseName) {
+                        state.plotTraceVisibility[activeTab][baseName] = nextVisible;
+                    }
 
                     const updateIndices = [];
                     const updateVisible = [];
 
                     plotData.forEach((trace, idx) => {
-                        if (trace.name === clickedName) {
+                        const traceBase = trace.name ? trace.name.replace(/ \(B\)$/, '') : trace.name;
+                        if (traceBase === baseName) {
                             updateIndices.push(idx);
                             updateVisible.push(nextVisible);
                         }
@@ -2146,6 +2154,7 @@ export function renderSingleChannelPlot(activeTab) {
                     if (updateIndices.length > 0) {
                         Plotly.restyle(gd, { visible: updateVisible }, updateIndices);
                     }
+                    updateChannelYLim(activeTab, false);
 
                     return false; // Prevent default toggle of single trace
                 });
@@ -2167,7 +2176,8 @@ export function addTrace(data, lap, field, color, width, dash = 'solid', customN
         }
     });
     if (x.length === 0) return;
-    const plotId = 'plot-area-' + state.currentActivePlotTab;
+    const currentTab = state.currentActivePlotTab;
+    const plotId = 'plot-area-' + currentTab;
     state.bottomPlotIndices = state.bottomPlotIndices || {};
     state.bottomPlotIndices[plotId] = state.bottomPlotIndices[plotId] || {};
 
@@ -2177,11 +2187,20 @@ export function addTrace(data, lap, field, color, width, dash = 'solid', customN
         state.bottomPlotIndices[plotId][lapId].push(data.length);
     }
 
+    let visible = true;
+    if (customName && currentTab && state.plotTraceVisibility && state.plotTraceVisibility[currentTab]) {
+        const baseName = customName.replace(/ \(B\)$/, '');
+        if (state.plotTraceVisibility[currentTab][baseName] !== undefined) {
+            visible = state.plotTraceVisibility[currentTab][baseName];
+        }
+    }
+
     data.push({
         x: x, y: y, mode: 'lines',
         name: customName || `Lap ${lap.lap_num} ${field}`,
         line: { color: color, width: width, dash: dash },
-        hoverinfo: 'none', yaxis: yaxis === 'y' ? 'y' : yaxis, showlegend: showlegend
+        hoverinfo: 'none', yaxis: yaxis === 'y' ? 'y' : yaxis, showlegend: showlegend,
+        visible: visible
     });
 }
 

@@ -277,6 +277,51 @@ describe('calculateSegmentColor', () => {
         expect(calculateSegmentColor({ dist: 50, time: 2, speed: 125 }, 'lap-fast', 'delta_t')).toBe('rgb(19, 255, 0)');
     });
 
+    it('calculates colors for time mode based on lap time when sortMode is time', () => {
+        const lapFast = { lapId: 'lap-1', lap_time: '58.000', points: [{ dist: 0 }] };
+        const lapMid = { lapId: 'lap-2', lap_time: '59.000', points: [{ dist: 0 }] };
+        const lapSlow = { lapId: 'lap-3', lap_time: '1:00.000', points: [{ dist: 0 }] };
+
+        state.sortMode = 'time';
+        state.groupASelection = new Set(['lap-1', 'lap-2', 'lap-3']);
+        state.groupBSelection = new Set();
+        state.lapDataLookup = {
+            'lap-1': lapFast,
+            'lap-2': lapMid,
+            'lap-3': lapSlow
+        };
+
+        // Fastest lap (58.0s) -> green
+        expect(calculateSegmentColor({}, 'lap-1', 'time')).toBe('rgb(0, 255, 0)');
+        // Mid lap (59.0s) -> yellow
+        expect(calculateSegmentColor({}, 'lap-2', 'time')).toBe('rgb(255, 255, 0)');
+        // Slowest lap (60.0s) -> red
+        expect(calculateSegmentColor({}, 'lap-3', 'time')).toBe('rgb(255, 0, 0)');
+    });
+
+    it('calculates colors for time mode based on turn time when sortMode is turn', () => {
+        const lapFastTurn = { lapId: 'lap-1', turn_times: [5.0, 3.0], points: [{ dist: 0 }] };
+        const lapMidTurn = { lapId: 'lap-2', turn_times: [5.0, 3.5], points: [{ dist: 0 }] };
+        const lapSlowTurn = { lapId: 'lap-3', turn_times: [5.0, 4.0], points: [{ dist: 0 }] };
+
+        state.sortMode = 'turn';
+        state.currentTurnIdx = 1;
+        state.groupASelection = new Set(['lap-1', 'lap-2', 'lap-3']);
+        state.groupBSelection = new Set();
+        state.lapDataLookup = {
+            'lap-1': lapFastTurn,
+            'lap-2': lapMidTurn,
+            'lap-3': lapSlowTurn
+        };
+
+        // Fastest in turn 2 (3.0s) -> green
+        expect(calculateSegmentColor({}, 'lap-1', 'time')).toBe('rgb(0, 255, 0)');
+        // Mid in turn 2 (3.5s) -> yellow
+        expect(calculateSegmentColor({}, 'lap-2', 'time')).toBe('rgb(255, 255, 0)');
+        // Slowest in turn 2 (4.0s) -> red
+        expect(calculateSegmentColor({}, 'lap-3', 'time')).toBe('rgb(255, 0, 0)');
+    });
+
     it('uses first lap in group A as reference even if group B has a faster lap', () => {
         const groupALap = {
             lapId: 'lap-group-a',
@@ -340,6 +385,12 @@ describe('setTrajectoryColorMode', () => {
         // Fastest lap has zIndex 1, other lap has higher zIndex 5
         expect(poly1.opts.zIndex).toBe(1);
         expect(poly2.opts.zIndex).toBe(5);
+
+        setTrajectoryColorMode('time');
+        expect(state.trajectoryColorMode).toBe('time');
+        expect(poly1.opts.strokeOpacity).toBe(0.45);
+        expect(poly1.opts.strokeWeight).toBe(2);
+        expect(poly1.opts.zIndex).toBe(1);
     });
 });
 

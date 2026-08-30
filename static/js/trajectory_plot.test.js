@@ -290,6 +290,9 @@ describe('TrajectoryPlot.js', () => {
         plot.setColorMode('delta_t');
         expect(plot.currentColorMode).toBe('delta_t');
         expect(plot.polylines.length).toBe(8);
+
+        plot.setColorMode('time');
+        expect(plot.currentColorMode).toBe('time');
     });
 
     it('highlights target lap on hover in legend and restores on mouseleave', async () => {

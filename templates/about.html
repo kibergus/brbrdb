@@ -9,15 +9,17 @@ About
 
 {% block head %}
 <style>
-.info-card .tab-content {
-    display: none;
-}
-.info-card .tab-content.active {
-    display: block;
-}
-.info-card .tab-content h2:first-of-type {
-    margin-top: 0;
-}
+    .info-card .tab-content {
+        display: none;
+    }
+
+    .info-card .tab-content.active {
+        display: block;
+    }
+
+    .info-card .tab-content h2:first-of-type {
+        margin-top: 0;
+    }
 </style>
 {% endblock %}
 
@@ -32,11 +34,22 @@ About
 </a>
 {% endmacro %}
 
+{% macro ig_link(handle, name) %}
+<a href="https://www.instagram.com/{{ handle }}/" class="ig-link-badge" target="_blank" rel="noopener noreferrer">
+    <svg viewBox="0 0 24 24">
+        <path
+            d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z" />
+    </svg>
+    <span>{{ name }}</span>
+</a>
+{% endmacro %}
+
 <div class="card info-card">
     {% set about_options = [
-        {'id': 'about', 'label': 'About', 'url': '#about'},
-        {'id': 'gallery', 'label': 'Gallery', 'url': '#gallery'},
-        {'id': 'telemetry', 'label': 'Telemetry', 'url': '#telemetry'}
+    {'id': 'about', 'label': 'About', 'url': '#about'},
+    {'id': 'gallery', 'label': 'Gallery', 'url': '#gallery'},
+    {'id': 'telemetry', 'label': 'Telemetry', 'url': '#telemetry'},
+    {'id': 'telemetry_terms', 'label': 'Telemetry terms', 'url': '#telemetry_terms'}
     ] %}
     {{ selector(about_options, 'about') }}
 
@@ -44,39 +57,50 @@ About
         <h2>Why</h2>
 
         <p>
-            To better understand how my daughter progresses on her karting journey, how races unfold, and how she compares
-            to other athletes, I built a couple of dashboards. And then somehow it grew into this site. I share it in the hope
-            that it will help other athletes grow too, and in the belief that making knowledge accessible and structured is
+            To better understand how my daughter progresses on her karting journey, how races unfold, and how she
+            compares
+            to other athletes, I built a couple of dashboards. And then somehow it grew into this site. I share it in
+            the hope
+            that it will help other athletes grow too, and in the belief that making knowledge accessible and structured
+            is
             the right thing to do.
         </p>
         <p>
             For me, this project is a hobby and a way to help my daughter; I do not seek any commercial gain from it. I
-            don't mind if the whole system, or elements of it, make their way into other systems. And thus I share  
+            don't mind if the whole system, or elements of it, make their way into other systems. And thus I share
             <a href="https://github.com/kibergus/brbrdb">its source code</a> under Apache 2.0.
         </p>
         <p>
-            If you are the owner of one of the systems from which I ingest data, please don't see me as a competitor. In a
-            sense, it would be easier for me if I could meet my needs using existing shared infrastructure. I only built this site
+            If you are the owner of one of the systems from which I ingest data, please don't see me as a competitor. In
+            a
+            sense, it would be easier for me if I could meet my needs using existing shared infrastructure. I only built
+            this site
             because I think there are better ways to show the data.
         </p>
 
         <h2>Terms of use</h2>
         <p>
-            I provide this service free of charge. It is provided as-is, without warranties of any kind. In particular, I
-            can't guarantee that the information provided here is accurate, complete, or up to date, though I do my best to
-            keep it so. As this is a hobby project, it receives updates when I have free time, and I can't promise any timely
+            I provide this service free of charge. It is provided as-is, without warranties of any kind. In particular,
+            I
+            can't guarantee that the information provided here is accurate, complete, or up to date, though I do my best
+            to
+            keep it so. As this is a hobby project, it receives updates when I have free time, and I can't promise any
+            timely
             resolution of bugs or feature requests. Similarly, I can't promise any specific level of availability or
             performance of the service.
         </p>
 
         <h2>Privacy</h2>
         <p>
-            Analytics provided on this site are based on publicly available data. This project is in its early stages and
-            might not always get things right. If you think that something needs to be done differently, please let me know
+            Analytics provided on this site are based on publicly available data. This project is in its early stages
+            and
+            might not always get things right. If you think that something needs to be done differently, please let me
+            know
             by writing to <a href="mailto:brbrdb@kibergus.com">brbrdb@kibergus.com</a>.
         </p>
         <p>
-            This site does not use third-party cookies. This site does collect access logs so that I can understand which
+            This site does not use third-party cookies. This site does collect access logs so that I can understand
+            which
             features are used and guide further improvements.
         </p>
 
@@ -88,6 +112,10 @@ About
             {{ yt_link('@brbrkitten', 'BrBrKitten') }}
             {{ yt_link('@curiogus', 'Curiogus') }}
         </div>
+        <div class="yt-channels-container">
+            {{ ig_link('brbrkitten', 'BrBrKitten') }}
+        </div>
+
         <p>
             © Alexey Guseynov 2026.
         </p>
@@ -96,8 +124,10 @@ About
     <div id="tab-content-gallery" class="tab-content">
         <h2>Gallery</h2>
         <p>
-            Some of you may have access to the gallery section of the site. This gallery is intended for sharing race photos
-            with athletes or their guardians. It is then their decision whether to share these photos further (whether on
+            Some of you may have access to the gallery section of the site. This gallery is intended for sharing race
+            photos
+            with athletes or their guardians. It is then their decision whether to share these photos further (whether
+            on
             social media or by sending them to family members). Please don't share access links widely; instead, share
             the photos themselves. As the author of the photos, I grant permission to use them for any lawful purposes,
             commercial or non-commercial, as long as you have permission to do so from the people in the photos or their
@@ -117,50 +147,54 @@ About
     <div id="tab-content-telemetry" class="tab-content">
         {% include "about_telemetry.html" %}
     </div>
+
+    <div id="tab-content-telemetry_terms" class="tab-content">
+        {% include "about_telemetry_terms.html" %}
+    </div>
 </div>
 
 <script>
-(function() {
-    function switchTab(tabId, updateHash) {
-        if (updateHash === undefined) updateHash = true;
-        const item = document.getElementById('selector-' + tabId);
-        const content = document.getElementById('tab-content-' + tabId);
-        if (!item || !content) return;
+    (function () {
+        function switchTab(tabId, updateHash) {
+            if (updateHash === undefined) updateHash = true;
+            const item = document.getElementById('selector-' + tabId);
+            const content = document.getElementById('tab-content-' + tabId);
+            if (!item || !content) return;
 
-        document.querySelectorAll('.info-card .selector-item').forEach(function(i) {
-            i.classList.remove('active');
-        });
-        document.querySelectorAll('.info-card .tab-content').forEach(function(c) {
-            c.classList.remove('active');
-        });
+            document.querySelectorAll('.info-card .selector-item').forEach(function (i) {
+                i.classList.remove('active');
+            });
+            document.querySelectorAll('.info-card .tab-content').forEach(function (c) {
+                c.classList.remove('active');
+            });
 
-        item.classList.add('active');
-        content.classList.add('active');
+            item.classList.add('active');
+            content.classList.add('active');
 
-        if (updateHash) {
-            history.pushState(null, null, '#' + tabId);
+            if (updateHash) {
+                history.pushState(null, null, '#' + tabId);
+            }
         }
-    }
 
-    document.querySelectorAll('.info-card .selector-item').forEach(function(item) {
-        item.addEventListener('click', function(e) {
-            e.preventDefault();
-            const itemId = item.id.replace('selector-', '');
-            switchTab(itemId, true);
+        document.querySelectorAll('.info-card .selector-item').forEach(function (item) {
+            item.addEventListener('click', function (e) {
+                e.preventDefault();
+                const itemId = item.id.replace('selector-', '');
+                switchTab(itemId, true);
+            });
         });
-    });
 
-    function handleHash() {
-        const hash = window.location.hash.replace('#', '');
-        if (hash && document.getElementById('tab-content-' + hash)) {
-            switchTab(hash, false);
-        } else {
-            switchTab('about', false);
+        function handleHash() {
+            const hash = window.location.hash.replace('#', '');
+            if (hash && document.getElementById('tab-content-' + hash)) {
+                switchTab(hash, false);
+            } else {
+                switchTab('about', false);
+            }
         }
-    }
 
-    window.addEventListener('hashchange', handleHash);
-    handleHash();
-})();
+        window.addEventListener('hashchange', handleHash);
+        handleHash();
+    })();
 </script>
 {% endblock %}

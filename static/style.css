@@ -876,7 +876,7 @@ h3.junior {
     color: var(--text-primary);
 }
 
-/* YouTube Channel badges/container */
+/* YouTube & Instagram Channel badges/container */
 .yt-channels-container {
     display: flex;
     justify-content: center;
@@ -886,7 +886,8 @@ h3.junior {
     margin-bottom: 1.5rem;
 }
 
-.yt-link-badge {
+.yt-link-badge,
+.ig-link-badge {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
@@ -918,5 +919,25 @@ h3.junior {
 }
 
 .yt-link-badge:hover svg {
+    fill: #ffffff; /* Turns white on hover */
+}
+
+.ig-link-badge svg {
+    width: 20px;
+    height: 20px;
+    fill: #e1306c; /* Instagram icon color */
+    transition: fill 0.2s ease-in-out;
+    flex-shrink: 0;
+}
+
+.ig-link-badge:hover {
+    background: #e1306c;
+    color: #ffffff !important;
+    border-color: #e1306c;
+    box-shadow: 0 4px 12px rgba(225, 48, 108, 0.35);
+    transform: translateY(-1px);
+}
+
+.ig-link-badge:hover svg {
     fill: #ffffff; /* Turns white on hover */
 }

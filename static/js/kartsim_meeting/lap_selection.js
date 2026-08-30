@@ -711,12 +711,14 @@ export function selectTurnAndSwitchToMap(turnIdx) {
     state.deltaPlotVisible = true;
     updateExpandablePlotsVisibility();
 
+    setTrajectoryColorMode('delta_t');
+
     state.sortMode = 'turn';
     showTab('map');
-    setSort('turn');
+    setSort('turn', turnIdx);
 }
 
-export function setSort(mode) {
+export function setSort(mode, turnIdx = undefined) {
     state.sortMode = mode;
     document.querySelectorAll('.sort-btn').forEach(btn => btn.classList.remove('active'));
     const btn = document.getElementById('sort-' + mode);
@@ -726,16 +728,16 @@ export function setSort(mode) {
     if (turnSelector) {
         turnSelector.style.display = (mode === 'turn') ? 'block' : 'none';
 
-        const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-        const reportState = (typeof window !== 'undefined' && window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
-        const urlTurn = params && params.has('turn') ? params.get('turn') : (reportState.turn !== undefined ? String(reportState.turn) : null);
-        if (urlTurn !== null && !isNaN(parseInt(urlTurn))) {
-            state.currentTurnIdx = parseInt(urlTurn);
+        if (turnIdx !== undefined && turnIdx !== null && !isNaN(parseInt(turnIdx))) {
+            state.currentTurnIdx = parseInt(turnIdx);
             turnSelector.value = state.currentTurnIdx;
+        } else if (turnSelector.value !== "" && !isNaN(parseInt(turnSelector.value))) {
+            state.currentTurnIdx = parseInt(turnSelector.value);
         } else if (state.currentTurnIdx !== undefined) {
             turnSelector.value = state.currentTurnIdx;
-        } else if (turnSelector.value !== "") {
-            state.currentTurnIdx = parseInt(turnSelector.value || 0);
+        } else {
+            state.currentTurnIdx = 0;
+            turnSelector.value = 0;
         }
         
         if (mode === 'turn' && state.trackData && state.trackData.turns) {
@@ -950,9 +952,11 @@ export function highlightLap(lapId, active) {
                     }
                 } else {
                     // Reset to default style preserving zIndex hierarchy
+                    const defaultOpacity = (state.trajectoryColorMode === 'time') ? 0.45 : 1.0;
+                    const defaultWeight = (state.trajectoryColorMode === 'time') ? 2 : 4;
                     p.setOptions({
-                        strokeWeight: 4,
-                        strokeOpacity: 1.0,
+                        strokeWeight: defaultWeight,
+                        strokeOpacity: defaultOpacity,
                         zIndex: defaultZIndex
                     });
                 }
@@ -1078,7 +1082,7 @@ export function getSortedLaps() {
                 return parseLapTime(a.lap_time) - parseLapTime(b.lap_time);
             } else if (state.sortMode === 'turn') {
                 const turnSelector = document.getElementById('turn-selector');
-                const turnIdx = parseInt(turnSelector ? turnSelector.value : 0);
+                const turnIdx = parseInt(turnSelector && turnSelector.value !== "" ? turnSelector.value : state.currentTurnIdx || 0);
                 return (getTurnTime(a, turnIdx) || 999999) - (getTurnTime(b, turnIdx) || 999999);
             }
             if (a.lap_num !== b.lap_num) return a.lap_num - b.lap_num;
@@ -1350,7 +1354,7 @@ export function updateFastestSelectedLap() {
     state.fastestSelectedLap = fastest;
     state.fastestSelectedLapId = fastestId;
 
-    if (state.trajectoryColorMode === 'delta_t') {
+    if (state.trajectoryColorMode === 'delta_t' || state.trajectoryColorMode === 'time') {
         updateAllPolylineColors();
     }
 }
@@ -1674,7 +1678,7 @@ export function resetReportView(e) {
     if (reportState.turn !== undefined) {
         state.currentTurnIdx = parseInt(reportState.turn);
     }
-    setSort(targetSort);
+    setSort(targetSort, state.currentTurnIdx);
 
     // 9. Reset xlim
     if (reportState.xlim && Array.isArray(reportState.xlim) && reportState.xlim.length === 2) {

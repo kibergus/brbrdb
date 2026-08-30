@@ -617,21 +617,23 @@ export class TrajectoryPlot {
                     const segColor = this._calculateSegmentColor(p1, color, colorMode, maxSpeed, minSpeed, lap, fastestLap, p2);
                     const isRef = (colorMode === 'delta_t' && (lap === fastestLap || (fastestLap && lap.lap_num === fastestLap.lap_num && lap.session_id === fastestLap.session_id)));
                     const defaultZIndex = isRef ? 5 : 10;
+                    const defaultOpacity = (colorMode === 'time') ? 0.45 : 0.95;
+                    const defaultWeight = (colorMode === 'time') ? Math.max(1, Math.round(strokeWidth / 2)) : strokeWidth;
 
                     const segmentPolyline = new google.maps.Polyline({
                         path: [{ lat: p1.y, lng: p1.x }, { lat: p2.y, lng: p2.x }],
                         geodesic: true,
                         strokeColor: segColor,
-                        strokeOpacity: 0.95,
-                        strokeWeight: strokeWidth,
+                        strokeOpacity: defaultOpacity,
+                        strokeWeight: defaultWeight,
                         zIndex: defaultZIndex,
                         map: this.map
                     });
                     this.polylines.push(segmentPolyline);
                     this.lapPolylines[lapNum].push({
                         polyline: segmentPolyline,
-                        defaultWeight: strokeWidth,
-                        defaultOpacity: 0.95,
+                        defaultWeight: defaultWeight,
+                        defaultOpacity: defaultOpacity,
                         defaultZIndex
                     });
                 }
@@ -685,6 +687,7 @@ export class TrajectoryPlot {
 
         const modes = [
             { id: 'delta_t', label: 'Δ t', dotClass: 'mode-delta-t' },
+            { id: 'time', label: 'Time', dotClass: 'mode-time' },
             { id: 'pedals', label: 'Brake/Throttle', dotClass: 'mode-pedals' },
             { id: 'speed', label: 'Speed', dotClass: 'mode-speed' },
             { id: 'accel', label: 'Acceleration', dotClass: 'mode-accel' },
@@ -968,6 +971,34 @@ export class TrajectoryPlot {
             const normalizedRate = Math.max(-1, Math.min(1, Math.asinh(rate / s0) / asinhMax));
             const u = 0.5 + 0.5 * normalizedRate;
             return this._interpolateMultiStopColor(u, DELTA_T_STOPS);
+        }
+
+        if (currentMode === 'time') {
+            let validTimes = [];
+            if (this.lapsData) {
+                this.lapsData.forEach(l => {
+                    const t = parseLapTime(l.lap_time);
+                    if (t !== null && t !== undefined && !isNaN(t) && t > 0 && t < 999999) {
+                        validTimes.push(t);
+                    }
+                });
+            }
+            const lapTime = lap ? parseLapTime(lap.lap_time) : null;
+            if (lapTime === null || isNaN(lapTime) || lapTime <= 0 || lapTime >= 999999) {
+                return '#94a3b8';
+            }
+            const minTime = validTimes.length > 0 ? Math.min(...validTimes) : lapTime;
+            const maxTime = validTimes.length > 0 ? Math.max(...validTimes) : lapTime;
+            const TIME_STOPS = [
+                [0.0, [0, 255, 0]],
+                [0.5, [255, 255, 0]],
+                [1.0, [255, 0, 0]]
+            ];
+            let u = 0.0;
+            if (maxTime > minTime) {
+                u = Math.max(0, Math.min(1, (lapTime - minTime) / (maxTime - minTime)));
+            }
+            return this._interpolateMultiStopColor(u, TIME_STOPS);
         }
 
         const SPEED_STOPS = [

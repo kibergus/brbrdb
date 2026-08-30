@@ -70,6 +70,7 @@ export const state = {
     
     // Expandable plots state
     activePlotChannels: new Set(),
+    plotTraceVisibility: {},
     get currentActivePlotTab() {
         return this.activePlotChannels.size > 0 ? Array.from(this.activePlotChannels)[0] : null;
     },

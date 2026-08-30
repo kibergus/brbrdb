@@ -1,61 +1,63 @@
-<h2>Telemetry</h2>
+<h2>Looking at sessions</h2>
 <p>
-    <b>This is a highly experimental feature which is not ready for wide adoption.</b> It simply won't scale to a large audience,
-    and I might struggle to keep the site running smoothly if user numbers grow. And to be honest, I do consider the competitive
-    element too: this tool aims to help my daughter. However, my goal is to help her grow, rather than make her faster than others
-    through technology. Healthy competition and an open discussion forum are good for that. But I may hold back technology
-    that I believe will benefit others more than her.
+    On the main page click <a href="https://brbrdb.brbrkitten.com/league/kartsim/last">"last"</a> on the KartSim card,
+    which
+    will open an overview of today's sessions.
 </p>
 <p>
-    Telemetry is an invaluable source of insight. I couldn't find an existing tool that met my needs, 
-    and with my background, skill set, and the rise of AI agents, it became viable to just write it myself.
+    <img src="{{ url_for('static', filename='stats.svg') }}" alt="Telemetry Stats tab"
+        style="max-width: 100%; height: auto; border-radius: 8px; display: block; margin: 1.5rem 0;">
 </p>
 <p>
-    If you do have access to this feature, my conditions are:
-</p>
-<h2>Open data</h2>
-<p>
-    In racing, data is traditionally a closely guarded secret used to maintain a competitive edge. However, if the goal
-    is to grow, to be faster & better than yesterday's self, to be part of something bigger (both in space and across time),
-    then sharing knowledge becomes a better strategy.
-</p> 
-<p>
-    For this reason I want athletes to be able to compare laps and learn from one another. And for the
-    time being, <b>any laps uploaded to the site will be visible to other users who have telemetry access</b>. You don't have
-    to upload all your data; the rFactor plugin allows per-kart configuration (for example, configuring only kart 8 to send telemetry).
-    But if you want to see the telemetry - others will be able to see it too. And you will be able to see their data.
+    This gives an idea in which turns time is lost, where consistency can be improved. And "Theoretical best" shows what
+    time you could achieve if you were extremely consistent: it takes the best pieces from your laps and stitches them
+    together.
 </p>
 <p>
-    These sharing policies will likely evolve over time (e.g., introducing publication delays or allowing to keep some laps private),
-    but the guiding principle will remain: contribute data to access data, even if not strictly 1:1. The goal is to keep fast,
-    representative laps open for everyone to learn from.
+    This gives good quick guidance, but we can dig deeper by clicking on a specific turn (or on a "Map" button) and
+    compare
+    individual laps, to understand where exactly time is lost.
 </p>
-<h2>Reliability and project longevity</h2>
 <p>
-    I cannot guarantee high availability or long-term reliability. Things may break while I am away or busy,
-    or I simply may lose interest or decide that it's time to move on to a new project. However:
+    <img src="{{ url_for('static', filename='compare.svg') }}" alt="Lap comparison"
+        style="max-width: 100%; height: auto; border-radius: 8px; display: block; margin: 1.5rem 0;">
 </p>
-<ul>
-    <li>Reviewing telemetry delivers value here and now. If the service is interrupted or data is lost,
-        that would be unfortunate, but the insights and driving gains you achieved along the way remain with you.</li>
-    <li>You can get your data and analyze it through different tools. Modern coding agents, such as Antigravity,
-        should have no problem converting it to the needed format.</li>
-    <li>The project is open source on <a href="https://github.com/kibergus/brbrdb">GitHub</a>. The codebase is complete, so anyone
-        can spin up an independent instance if my server goes away, though note that track configuration data and 
-        installation instructions are not provided — running your own instance is possible, but requires some effort.
-    </li>
-</ul>
-<h2>Pricing</h2>
 <p>
-    This service is free. My employer has blanket approval for personal open-source, non-profit projects, so absorbing
-    running costs (which at this point are very minimal) is the easiest option for me. But if for some reason the costs skyrocket,
-    I may consider making advanced features paid or adopting a Bring-Your-Own-Resources model. E.g. AI-generated reports (when ready)
-    will likely be in the form of an MCP server that you can connect to your own agent.
+    And if you are up to looking at curves, we can get lots of data from a simulator and understand what exactly was
+    happening:
 </p>
-
+<p>
+    <img src="{{ url_for('static', filename='plots.svg') }}" alt="Telemetry plots"
+        style="max-width: 100%; height: auto; border-radius: 8px; display: block; margin: 1.5rem 0;">
+</p>
 {% if get_current_acl().get('see_telemetry') %}
-<h2>Telemetry Access</h2>
+<h2>Setting up the plugin</h2>
 <p>
-    Here will be instructions on how to set up telemetry.
+    Please read the <a href="#telemetry_terms">terms of use</a>.
 </p>
+<p>
+    To send telemetry you need to install an rFactor 2 plugin. The latest version can be obtained on
+    <a href="https://github.com/kibergus/race_tools/releases/">the GitHub releases page</a>. The installer provides a
+    nice GUI that will guide you. It is also used for adjusting settings and uninstalling. I tried to make the
+    UI self-explanatory, but if something is not clear, let me know and I'll try to make it better.
+</p>
+<p>
+    The installer will ask for an API key; your key is <code>{{ get_current_key() }}</code>
+</p>
+<p>
+    You can configure the plugin to only send sessions from a certain kart or add driver name overrides (but API keys
+    are bound to certain drivers). The plugin
+    also saves all the sessions on your drive locally, so they can be re-uploaded later from the installer if needed.
+</p>
+<p>
+    The next time you run the simulator, the session should be streamed to the server and should appear in the <a
+        href="https://brbrdb.brbrkitten.com/league/kartsim">Web UI</a>. The data is live-streamed but you would need to
+    refresh the page to see new data.
+</p>
+<p>
+    The track layouts should be there for all UK KartSim tracks, but I'm still marking up turns, thus per-turn analytics
+    may not be available on some tracks.
+</p>
+{% else %}
+<b style="color: var(--warning);">This is a highly experimental feature which is not ready for wide adoption yet.</b>
 {% endif %}

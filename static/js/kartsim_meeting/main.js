@@ -189,7 +189,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Restore trajectory color mode from URL or reportState
     const tcol = params.get('tcol') || reportState.tcol;
-    if (tcol && ['pedals', 'speed', 'accel', 'gforce_lon', 'gforce_lat', 'lap', 'delta_t'].includes(tcol)) {
+    if (tcol && ['pedals', 'speed', 'accel', 'gforce_lon', 'gforce_lat', 'lap', 'delta_t', 'time'].includes(tcol)) {
         setTrajectoryColorMode(tcol);
     }
 

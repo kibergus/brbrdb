@@ -16,7 +16,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds } from './lap_selection.js';
+import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds, setSort, selectTurnAndSwitchToMap } from './lap_selection.js';
+import { setTrajectoryColorMode } from './map.js';
 import { state } from './state.js';
 import * as plotsSync from './plots_sync.js';
 
@@ -253,11 +254,53 @@ describe('selectTurnAndSwitchToMap', () => {
         expect(state.groupASelection.has('sess1-1')).toBe(true); // Median lap
         expect(state.groupASelection.size).toBe(2);
         expect(state.deltaPlotVisible).toBe(true);
+        expect(setTrajectoryColorMode).toHaveBeenCalledWith('delta_t');
         expect(state.playbackDistance).toBe(50);
         expect(state.currentTargetDist).toBe(50);
         expect(mockSlider.value).toBe(50);
         expect(mockDisplay.textContent).toBe('50m');
         expect(mockFitBounds).toHaveBeenCalled();
+    });
+
+    it('updates currentTurnIdx when user changes turn selector dropdown', () => {
+        const mockTurnSelector = { value: '1', style: {} };
+        const mockSlider = { value: 0 };
+        const mockDisplay = { textContent: '' };
+
+        vi.stubGlobal('document', {
+            querySelectorAll: vi.fn().mockReturnValue([]),
+            getElementById: vi.fn().mockImplementation((id) => {
+                if (id === 'turn-selector') return mockTurnSelector;
+                if (id === 'distance-slider') return mockSlider;
+                if (id === 'distance-display') return mockDisplay;
+                return null;
+            }),
+            querySelector: vi.fn().mockReturnValue(null)
+        });
+
+        // Simulate page having ?turn=0 in URL search
+        vi.stubGlobal('window', {
+            location: { search: '?turn=0', pathname: '/telemetry/test' },
+            history: { replaceState: vi.fn() }
+        });
+
+        state.trackData = {
+            lap_length: 500,
+            turns: [
+                { start: 50, end: 150 },
+                { start: 200, end: 300 }
+            ]
+        };
+
+        // User changed select dropdown to Turn 2 (index 1)
+        mockTurnSelector.value = '1';
+        setSort('turn');
+
+        expect(state.sortMode).toBe('turn');
+        expect(state.currentTurnIdx).toBe(1);
+        expect(mockTurnSelector.value).toBe('1');
+        expect(state.globalTelemetryXRange).toEqual([180, 500]);
+        expect(state.playbackDistance).toBe(200);
     });
 });
 

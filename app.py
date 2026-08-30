@@ -548,6 +548,7 @@ def utility_processor() -> dict[str, Any]:
         format_time=format_time,
         HERO_NAMES=hero_pilots,
         get_current_acl=auth.get_current_acl,
+        get_current_key=auth.get_current_key,
         get_gallery_url=get_gallery_url,
         has_meeting_gallery=gallery_handlers.has_meeting_gallery,
     )

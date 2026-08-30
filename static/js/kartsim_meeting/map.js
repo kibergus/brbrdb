@@ -132,7 +132,9 @@ export function getReferenceLap() {
         let best = null;
         let minTime = Infinity;
         const turnSelector = typeof document !== 'undefined' ? document.getElementById('turn-selector') : null;
-        const turnIdx = parseInt(turnSelector && turnSelector.value !== "" ? turnSelector.value : state.currentTurnIdx || 0);
+        const turnIdx = (turnSelector && turnSelector.value !== undefined && turnSelector.value !== "" && !isNaN(parseInt(turnSelector.value)))
+            ? parseInt(turnSelector.value)
+            : (state.currentTurnIdx !== undefined ? state.currentTurnIdx : 0);
 
         for (const id in state.lapDataLookup) {
             const lap = state.lapDataLookup[id];
@@ -220,6 +222,65 @@ export function calculateSegmentColor(p1, lapId, mode, maxSpeed = 100, p2 = null
         const u = 0.5 + 0.5 * normalizedRate;
 
         return interpolateMultiStopColor(u, DELTA_T_STOPS);
+    }
+
+    if (currentMode === 'time') {
+        const turnSelector = typeof document !== 'undefined' ? document.getElementById('turn-selector') : null;
+        const turnIdx = (turnSelector && turnSelector.value !== undefined && turnSelector.value !== "" && !isNaN(parseInt(turnSelector.value)))
+            ? parseInt(turnSelector.value)
+            : (state.currentTurnIdx !== undefined ? state.currentTurnIdx : 0);
+        const isTurnSort = (state.sortMode === 'turn');
+
+        const getLapMetricTime = (lap) => {
+            if (!lap) return null;
+            if (isTurnSort) {
+                const t = getTurnTime(lap, turnIdx);
+                if (t !== null && t !== undefined && !isNaN(t) && t > 0 && t < 999999) {
+                    return t;
+                }
+                return null;
+            }
+            const t = parseLapTime(lap.lap_time);
+            if (t !== null && t !== undefined && !isNaN(t) && t > 0 && t < 999999) {
+                return t;
+            }
+            return null;
+        };
+
+        const selectedIds = state.groupASelection ? Array.from(state.groupASelection) : [];
+
+        const validTimes = [];
+        if (state.lapDataLookup) {
+            selectedIds.forEach(id => {
+                const lap = state.lapDataLookup[id];
+                const t = getLapMetricTime(lap);
+                if (t !== null) {
+                    validTimes.push(t);
+                }
+            });
+        }
+
+        const currentLap = state.lapDataLookup ? state.lapDataLookup[lapId] : null;
+        const lapTime = getLapMetricTime(currentLap);
+        if (lapTime === null) {
+            return '#94a3b8';
+        }
+
+        const minTime = validTimes.length > 0 ? Math.min(...validTimes) : lapTime;
+        const maxTime = validTimes.length > 0 ? Math.max(...validTimes) : lapTime;
+
+        const TIME_STOPS = [
+            [0.0, [0, 255, 0]],     // Fastest lap: Pure Green
+            [0.5, [255, 255, 0]],   // Mid pace:    Pure Yellow
+            [1.0, [255, 0, 0]]      // Slowest lap: Pure Red
+        ];
+
+        let u = 0.0;
+        if (maxTime > minTime) {
+            u = Math.max(0, Math.min(1, (lapTime - minTime) / (maxTime - minTime)));
+        }
+
+        return interpolateMultiStopColor(u, TIME_STOPS);
     }
 
     if (currentMode === 'speed') {
@@ -333,13 +394,15 @@ export function updateAllPolylineColors(mode) {
 
         const isRefLap = (lapId === refLapId);
         const zIndex = (currentMode === 'delta_t') ? (isRefLap ? 1 : 5) : 1;
+        const opacity = (currentMode === 'time') ? 0.45 : 1.0;
+        const weight = (currentMode === 'time') ? 2 : 4;
 
         const numSegments = lap.points.length - 1;
         for (let i = 0; i < numSegments; i++) {
             const segment = polylines[i];
             if (segment && typeof segment.setOptions === 'function') {
                 const color = calculateSegmentColor(lap.points[i], lapId, currentMode, maxSpeed, lap.points[i + 1]);
-                segment.setOptions({ strokeColor: color, zIndex: zIndex });
+                segment.setOptions({ strokeColor: color, strokeOpacity: opacity, strokeWeight: weight, zIndex: zIndex });
                 segment.originalColor = color;
             }
         }
@@ -351,12 +414,13 @@ export function setTrajectoryColorMode(mode) {
 
     const labelMap = {
         pedals: 'Pedals',
+        delta_t: 'Δ t',
+        time: 'Time',
         speed: 'Speed',
         accel: 'Accel',
         gforce_lon: 'G Lon',
         gforce_lat: 'G Lat',
-        lap: 'Per Lap',
-        delta_t: 'Δ t'
+        lap: 'Per Lap'
     };
 
     const currentLabel = document.getElementById('traj-color-current-label');
@@ -688,13 +752,15 @@ export function loadTrackPoints(overrideSessionId) {
                         const p2 = lap.points[i + 1];
 
                         const color = calculateSegmentColor(p1, lapId, state.trajectoryColorMode, state.globalMaxSpeed, p2);
+                        const opacity = (state.trajectoryColorMode === 'time') ? 0.45 : 1.0;
+                        const weight = (state.trajectoryColorMode === 'time') ? 2 : 4;
 
                         const segment = new google.maps.Polyline({
                             path: [p1, p2],
                             geodesic: false,
                             strokeColor: color,
-                            strokeOpacity: 1.0,
-                            strokeWeight: 4,
+                            strokeOpacity: opacity,
+                            strokeWeight: weight,
                             zIndex: segZIndex,
                             map: isVisible ? state.map : null
                         });
@@ -744,11 +810,12 @@ export function loadTrackPoints(overrideSessionId) {
                 const reportState = (window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
                 const params = new URLSearchParams(window.location.search);
                 const urlSort = params.get('sort') || reportState.sort;
+                const urlTurn = params.has('turn') ? params.get('turn') : (reportState.turn !== undefined ? String(reportState.turn) : null);
                 if (urlSort) {
-                    if (urlSort === 'turn' && !params.has('turn') && reportState.turn !== undefined) {
-                        state.currentTurnIdx = reportState.turn;
+                    if (urlSort === 'turn' && urlTurn !== null && !isNaN(parseInt(urlTurn))) {
+                        state.currentTurnIdx = parseInt(urlTurn);
                     }
-                    ui.setSort(urlSort);
+                    ui.setSort(urlSort, state.currentTurnIdx);
                 } else {
                     ui.renderLapList();
                 }

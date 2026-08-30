@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { findSegmentIndex, getPointAtDistance, getPointsAtDistancesMonotonic, getSpeedAtDistance, precalculateLapData, getMinSpeedInRange, fetchTelemetryChannel } from './telemetry.js';
-import { getSteeringTicks } from './plots_sync.js';
+import { getSteeringTicks, addTrace } from './plots_sync.js';
 import { state } from './state.js';
 
 describe('telemetry.js', () => {
@@ -274,4 +274,53 @@ describe('telemetry.js', () => {
             expect(ticktext).toContain('45 L');
         });
     });
+
+    describe('addTrace visibility preservation', () => {
+        const lap = {
+            id: 'lap1',
+            lap_num: 1,
+            points: [
+                { dist: 0, sp_fl: 5, sp_rl: 2 },
+                { dist: 10, sp_fl: 6, sp_rl: 3 }
+            ]
+        };
+
+        beforeEach(() => {
+            state.plotTraceVisibility = {};
+            state.currentActivePlotTab = 'slide';
+        });
+
+        it('defaults trace visibility to true when not configured', () => {
+            const data = [];
+            addTrace(data, lap, 'sp_fl', 'blue', 2, 'solid', 'FL');
+            expect(data.length).toBe(1);
+            expect(data[0].visible).toBe(true);
+        });
+
+        it('applies legendonly visibility when configured in state.plotTraceVisibility', () => {
+            state.plotTraceVisibility = {
+                slide: {
+                    FL: 'legendonly',
+                    RL: true
+                }
+            };
+            const data = [];
+            addTrace(data, lap, 'sp_fl', 'blue', 2, 'solid', 'FL');
+            addTrace(data, lap, 'sp_rl', 'red', 2, 'solid', 'RL');
+            expect(data[0].visible).toBe('legendonly');
+            expect(data[1].visible).toBe(true);
+        });
+
+        it('strips Group B suffix (B) to match base trace visibility', () => {
+            state.plotTraceVisibility = {
+                slide: {
+                    FL: 'legendonly'
+                }
+            };
+            const data = [];
+            addTrace(data, lap, 'sp_fl', 'blue', 1.5, 'dash', 'FL (B)');
+            expect(data[0].visible).toBe('legendonly');
+        });
+    });
 });
+

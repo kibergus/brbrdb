@@ -509,6 +509,10 @@ header {
   background: linear-gradient(135deg, #00ff00 0%, #ffff00 50%, #ff0000 100%);
 }
 
+.item-color-dot.mode-time {
+  background: linear-gradient(135deg, #00ff00 0%, #ffff00 50%, #ff0000 100%);
+}
+
 .item-color-dot.mode-speed {
   background: linear-gradient(135deg, rgb(40,20,180), rgb(0,200,255), rgb(255,30,60), rgb(255,200,0), rgb(0,255,80));
 }

@@ -64,4 +64,23 @@ describe('url_sync.js updateURL', () => {
         expect(urlCall).toContain('lapsA=lap-1%2Clap-2');
         expect(urlCall).toContain('lapsB=lap-3');
     });
+
+    it('sets tcol parameter when trajectoryColorMode is not pedals', () => {
+        state.trajectoryColorMode = 'time';
+        updateURL();
+
+        expect(mockReplaceState).toHaveBeenCalled();
+        let urlCall = mockReplaceState.mock.calls[mockReplaceState.mock.calls.length - 1][2];
+        expect(urlCall).toContain('tcol=time');
+
+        state.trajectoryColorMode = 'delta_t';
+        updateURL();
+        urlCall = mockReplaceState.mock.calls[mockReplaceState.mock.calls.length - 1][2];
+        expect(urlCall).toContain('tcol=delta_t');
+
+        state.trajectoryColorMode = 'pedals';
+        updateURL();
+        urlCall = mockReplaceState.mock.calls[mockReplaceState.mock.calls.length - 1][2];
+        expect(urlCall).not.toContain('tcol=');
+    });
 });

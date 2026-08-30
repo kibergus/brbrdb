@@ -550,3 +550,18 @@ def test_security_headers() -> None:
     assert response.headers.get('X-Content-Type-Options') == 'nosniff'
     assert response.headers.get('X-Frame-Options') == 'SAMEORIGIN'
     assert response.headers.get('Referrer-Policy') == 'strict-origin-when-cross-origin'
+
+
+def test_about_telemetry_prints_api_key() -> None:
+    mock_keys = {
+        'telemetry_user_key_123': {
+            'see_telemetry': True,
+        }
+    }
+    client = app.app.test_client()
+    with patch('auth.load_keys', return_value=mock_keys):
+        client.set_cookie('auth_key', 'telemetry_user_key_123')
+        response = client.get('/about', environ_base={'REMOTE_ADDR': '192.168.1.100'})
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert 'The installer will ask for an API key; your key is <code>telemetry_user_key_123</code>' in html
