@@ -446,11 +446,28 @@ def augment_championship_data(championship: dict, league: str, class_name: str, 
 
         # Sort past rounds by score ascending to identify drop rounds
         sorted_past_rounds = sorted(past_round_scores, key=lambda x: x[1])
-        num_drops = min(drop_rounds_count, len(past_round_scores))
+        num_drops = drop_rounds_count if len(past_round_scores) > drop_rounds_count else 0
         drop_rounds = [r_name for r_name, _ in sorted_past_rounds[:num_drops]]
+        total_to_count_calc = sum(score for _, score in sorted_past_rounds[num_drops:])
 
         entry['total_all_rounds'] = str(total_all)
         entry['total_all_rounds_official'] = str(total_official)
+
+        official_to_count = entry.get('total_to_count') or entry.get('pts')
+        if official_to_count is not None:
+            entry['total_to_count_official'] = str(official_to_count)
+            if total_all == total_official:
+                entry['total_to_count'] = str(official_to_count)
+            else:
+                entry['total_to_count'] = str(total_to_count_calc)
+        else:
+            if total_all == total_official:
+                entry['total_to_count'] = str(total_to_count_calc)
+                entry['total_to_count_official'] = str(total_to_count_calc)
+            else:
+                entry['total_to_count'] = str(total_to_count_calc)
+                entry['total_to_count_official'] = '0'
+
         entry['round_totals'] = round_totals
         entry['drop_rounds'] = drop_rounds
         entry['missed_rounds'] = missed_rounds

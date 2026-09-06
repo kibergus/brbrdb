@@ -410,8 +410,15 @@ document.addEventListener('DOMContentLoaded', function() {
                         {% endif %}
                     </td>
                     <td rowspan="2" class="total-all-cell">
-                        <div class="total-all-top" title="Total points to count (excluding 2 drop rounds)">
-                            {{ entry.total_to_count if entry.total_to_count != '0' else entry.total_all_rounds }}
+                        <div class="total-all-top" title="Total points to count (excluding {{ championship.get('drop_rounds', 2) }} drop rounds)">
+                            {% if entry.total_to_count_official and entry.total_to_count != entry.total_to_count_official %}
+                                {{ entry.total_to_count_official }}
+                                <span class="preliminary-text" style="font-size: 0.85em; font-weight: normal; margin-left: 0.2rem;" title="Including provisional results: {{ entry.total_to_count }}">
+                                    ({{ entry.total_to_count }})
+                                </span>
+                            {% else %}
+                                {{ entry.total_to_count if entry.total_to_count != '0' else entry.total_all_rounds }}
+                            {% endif %}
                         </div>
                         {% if entry.gap_leader is defined and entry.gap_next is defined %}
                         <div class="total-all-bottom">

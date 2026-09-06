@@ -243,7 +243,8 @@ def test_augment_championship_data_all_drivers_and_provisional() -> None:
         assert standings[0]['name'] == 'Driver A'
         assert standings[0]['total_all_rounds'] == '58'
         assert standings[0]['total_all_rounds_official'] == '33'
-        assert standings[0]['total_to_count'] == '33'
+        assert standings[0]['total_to_count'] == '58'
+        assert standings[0]['total_to_count_official'] == '33'
         assert standings[0]['gap_leader'] == '-'
         assert standings[0]['gap_next'] == '-'
 
@@ -251,8 +252,9 @@ def test_augment_championship_data_all_drivers_and_provisional() -> None:
         assert standings[1]['total_all_rounds'] == '18'
         assert standings[1]['total_all_rounds_official'] == '18'
         assert standings[1]['total_to_count'] == '18'
-        assert standings[1]['gap_leader'] == '15'
-        assert standings[1]['gap_next'] == '15'
+        assert standings[1]['total_to_count_official'] == '18'
+        assert standings[1]['gap_leader'] == '40'
+        assert standings[1]['gap_next'] == '40'
 
 
 def test_session_breadcrumbs() -> None:
@@ -329,6 +331,66 @@ def test_session_breadcrumbs() -> None:
         )
         assert 'Senior' in html_other
         assert 'Practice 2' in html_other
+
+
+def test_league_provisional_total_to_count_rendering() -> None:
+    with app.app.test_request_context():
+        championship = {
+            'drop_rounds': 2,
+            'standings': [
+                {
+                    'name': 'Driver Prov',
+                    'pos': '1',
+                    'total_to_count': '155',
+                    'total_to_count_official': '123',
+                    'total_all_rounds': '202',
+                    'total_all_rounds_official': '170',
+                    'gap_leader': '-',
+                    'gap_next': '-',
+                    'drop_rounds': [],
+                    'rounds': {
+                        'R1': {'PF': {'points': '25', 'pos': '1'}}
+                    }
+                },
+                {
+                    'name': 'Driver Off',
+                    'pos': '2',
+                    'total_to_count': '100',
+                    'total_to_count_official': '100',
+                    'total_all_rounds': '100',
+                    'total_all_rounds_official': '100',
+                    'gap_leader': '55',
+                    'gap_next': '55',
+                    'drop_rounds': [],
+                    'rounds': {
+                        'R1': {'PF': {'points': '10', 'pos': '2'}}
+                    }
+                }
+            ]
+        }
+
+        html = render_template(
+            'league.html',
+            league='fat_pro',
+            class_name='cadet',
+            meeting_keys=[],
+            meetings={},
+            years=['2026'],
+            selected_year='2026',
+            view_mode='date',
+            is_kartsim=False,
+            track_groups={},
+            sorted_track_keys=[],
+            meeting_conditions={},
+            championship=championship
+        )
+
+        # Check Driver Prov displays official 123 and provisional (155) in preliminary-text
+        assert '123' in html
+        assert 'Including provisional results: 155' in html
+        assert '(155)' in html
+        # Check Driver Off displays only 100 without provisional parenthesis for to_count
+        assert 'Including provisional results: 100' not in html
 
 
 def test_resolve_car_name() -> None:
