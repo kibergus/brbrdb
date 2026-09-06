@@ -47,7 +47,7 @@ Orchestrator Agent
  ├── 2. Lap Selection (Keep <3 laps: Benchmark Reference Lap vs Target Comparison Lap)
  ├── 3. Corner Sub-Agent Delegation (Delta T inflection, causation chain with calibrated confidence)
  ├── 4. Synthesis (Identify top 1–2 actionable coaching takeaways for youth drivers)
- └── 5. Report Generation (writes data/reports/<filename>.html with JSON header & commentary triggers)
+ └── 5. Report Generation (writes data/reports/<filename>.html with JSON header, invisible prompt comment, & commentary triggers)
 ```
 
 ---
@@ -73,6 +73,7 @@ Orchestrator Agent
    - **Opened Plots Limit Rule**: **Keep the number of simultaneously opened plots under 3** (e.g. `plot: ["steering"]` alongside Speed/Delta, or presets like `data-plots="speed,steering,delta"` or `data-plots="speed,pedals,delta"`). Opening 3 or more bottom channel plots pushes the track map off-screen and hides the kart trajectory.
    - **Purpose-Driven Triggers Rule**: **Do NOT create generic disconnected plot button bars hanging in the air** (e.g., generic standalone "Show Steering" or "Toggle Pedals" toolbars). Every button or preset must serve a clear narrative purpose tied directly to conveying a specific coaching idea (e.g., inspecting braking points with pedals, checking apex steering scrub, or verifying exit throttle commitment).
    - **Target Comparison Lap**: Select a representative median lap or a lap with a specific time loss (~0.2s–0.5s delta) to diagnose the root cause of the slowdown.
+   - **Prompt Comment Rule**: **Always include the exact prompt and generation instructions** inside an HTML comment section at the top of the report (immediately following the JSON header comment). This makes the prompt generally invisible to users in the browser/viewer, while keeping reports fully auditable and reproducible.
 
 ---
 
@@ -142,9 +143,10 @@ All findings, diagnoses, and coaching takeaways MUST be strictly anchored in the
 Report files are stored in `data/reports/<report_name>.html` (or `../data/reports/<report_name>.html` from the `analysis/` workspace root).
 
 ### 1. Structure
-A report file consists of two parts:
+A report file consists of three parts:
 1. **Header**: A top comment block containing a JSON configuration object specifying the meeting parameters and default UI viewer state.
-2. **Body**: Clean HTML markup containing the commentary text, stat cards, evidence items, and clickable interactive trigger buttons.
+2. **Invisible Prompt / Generation Context Comment**: An HTML comment block (`<!-- Prompt / Generation Context: ... -->`) containing the exact prompt/instructions given to build the report. Because it is enclosed in an HTML comment, it is generally invisible to users in the browser/viewer, but remains fully accessible in the source for auditing and reproduction.
+3. **Body**: Clean HTML markup containing the commentary text, stat cards, evidence items, and clickable interactive trigger buttons.
 
 ```html
 <!-- {
@@ -170,6 +172,14 @@ A report file consists of two parts:
     "sidePanelWidth": 420
   }
 } -->
+
+<!--
+Prompt / Generation Context:
+Analyze Turn 3 (Hairpin) at Clay Pigeon for 2026-08-21 session 18_09_practice.
+Compare Benchmark Lap 6 vs Target Comparison Lap 5.
+Investigate braking point, apex steering scrub, and throttle commitment on exit.
+Keep plots under 3 channels and write friendly coaching advice for an 11-year-old junior driver.
+-->
 
 <div class="report-content">
   <div>

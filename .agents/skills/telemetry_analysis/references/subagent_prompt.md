@@ -45,6 +45,7 @@ Your mission is to analyze driver telemetry exclusively for this corner to deter
 
 4. **Interactive Report Section Generation**:
    Produce an HTML commentary section ready to be embedded into the report companion with interactive data triggers:
+   - Enclose the generation prompt and investigation parameters in an HTML comment block (`<!-- Prompt / Generation Context: ... -->`) immediately below the JSON header.
    - Specific meter marks for braking, apex, and throttle pickup formatted as `<button class="telemetry-jump-btn" data-dist="<m>" data-xlim="<min>,<max>">...m</button>`.
    - Relevant bottom channel plot triggers keeping opened plots under 3 so the track map remains visible (e.g. `data-plots="speed,steering,delta"` or `data-plots="speed,pedals,delta"`).
    - Map focus triggers (e.g. `data-map-range="{START_M},{END_M}"`).
