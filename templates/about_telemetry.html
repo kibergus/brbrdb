@@ -30,7 +30,7 @@
     <img src="{{ url_for('static', filename='plots.svg') }}" alt="Telemetry plots"
         style="max-width: 100%; height: auto; border-radius: 8px; display: block; margin: 1.5rem 0;">
 </p>
-{% if get_current_acl().get('see_telemetry') %}
+{% if can_see_telemetry() %}
 <h2>Setting up the plugin</h2>
 <p>
     Please read the <a href="#telemetry_terms">terms of use</a>.

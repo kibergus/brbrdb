@@ -209,7 +209,7 @@ def _render_telemetry_meeting(
     report_name: str | None = None
 ) -> str:
     acl = auth.get_current_acl()
-    if not acl.get('see_telemetry'):
+    if not auth.can_see_telemetry(acl, league=league):
         abort(403, description='Access to telemetry data is restricted')
 
     sessions = db.find_sessions(
@@ -602,10 +602,9 @@ def _compute_lap_segments(laps: list, sector_ends: list, turns: list) -> None:
 def get_track_points() -> Response | tuple[Response, int]:
     # Check see_telemetry permission
     acl = auth.get_current_acl()
-    if not acl.get('see_telemetry'):
-        return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
-
     league = request.args.get('league')
+    if not auth.can_see_telemetry(acl, league=league):
+        return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
     class_name = request.args.get('class_name')
     date = request.args.get('date')
     track = request.args.get('track')
@@ -667,6 +666,8 @@ def get_track_points() -> Response | tuple[Response, int]:
 
         laps, columns, driver_name = parse_telemetry_csv(csv_path)
         if laps:
+            if not auth.can_see_telemetry(acl, league=league, driver=driver_name):
+                continue
             _override_with_official_laps(laps, df_official, matching_sid, driver_name)
 
             # Mark laps as invalid based on distance (automatic check)
@@ -745,10 +746,9 @@ def smooth_telemetry_data(values: list[float]) -> list[float]:
 def get_telemetry_channel() -> Response | tuple[Response, int]:
     # Check see_telemetry permission
     acl = auth.get_current_acl()
-    if not acl.get('see_telemetry'):
-        return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
-
     league = request.args.get('league')
+    if not auth.can_see_telemetry(acl, league=league):
+        return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
     class_name = request.args.get('class_name')
     date = request.args.get('date')
     track = request.args.get('track')
@@ -801,6 +801,16 @@ def get_telemetry_channel() -> Response | tuple[Response, int]:
         if blank_idx == -1 or blank_idx >= len(rows) - 1:
             empty_header_bytes = struct.pack("<dd", 0.0, 1.0)
             return Response(empty_header_bytes, mimetype='application/octet-stream')
+
+        metadata_rows = rows[:blank_idx]
+        driver_name = None
+        for row in metadata_rows:
+            if row and len(row) >= 2 and row[0] in ('Driver name', 'Configuration'):
+                driver_name = row[1]
+                break
+
+        if not auth.can_see_telemetry(acl, league=league, driver=driver_name):
+            return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
 
         csv_rows = rows[blank_idx+1:]
         header = csv_rows[0]

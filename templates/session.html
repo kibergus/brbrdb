@@ -96,7 +96,7 @@
                 </svg>
             </a>
             {% endif %}
-            {% if has_telemetry %}
+            {% if has_telemetry and can_see_telemetry(league=metadata.league) %}
             <a href="{{ url_for('location.telemetry_view', league=metadata.league, class_name=metadata.class, date=metadata.date, track=metadata.track, session_id=metadata.session_id) }}" class="badge"
                 style="background: var(--accent); color: white; text-decoration: none; padding: 0.5rem 1rem; display: flex; align-items: center; gap: 0.5rem;">
                 Telemetry

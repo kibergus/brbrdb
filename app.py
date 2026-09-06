@@ -109,7 +109,10 @@ def _require_login() -> werkzeug_wrappers.Response | tuple[str, int] | None:
         request.path.startswith('/api/kartsim_meeting_data')
     )
     if is_telemetry:
-        if not acl.get('see_telemetry'):
+        view_args = request.view_args or {}
+        req_league = view_args.get('league') or request.args.get('league')
+        req_driver = view_args.get('driver') or request.args.get('driver')
+        if not auth.can_see_telemetry(acl, league=req_league, driver=req_driver):
             abort(403, description='Access to telemetry data is restricted')
         return None
 
@@ -566,6 +569,9 @@ def utility_processor() -> dict[str, Any]:
         HERO_NAMES=hero_pilots,
         get_current_acl=auth.get_current_acl,
         get_current_key=auth.get_current_key,
+        can_see_telemetry=lambda league=None, driver=None: auth.can_see_telemetry(
+            auth.get_current_acl(), league=league, driver=driver
+        ),
         get_gallery_url=get_gallery_url,
         has_meeting_gallery=gallery_handlers.has_meeting_gallery,
     )
@@ -664,7 +670,7 @@ def league_list() -> str:
     acl = auth.get_current_acl()
     leagues = [
         lg for lg in db.list_leagues()
-        if auth.can_see_league(acl, lg) and (lg != 'kartsim' or acl.get('see_telemetry'))
+        if auth.can_see_league(acl, lg) and (lg != 'kartsim' or auth.can_see_telemetry(acl, league='kartsim'))
     ]
     grouped_leagues = aliases.group_leagues(leagues)
     return render_template('league_list.html', grouped_leagues=grouped_leagues)
@@ -1274,8 +1280,9 @@ def session_view(league: str, class_name: str, date: str, track: str, session_id
         prev_session = s_meta_list[current_idx - 1] if current_idx > 0 else None
         next_session = s_meta_list[current_idx + 1] if current_idx < len(s_meta_list) - 1 else None
 
+    acl = auth.get_current_acl()
     has_telemetry = False
-    if s_meta_list:
+    if s_meta_list and auth.can_see_telemetry(acl, league=league):
         has_telemetry = db.has_telemetry(s_meta_list[0].meeting_dir, session_id)
 
     return render_template(

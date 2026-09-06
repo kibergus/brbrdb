@@ -63,7 +63,9 @@ def get_current_acl() -> dict[str, Any]:
         return {
             'see_videos': True,
             'see_gallery': True,
-            'see_telemetry': True,
+            'see_telemetry': {
+                'leagues': ['*']
+            },
             'see_drivers': True,
             'see_leagues': ['*'],
             'upload_sessions': {
@@ -85,6 +87,72 @@ def can_see_league(acl: dict[str, Any], league: str) -> bool:
     if not see_leagues or not isinstance(see_leagues, list):
         return False
     return '*' in see_leagues or league in see_leagues
+
+
+def can_see_telemetry(
+    acl: dict[str, Any],
+    league: str | None = None,
+    driver: str | None = None
+) -> bool:
+    """Check if the ACL allows viewing telemetry data.
+
+    `see_telemetry` follows the same format as leagues/upload_sessions:
+    with a list of allowed drivers and leagues:
+    {
+        "drivers": [...],
+        "leagues": [...]
+    }
+    Absence of 'driver' / 'drivers' is treated as '*'.
+    """
+    see_telemetry = acl.get('see_telemetry')
+    if not see_telemetry or see_telemetry is False:
+        return False
+
+    if see_telemetry is True:
+        allowed_leagues = ['*']
+        allowed_drivers = ['*']
+    elif isinstance(see_telemetry, list):
+        allowed_leagues = see_telemetry
+        allowed_drivers = ['*']
+    elif isinstance(see_telemetry, dict):
+        # Leagues
+        raw_leagues = see_telemetry.get('leagues') or see_telemetry.get('league') or []
+        if isinstance(raw_leagues, str):
+            allowed_leagues = [raw_leagues]
+        elif isinstance(raw_leagues, list):
+            allowed_leagues = list(raw_leagues)
+        else:
+            allowed_leagues = []
+
+        # Drivers: treat absence of 'driver' / 'drivers' as '*'
+        if 'drivers' in see_telemetry:
+            raw_drivers = see_telemetry['drivers']
+        elif 'driver' in see_telemetry:
+            raw_drivers = see_telemetry['driver']
+        else:
+            raw_drivers = ['*']
+
+        if isinstance(raw_drivers, str):
+            allowed_drivers = [raw_drivers]
+        elif isinstance(raw_drivers, list):
+            allowed_drivers = list(raw_drivers)
+        else:
+            allowed_drivers = ['*']
+    else:
+        return False
+
+    if not allowed_leagues:
+        return False
+
+    if league is not None:
+        if '*' not in allowed_leagues and league not in allowed_leagues:
+            return False
+
+    if driver is not None:
+        if '*' not in allowed_drivers and driver not in allowed_drivers:
+            return False
+
+    return True
 
 
 def can_upload_session_for_driver(acl: dict[str, Any], driver_name: str) -> bool:

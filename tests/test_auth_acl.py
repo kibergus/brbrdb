@@ -14,7 +14,8 @@
 # ==============================================================================
 
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+import pandas as pd
 import app
 import auth
 
@@ -565,3 +566,163 @@ def test_about_telemetry_prints_api_key() -> None:
         assert response.status_code == 200
         html = response.get_data(as_text=True)
         assert 'The installer will ask for an API key; your key is <code>telemetry_user_key_123</code>' in html
+
+
+def test_can_see_telemetry_unit() -> None:
+    # 1. Disabled or missing telemetry
+    assert auth.can_see_telemetry({}) is False
+    assert auth.can_see_telemetry({'see_telemetry': False}) is False
+    assert auth.can_see_telemetry({'see_telemetry': None}) is False
+    assert auth.can_see_telemetry({'see_telemetry': {}}) is False
+
+    # 2. Boolean True
+    acl_bool_true = {'see_telemetry': True}
+    assert auth.can_see_telemetry(acl_bool_true) is True
+    assert auth.can_see_telemetry(acl_bool_true, league='kartsim', driver='Alicia') is True
+
+    # 3. Absence of driver treated as wildcard '*'
+    acl_no_driver = {
+        'see_telemetry': {
+            'leagues': ['kartsim']
+        }
+    }
+    assert auth.can_see_telemetry(acl_no_driver) is True
+    assert auth.can_see_telemetry(acl_no_driver, league='kartsim') is True
+    assert auth.can_see_telemetry(acl_no_driver, league='kartsim', driver='Alicia') is True
+    assert auth.can_see_telemetry(acl_no_driver, league='kartsim', driver='Harrison') is True
+    assert auth.can_see_telemetry(acl_no_driver, league='rotax', driver='Alicia') is False
+
+    # 4. List format for leagues (absence of driver treated as '*')
+    acl_list = {
+        'see_telemetry': ['kartsim']
+    }
+    assert auth.can_see_telemetry(acl_list, league='kartsim') is True
+    assert auth.can_see_telemetry(acl_list, league='kartsim', driver='Any') is True
+    assert auth.can_see_telemetry(acl_list, league='rotax') is False
+
+    # 5. Specific drivers list
+    acl_driver_scoped = {
+        'see_telemetry': {
+            'drivers': ['Alicia Waterhouse', 'Harrison Outram'],
+            'leagues': ['kartsim']
+        }
+    }
+    assert auth.can_see_telemetry(acl_driver_scoped, league='kartsim', driver='Alicia Waterhouse') is True
+    assert auth.can_see_telemetry(acl_driver_scoped, league='kartsim', driver='Harrison Outram') is True
+    assert auth.can_see_telemetry(acl_driver_scoped, league='kartsim', driver='Other Driver') is False
+    assert auth.can_see_telemetry(acl_driver_scoped, league='rotax', driver='Alicia Waterhouse') is False
+
+    # 6. Singular 'driver' and 'league' keys supported
+    acl_singular = {
+        'see_telemetry': {
+            'driver': 'Alicia Waterhouse',
+            'league': 'kartsim'
+        }
+    }
+    assert auth.can_see_telemetry(acl_singular, league='kartsim', driver='Alicia Waterhouse') is True
+    assert auth.can_see_telemetry(acl_singular, league='kartsim', driver='Other') is False
+
+
+def test_structured_see_telemetry_routes() -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'kartsim_only_key': {
+            'see_telemetry': {
+                'leagues': ['kartsim']
+            },
+            'see_leagues': ['*']
+        },
+        'rotax_only_key': {
+            'see_telemetry': {
+                'leagues': ['rotax']
+            },
+            'see_leagues': ['*']
+        }
+    }
+    with patch('auth.load_keys', return_value=mock_keys):
+        # 1. KartSim only key accessing kartsim telemetry is allowed
+        client.set_cookie('auth_key', 'kartsim_only_key')
+        resp_ks = client.get(
+            '/telemetry/kartsim/cadet/2026-05-10/Rowrah',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_ks.status_code != 403
+
+        # Accessing rotax telemetry with kartsim only key is 403 Forbidden
+        resp_rotax = client.get(
+            '/telemetry/rotax/cadet/2026-03-15/Llandow',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_rotax.status_code == 403
+
+        # 2. Rotax only key accessing rotax telemetry is allowed
+        client.set_cookie('auth_key', 'rotax_only_key')
+        resp_rotax_ok = client.get(
+            '/telemetry/rotax/cadet/2026-03-15/Llandow',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_rotax_ok.status_code != 403
+
+        # Accessing kartsim telemetry with rotax only key is 403 Forbidden
+        resp_ks_forbidden = client.get(
+            '/telemetry/kartsim/cadet/2026-05-10/Rowrah',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_ks_forbidden.status_code == 403
+
+
+def test_session_view_telemetry_button_acl() -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'no_tel_key': {
+            'see_telemetry': False,
+            'see_leagues': ['*']
+        },
+        'has_tel_key': {
+            'see_telemetry': {
+                'leagues': ['club100_south']
+            },
+            'see_leagues': ['*']
+        }
+    }
+    mock_df = pd.DataFrame([{
+        'SessionID': 'practice_1',
+        'Name': 'Driver 1',
+        'Lap': 1,
+        'LapTime': '1:00.000',
+        'LapTimeSeconds': 60.0,
+        'LapTimeDeleted': False,
+        'Pos': 1,
+        'PositionsGained': 0,
+        'SessionName': 'Practice 1',
+        'DateTime': '2026-08-02 11:00:00'
+    }])
+    with patch('auth.load_keys', return_value=mock_keys), \
+         patch('app.db.find_sessions') as mock_find, \
+         patch('app.db.has_telemetry', return_value=True), \
+         patch('app.db.load', return_value=mock_df), \
+         patch('app.db.load_penalties', return_value=pd.DataFrame()), \
+         patch('app.db.get_overlapping_videos', return_value=[]):
+        mock_session = MagicMock()
+        mock_session.meeting_dir = '/dummy'
+        mock_session.session_id = 'practice_1'
+        mock_session.session_start_datetime = '2026-08-02 11:00'
+        mock_find.return_value = [mock_session]
+
+        # 1. User with no telemetry access should NOT see the Telemetry button
+        client.set_cookie('auth_key', 'no_tel_key')
+        resp_no_tel = client.get(
+            '/session/club100_south/cadet_lw/2026-08-02/Llandow/practice_1',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_no_tel.status_code == 200
+        assert 'Telemetry' not in resp_no_tel.get_data(as_text=True)
+
+        # 2. User with telemetry access for club100_south should see the Telemetry button
+        client.set_cookie('auth_key', 'has_tel_key')
+        resp_has_tel = client.get(
+            '/session/club100_south/cadet_lw/2026-08-02/Llandow/practice_1',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_has_tel.status_code == 200
+        assert 'Telemetry' in resp_has_tel.get_data(as_text=True)
