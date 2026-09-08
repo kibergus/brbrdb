@@ -960,3 +960,44 @@ def test_process_telemetry_derivative_data_does_not_inject_missing_columns() -> 
         assert 'Speed' in df_telemetry.columns
         assert 'GForceLat' in df_telemetry.columns
         assert 'GForceLon' in df_telemetry.columns
+
+
+def test_process_telemetry_derivative_data_empty_lat_lon_strings() -> None:
+    records = [
+        {
+            'Time': '2026-09-05T09:21:00.000Z',
+            'Latitude': '',
+            'Longitude': '',
+            'Speed': '',
+            'GForceLat': '0.086',
+            'GForceLon': '-0.076'
+        },
+        {
+            'Time': '2026-09-05T09:21:00.100Z',
+            'Latitude': '50.8523',
+            'Longitude': '-2.5831',
+            'Speed': '12.5',
+            'GForceLat': '0.12',
+            'GForceLon': '0.05'
+        }
+    ]
+    session_info = upload_handlers.CSVSessionMetadata(
+        track_name='Clay Pigeon',
+        session_name='Practice',
+        driver_name='Katia Guseinova',
+        league='fat_pro',
+        class_name='cadet',
+        session_start_datetime=datetime.datetime(2026, 9, 5, 9, 21),
+    )
+
+    with (patch('upload_handlers.db.get_track', return_value={}),
+          patch('upload_handlers.is_lap_valid', return_value=True)):
+        df_telemetry, metadata_json, _ = upload_handlers.process_telemetry_derivative_data(
+            records, session_info, '/tmp'
+        )
+
+        assert len(df_telemetry) == 2
+        assert df_telemetry.iloc[0]['Latitude'] == ''
+        assert df_telemetry.iloc[0]['Longitude'] == ''
+        assert float(df_telemetry.iloc[1]['Latitude']) == 50.8523
+        assert float(df_telemetry.iloc[1]['Longitude']) == -2.5831

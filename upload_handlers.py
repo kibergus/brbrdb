@@ -350,6 +350,8 @@ def interpolate_lap_distances(
         )
         lap_distance_m[mask] = interpolated_dist % lap_length
 
+    invalid_mask = np.isnan(lat_arr) | np.isnan(lon_arr)
+    lap_distance_m[invalid_mask] = np.nan
     return lap_distance_m
 
 
@@ -374,6 +376,26 @@ def safe_float(val: Any, default: float = 0.0) -> float:
         return float(val)
     except Exception:
         return default
+
+
+def parse_coordinate(val: Any) -> float:
+    """Parse coordinate, returning np.nan if uninitialized (None, empty, NaN, or 0.0)."""
+    if val is None:
+        return np.nan
+    if isinstance(val, (int, float)):
+        if np.isnan(val) or val == 0.0:
+            return np.nan
+        return float(val)
+    val_str = str(val).strip()
+    if val_str == '' or val_str.lower() in ('nan', 'none', 'null'):
+        return np.nan
+    try:
+        f = float(val_str)
+        if np.isnan(f) or f == 0.0:
+            return np.nan
+        return f
+    except (ValueError, TypeError):
+        return np.nan
 
 
 def infer_conditions_from_avg_track_wetness(records: list[dict]) -> str | None:
@@ -436,45 +458,58 @@ def process_telemetry_derivative_data(
         origin = rfactor.get_track_origin(resolved_track_name)
 
     for r in records:
-        lat_val = r.get('Latitude')
-        lon_val = r.get('Longitude')
-
         if origin is not None:
             x_m = r.get('x')
             z_m = r.get('z')
 
-            if x_m is not None and z_m is not None:
-                p_lat, p_lon = rfactor.rfactor_to_gps(float(x_m), float(z_m), origin)
+            if x_m is not None and z_m is not None and x_m != '' and z_m != '':
+                p_lat, p_lon = rfactor.rfactor_to_gps(safe_float(x_m), safe_float(z_m), origin)
                 lat_list.append(p_lat)
                 lon_list.append(p_lon)
                 continue
 
-        if lat_val is not None and lon_val is not None:
-            lat_list.append(float(lat_val))
-            lon_list.append(float(lon_val))
+        raw_lat = r.get('Latitude')
+        raw_lon = r.get('Longitude')
+        lat_val = parse_coordinate(raw_lat)
+        lon_val = parse_coordinate(raw_lon)
+        if np.isnan(lat_val) or np.isnan(lon_val):
+            lat_list.append(np.nan)
+            lon_list.append(np.nan)
         else:
-            lat_list.append(0.0)
-            lon_list.append(0.0)
+            lat_list.append(lat_val)
+            lon_list.append(lon_val)
 
     lat_arr = np.array(lat_list)
     lon_arr = np.array(lon_list)
 
     # Calculate course
     course = np.zeros(len(lat_arr))
-    for i in range(1, len(lat_arr)):
-        dlat = lat_arr[i] - lat_arr[i-1]
-        dlon = lon_arr[i] - lon_arr[i-1]
-        dlon *= math.cos(math.radians(lat_arr[i]))
-        if dlat != 0 or dlon != 0:
-            course[i] = math.degrees(math.atan2(dlon, dlat))
+    valid_coords = ~np.isnan(lat_arr) & ~np.isnan(lon_arr)
+    last_valid_idx = None
+    for i in range(len(lat_arr)):
+        if not valid_coords[i]:
+            course[i] = course[last_valid_idx] if last_valid_idx is not None else 0.0
+            continue
+        if last_valid_idx is not None:
+            dlat = lat_arr[i] - lat_arr[last_valid_idx]
+            dlon = lon_arr[i] - lon_arr[last_valid_idx]
+            dlon *= math.cos(math.radians(lat_arr[i]))
+            if dlat != 0 or dlon != 0:
+                course[i] = math.degrees(math.atan2(dlon, dlat))
+            else:
+                course[i] = course[last_valid_idx]
         else:
-            course[i] = course[i-1]
+            course[i] = 0.0
+        last_valid_idx = i
+
     if len(course) > 0:
-        course[0] = course[1] if len(course) > 1 else 0
+        first_valid_idxs = np.where(valid_coords)[0]
+        if len(first_valid_idxs) > 0 and first_valid_idxs[0] > 0:
+            course[:first_valid_idxs[0]] = course[first_valid_idxs[0]]
 
     # Lap distance & lap detection
     lap_col = np.ones(len(records), dtype=int)
-    lap_distance_m = np.zeros(len(records))
+    lap_distance_m = np.full(len(records), np.nan)
     turns = []
     lap_length = 1000.0
     sector_end = []
@@ -496,9 +531,14 @@ def process_telemetry_derivative_data(
         raw_dist = cl_dist[idxs_all]
 
         crossings = []
-        for i in range(1, len(raw_dist)):
-            if raw_dist[i] < raw_dist[i-1] - (0.5 * lap_length):
-                crossings.append(i)
+        last_valid_dist = None
+        for i in range(len(raw_dist)):
+            if not valid_coords[i]:
+                continue
+            if last_valid_dist is not None:
+                if raw_dist[i] < last_valid_dist - (0.5 * lap_length):
+                    crossings.append(i)
+            last_valid_dist = raw_dist[i]
 
         for i, crossing in enumerate(crossings):
             lap_col[crossing:] = i + 2
@@ -508,8 +548,16 @@ def process_telemetry_derivative_data(
         )
     else:
         for i in range(len(records)):
-            lap_col[i] = int(records[i].get('Lap') or 1)
-            lap_distance_m[i] = float(records[i].get('Lap Distance') or 0.0)
+            lap_raw = records[i].get('Lap')
+            try:
+                lap_col[i] = int(float(lap_raw)) if lap_raw else 1
+            except (ValueError, TypeError):
+                lap_col[i] = 1
+            raw_dist = records[i].get('Lap Distance')
+            if raw_dist is not None and raw_dist != '':
+                lap_distance_m[i] = safe_float(raw_dist, np.nan)
+            else:
+                lap_distance_m[i] = np.nan
 
     # Build Laps list
     laps_data = []
@@ -521,7 +569,10 @@ def process_telemetry_derivative_data(
         # Calculate lap time directly from the first and last timestamps of the lap
         t_first_val = records[lap_idxs[0]].get('Time')
         t_last_val = records[lap_idxs[-1]].get('Time')
-        lap_time_seconds = (pd.to_datetime(t_last_val) - pd.to_datetime(t_first_val)).total_seconds()
+        try:
+            lap_time_seconds = (pd.to_datetime(t_last_val) - pd.to_datetime(t_first_val)).total_seconds()
+        except Exception:
+            lap_time_seconds = 0.0
 
         laps_data.append({'num': int(l_num), 'time': lap_time_seconds})
 
@@ -573,15 +624,18 @@ def process_telemetry_derivative_data(
         # Core and derived geo/time/speed/lap columns
         row['Record'] = i + 1
         row['Time'] = time_str_point
-        row['Latitude'] = f'{lat_arr[i]:.8f}'
-        row['Longitude'] = f'{lon_arr[i]:.8f}'
+        row['Latitude'] = '' if np.isnan(lat_arr[i]) else f'{lat_arr[i]:.8f}'
+        row['Longitude'] = '' if np.isnan(lon_arr[i]) else f'{lon_arr[i]:.8f}'
         row['Speed'] = f'{speed_ms:.5f}'
         row['Lap'] = str(lap_col[i])
-        row['Lap Distance'] = f'{lap_distance_m[i]:.2f}'
+        row['Lap Distance'] = '' if np.isnan(lap_distance_m[i]) else f'{lap_distance_m[i]:.2f}'
 
         # Format optional base columns ONLY if present in input
         if 'Direction of Travel' in r:
-            row['Direction of Travel'] = f'{course_val:.2f}'
+            if not valid_coords[i] and (r.get('Direction of Travel') is None or r.get('Direction of Travel') == ''):
+                row['Direction of Travel'] = ''
+            else:
+                row['Direction of Travel'] = f'{course_val:.2f}'
 
         if 'Altitude' in r:
             row['Altitude'] = f"{safe_float(r.get('Altitude'), 0.0):.2f}"

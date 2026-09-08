@@ -127,9 +127,11 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
                 if not timestamp_str or lat_val is None or lon_val is None or lap_val is None:
                     continue
 
-                # Check that coordinates are numbers.
-                float(lat_val)
-                float(lon_val)
+                # Check that coordinates are valid numbers and not uninitialized.
+                f_lat = float(lat_val)
+                f_lon = float(lon_val)
+                if np.isnan(f_lat) or np.isnan(f_lon) or (f_lat == 0.0 and f_lon == 0.0):
+                    continue
                 lap_num = int(lap_val)
 
                 if lap_num not in session_laps:
@@ -838,8 +840,10 @@ def get_telemetry_channel() -> Response | tuple[Response, int]:
                 continue
 
             try:
-                float(lat_val)
-                float(lon_val)
+                f_lat = float(lat_val)
+                f_lon = float(lon_val)
+                if np.isnan(f_lat) or np.isnan(f_lon) or (f_lat == 0.0 and f_lon == 0.0):
+                    continue
                 int(lap_val)
             except ValueError:
                 continue
