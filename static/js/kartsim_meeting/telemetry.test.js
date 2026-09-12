@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { findSegmentIndex, getPointAtDistance, getPointsAtDistancesMonotonic, getSpeedAtDistance, precalculateLapData, getMinSpeedInRange, fetchTelemetryChannel } from './telemetry.js';
-import { getSteeringTicks, addTrace } from './plots_sync.js';
+import { getSteeringTicks, addTrace, renderSpeedPlot, renderDeltaPlot } from './plots_sync.js';
 import { state } from './state.js';
 
 describe('telemetry.js', () => {
@@ -320,6 +320,198 @@ describe('telemetry.js', () => {
             const data = [];
             addTrace(data, lap, 'sp_fl', 'blue', 1.5, 'dash', 'FL (B)');
             expect(data[0].visible).toBe('legendonly');
+        });
+    });
+
+    describe('renderSpeedPlot and renderDeltaPlot group visibility and styling', () => {
+        let speedEl;
+        let deltaEl;
+        let mockNewPlot;
+        let mockReact;
+        let mockPurge;
+
+        const lapA1 = {
+            lapId: 'lapA1',
+            lap_num: 1,
+            lap_time: '1:00.000',
+            points: [
+                { dist: 0, speed: 60, time: 0 },
+                { dist: 100, speed: 70, time: 5 },
+                { dist: 200, speed: 80, time: 10 }
+            ]
+        };
+
+        const lapA2 = {
+            lapId: 'lapA2',
+            lap_num: 2,
+            lap_time: '1:01.000',
+            points: [
+                { dist: 0, speed: 58, time: 0 },
+                { dist: 100, speed: 68, time: 5.2 },
+                { dist: 200, speed: 78, time: 10.3 }
+            ]
+        };
+
+        const lapB1 = {
+            lapId: 'lapB1',
+            lap_num: 3,
+            lap_time: '1:02.000',
+            points: [
+                { dist: 0, speed: 55, time: 0 },
+                { dist: 100, speed: 65, time: 5.5 },
+                { dist: 200, speed: 75, time: 10.8 }
+            ]
+        };
+
+        beforeEach(() => {
+            speedEl = { id: 'plot-area-speed', remove: vi.fn() };
+            deltaEl = { id: 'plot-area-delta', remove: vi.fn() };
+            vi.stubGlobal('document', {
+                getElementById: vi.fn(id => {
+                    if (id === 'plot-area-speed') return speedEl;
+                    if (id === 'plot-area-delta') return deltaEl;
+                    return null;
+                }),
+                createElement: vi.fn(() => ({ remove: vi.fn() })),
+                body: { appendChild: vi.fn() }
+            });
+
+            mockNewPlot = vi.fn().mockResolvedValue(speedEl);
+            mockReact = vi.fn();
+            mockPurge = vi.fn();
+            global.Plotly = {
+                newPlot: mockNewPlot,
+                react: mockReact,
+                purge: mockPurge
+            };
+
+            state.groupASelection = new Set(['lapA1', 'lapA2']);
+            state.groupBSelection = new Set(['lapB1']);
+            state.lapDataLookup = {
+                lapA1,
+                lapA2,
+                lapB1
+            };
+            state.fastestGroupALap = lapA1;
+            state.fastestGroupALapId = 'lapA1';
+            state.fastestSelectedLap = lapA1;
+            state.fastestSelectedLapId = 'lapA1';
+            state.groupAVisibleMap = true;
+            state.groupBVisibleMap = true;
+            state.speedPlotInitialized = false;
+            state.deltaPlotInitialized = false;
+            state.trackData = { lap_length: 200 };
+            state.sortMode = 'lap';
+        });
+
+        afterEach(() => {
+            delete global.Plotly;
+            vi.unstubAllGlobals();
+        });
+
+        it('renderSpeedPlot renders Group A in orange and Group B in blue with solid lines', () => {
+            renderSpeedPlot();
+            expect(mockNewPlot).toHaveBeenCalled();
+            const data = mockNewPlot.mock.calls[0][1];
+            expect(data.length).toBe(3);
+
+            // Group A traces (orange, width 2)
+            const traceA1 = data.find(t => t.name === 'Lap 1');
+            const traceA2 = data.find(t => t.name === 'Lap 2');
+            expect(traceA1).toBeDefined();
+            expect(traceA1.line.color).toContain('251, 146, 60');
+            expect(traceA1.line.width).toBe(2);
+
+            expect(traceA2).toBeDefined();
+            expect(traceA2.line.color).toContain('251, 146, 60');
+
+            // Group B trace (blue, width 2, dash: 'solid')
+            const traceB1 = data.find(t => t.name === 'Lap 3 (B)');
+            expect(traceB1).toBeDefined();
+            expect(traceB1.line.color).toContain('56, 189, 248');
+            expect(traceB1.line.width).toBe(2);
+            expect(traceB1.line.dash).toBe('solid');
+
+            // Check indices recorded for both groups
+            expect(state.bottomPlotIndices['plot-area-speed']['lapA1']).toBeDefined();
+            expect(state.bottomPlotIndices['plot-area-speed']['lapB1']).toBeDefined();
+        });
+
+        it('renderSpeedPlot hides Group B when groupBVisibleMap is false', () => {
+            state.groupBVisibleMap = false;
+            renderSpeedPlot();
+            expect(mockNewPlot).toHaveBeenCalled();
+            const data = mockNewPlot.mock.calls[0][1];
+            expect(data.length).toBe(2);
+            expect(data.some(t => t.name.includes('(B)'))).toBe(false);
+        });
+
+        it('renderSpeedPlot hides Group A when groupAVisibleMap is false', () => {
+            state.groupAVisibleMap = false;
+            renderSpeedPlot();
+            expect(mockNewPlot).toHaveBeenCalled();
+            const data = mockNewPlot.mock.calls[0][1];
+            expect(data.length).toBe(1);
+            expect(data[0].name).toBe('Lap 3 (B)');
+            expect(data[0].line.color).toContain('56, 189, 248');
+        });
+
+        it('renderSpeedPlot purges when both groups are hidden', () => {
+            state.groupAVisibleMap = false;
+            state.groupBVisibleMap = false;
+            renderSpeedPlot();
+            expect(mockPurge).toHaveBeenCalledWith(speedEl);
+            expect(mockNewPlot).not.toHaveBeenCalled();
+        });
+
+        it('renderDeltaPlot renders Group A in orange and Group B in blue relative to reference lap', () => {
+            renderDeltaPlot();
+            expect(mockNewPlot).toHaveBeenCalled();
+            const data = mockNewPlot.mock.calls[0][1];
+            // lapA1 is refLap, so delta traces are lapA2 and lapB1
+            expect(data.length).toBe(2);
+
+            const traceA2 = data.find(t => t.name === 'Lap 2');
+            expect(traceA2).toBeDefined();
+            expect(traceA2.line.color).toContain('251, 146, 60');
+            expect(traceA2.line.width).toBe(2);
+
+            const traceB1 = data.find(t => t.name === 'Lap 3 (B)');
+            expect(traceB1).toBeDefined();
+            expect(traceB1.line.color).toContain('56, 189, 248');
+            expect(traceB1.line.width).toBe(2);
+            expect(traceB1.line.dash).toBe('solid');
+
+            // Check indices recorded for both groups
+            expect(state.bottomPlotIndices['plot-area-delta']['lapA2']).toBeDefined();
+            expect(state.bottomPlotIndices['plot-area-delta']['lapB1']).toBeDefined();
+        });
+
+        it('renderDeltaPlot hides Group B when groupBVisibleMap is false', () => {
+            state.groupBVisibleMap = false;
+            renderDeltaPlot();
+            expect(mockNewPlot).toHaveBeenCalled();
+            const data = mockNewPlot.mock.calls[0][1];
+            expect(data.length).toBe(1);
+            expect(data[0].name).toBe('Lap 2');
+        });
+
+        it('renderDeltaPlot hides Group A when groupAVisibleMap is false and only plots Group B against ref lap', () => {
+            state.groupAVisibleMap = false;
+            renderDeltaPlot();
+            expect(mockNewPlot).toHaveBeenCalled();
+            const data = mockNewPlot.mock.calls[0][1];
+            expect(data.length).toBe(1);
+            expect(data[0].name).toBe('Lap 3 (B)');
+            expect(data[0].line.color).toContain('56, 189, 248');
+        });
+
+        it('renderDeltaPlot purges when both groups are hidden', () => {
+            state.groupAVisibleMap = false;
+            state.groupBVisibleMap = false;
+            renderDeltaPlot();
+            expect(mockPurge).toHaveBeenCalledWith(deltaEl);
+            expect(mockNewPlot).not.toHaveBeenCalled();
         });
     });
 });

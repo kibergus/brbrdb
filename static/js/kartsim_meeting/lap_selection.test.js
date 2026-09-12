@@ -15,14 +15,14 @@
  * ==============================================================================
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds, setSort, selectTurnAndSwitchToMap } from './lap_selection.js';
+import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds, setSort, selectTurnAndSwitchToMap, getSessionColor, updateSessionSelectorColors, renderLapList, toggleSessionDropdown, selectSessionFromDropdown, SESSION_PALETTE, getSessionOrderIndex, compareLaps, getSortedLaps } from './lap_selection.js';
 import { setTrajectoryColorMode } from './map.js';
 import { state } from './state.js';
 import * as plotsSync from './plots_sync.js';
 
 vi.mock('./map.js', () => ({
     initMap: vi.fn(),
+    loadTrackPoints: vi.fn(),
     updateTrackLimitsVisibility: vi.fn(),
     updateDistanceMarker: vi.fn(),
     calculateBoundsZoom: vi.fn(() => 15),
@@ -647,7 +647,277 @@ describe('lap_selection.js showRightPanelTab and Report Mode', () => {
         expect(state.globalTelemetryXRange).toEqual([150, 250]);
         expect(fitBounds).toHaveBeenCalledTimes(3);
     });
+
+    describe('Session colors and Lap N styling', () => {
+        it('assigns colors from SESSION_PALETTE to sessions and handles "all"', () => {
+            expect(getSessionColor('all')).toBe('#94a3b8');
+            state.allSessionsData = [
+                { session_id: 'sess_1', session_name: 'Practice' },
+                { session_id: 'sess_2', session_name: 'Qualifying' }
+            ];
+            state.sessionColors = {};
+            expect(getSessionColor('sess_1')).toBe(SESSION_PALETTE[0]);
+            expect(getSessionColor('sess_2')).toBe(SESSION_PALETTE[1]);
+        });
+
+        it('updates session selector options and select background color', () => {
+            const mockOptions = [
+                { value: 'all', style: {} },
+                { value: 'sess_1', style: {}, dataset: {} },
+                { value: 'sess_2', style: {}, dataset: {} }
+            ];
+            const mockSelector = {
+                id: 'session-selector',
+                value: 'sess_1',
+                options: mockOptions,
+                style: {}
+            };
+            vi.stubGlobal('document', {
+                getElementById: vi.fn(id => id === 'session-selector' ? mockSelector : null)
+            });
+
+            updateSessionSelectorColors();
+
+            expect(mockOptions[0].style.backgroundColor).toBe('#0f172a');
+            expect(mockOptions[1].style.backgroundColor).toBe('#0f172a');
+            expect(mockOptions[1].style.color).toBe(SESSION_PALETTE[0]);
+            expect(mockOptions[2].style.backgroundColor).toBe('#0f172a');
+            expect(mockOptions[2].style.color).toBe(SESSION_PALETTE[1]);
+            expect(mockSelector.style.backgroundColor).toBe('#0f172a');
+            expect(mockSelector.style.color).toBe(SESSION_PALETTE[0]);
+        });
+
+        it('renders Lap N label with the session color in renderLapList', () => {
+            const container = {
+                id: 'lap-list',
+                innerHTML: '',
+                appendChild: vi.fn(el => {
+                    container.innerHTML += el.innerHTML;
+                })
+            };
+            const mockSelector = {
+                id: 'session-selector',
+                value: 'all',
+                options: [
+                    { value: 'all', style: {} },
+                    { value: 'sess_1', style: {}, dataset: {} },
+                    { value: 'sess_2', style: {}, dataset: {} }
+                ],
+                style: {}
+            };
+            vi.stubGlobal('document', {
+                getElementById: vi.fn(id => {
+                    if (id === 'lap-list') return container;
+                    if (id === 'session-selector') return mockSelector;
+                    return null;
+                }),
+                createElement: vi.fn(() => ({
+                    className: '',
+                    innerHTML: '',
+                    querySelectorAll: vi.fn(() => [])
+                }))
+            });
+
+            state.allSessionsData = [
+                {
+                    session_id: 'sess_1',
+                    session_name: 'Practice',
+                    laps: [{ lap_num: 1, lap_time: '50.123', is_valid: true }]
+                },
+                {
+                    session_id: 'sess_2',
+                    session_name: 'Qualifying',
+                    laps: [{ lap_num: 2, lap_time: '49.876', is_valid: true }]
+                }
+            ];
+            state.groupASelection = new Set();
+            state.groupBSelection = new Set();
+            state.sortMode = 'time';
+
+            renderLapList();
+
+            expect(container.innerHTML).toContain(`style="color: ${SESSION_PALETTE[0]}; font-weight: 600;">Lap 1</span>`);
+            expect(container.innerHTML).toContain(`style="color: ${SESSION_PALETTE[1]}; font-weight: 600;">Lap 2</span>`);
+        });
+
+        it('toggles session-dropdown open class', () => {
+            const classList = new Set();
+            const mockDropdown = {
+                id: 'session-dropdown',
+                classList: {
+                    toggle: vi.fn((cls) => {
+                        if (classList.has(cls)) classList.delete(cls);
+                        else classList.add(cls);
+                    }),
+                    contains: (cls) => classList.has(cls)
+                }
+            };
+            vi.stubGlobal('document', {
+                getElementById: vi.fn(id => id === 'session-dropdown' ? mockDropdown : null)
+            });
+
+            const stopPropagation = vi.fn();
+            toggleSessionDropdown({ stopPropagation });
+
+            expect(stopPropagation).toHaveBeenCalled();
+            expect(mockDropdown.classList.toggle).toHaveBeenCalledWith('open');
+        });
+
+        it('selects session from custom dropdown and updates selector', () => {
+            const mockDropdown = {
+                id: 'session-dropdown',
+                classList: {
+                    remove: vi.fn()
+                }
+            };
+            const mockSelector = {
+                id: 'session-selector',
+                value: 'all',
+                options: [
+                    { value: 'all', style: {} },
+                    { value: 'sess_1', style: {}, dataset: {} }
+                ],
+                style: {}
+            };
+            vi.stubGlobal('document', {
+                getElementById: vi.fn(id => {
+                    if (id === 'session-dropdown') return mockDropdown;
+                    if (id === 'session-selector') return mockSelector;
+                    return null;
+                })
+            });
+
+            selectSessionFromDropdown('sess_1');
+
+            expect(mockDropdown.classList.remove).toHaveBeenCalledWith('open');
+            expect(mockSelector.value).toBe('sess_1');
+            expect(state.selectedSessionId).toBe('sess_1');
+        });
+
+        it('updates session-dropdown button, label, and items in updateSessionSelectorColors', () => {
+            const mockBtn = { style: {} };
+            const mockLabel = { textContent: '' };
+            const mockItemAll = {
+                getAttribute: vi.fn(() => 'all'),
+                classList: { add: vi.fn(), remove: vi.fn() },
+                style: {}
+            };
+            const mockItemSess1 = {
+                getAttribute: vi.fn(() => 'sess_1'),
+                classList: { add: vi.fn(), remove: vi.fn() },
+                style: {},
+                dataset: { color: '#3b82f6' }
+            };
+            const mockMenu = {
+                querySelectorAll: vi.fn(() => [mockItemAll, mockItemSess1])
+            };
+            const mockSelector = {
+                id: 'session-selector',
+                value: 'sess_1',
+                options: [
+                    { value: 'all', textContent: 'All Sessions', style: {} },
+                    { value: 'sess_1', textContent: 'Practice 1', style: {}, dataset: { color: '#3b82f6' } }
+                ],
+                style: {}
+            };
+
+            vi.stubGlobal('document', {
+                getElementById: vi.fn(id => {
+                    if (id === 'session-selector') return mockSelector;
+                    if (id === 'session-dropdown-btn') return mockBtn;
+                    if (id === 'session-dropdown-current-label') return mockLabel;
+                    if (id === 'session-dropdown-menu') return mockMenu;
+                    return null;
+                })
+            });
+
+            updateSessionSelectorColors();
+
+            expect(mockBtn.style.backgroundColor).toBe('#0f172a');
+            expect(mockBtn.style.color).toBe('#3b82f6');
+            expect(mockLabel.textContent).toBe('Practice 1');
+            expect(mockItemSess1.classList.add).toHaveBeenCalledWith('active');
+            expect(mockItemAll.classList.remove).toHaveBeenCalledWith('active');
+            expect(mockItemSess1.style.backgroundColor).toBe('#1e293b');
+            expect(mockItemSess1.style.color).toBe('#3b82f6');
+            expect(mockItemAll.style.backgroundColor).toBe('#0f172a');
+            expect(mockItemAll.style.color).toBe('var(--text-primary, #f8fafc)');
+        });
+    });
+
+    describe('lap sorting by session and time', () => {
+        beforeEach(() => {
+            state.allSessionsData = [
+                {
+                    session_id: 'sess_practice',
+                    session_name: 'Practice',
+                    laps: [
+                        { lap_num: 2, lap_time: '52.000', is_valid: true },
+                        { lap_num: 1, lap_time: '55.000', is_valid: true }
+                    ]
+                },
+                {
+                    session_id: 'sess_race',
+                    session_name: 'Race',
+                    laps: [
+                        { lap_num: 1, lap_time: '50.000', is_valid: true },
+                        { lap_num: 2, lap_time: '51.000', is_valid: true }
+                    ]
+                }
+            ];
+            vi.stubGlobal('document', {
+                getElementById: vi.fn(() => null),
+                querySelectorAll: vi.fn(() => [])
+            });
+        });
+
+        it('resolves session order index from selector options or state.allSessionsData', () => {
+            expect(getSessionOrderIndex('sess_practice')).toBe(0);
+            expect(getSessionOrderIndex('sess_race')).toBe(1);
+            expect(getSessionOrderIndex('unknown')).toBe(999999);
+
+            const mockSelector = {
+                options: [
+                    { value: 'all' },
+                    { value: 'sess_race' },
+                    { value: 'sess_practice' }
+                ]
+            };
+            vi.stubGlobal('document', {
+                getElementById: vi.fn(id => id === 'session-selector' ? mockSelector : null)
+            });
+
+            // With custom selector order, sess_race is 0, sess_practice is 1
+            expect(getSessionOrderIndex('sess_race')).toBe(0);
+            expect(getSessionOrderIndex('sess_practice')).toBe(1);
+        });
+
+        it('splits laps by session when sorting by lap number (num mode)', () => {
+            state.sortMode = 'num';
+            const sorted = getSortedLaps();
+
+            expect(sorted.map(l => l.lapId)).toEqual([
+                'sess_practice-1',
+                'sess_practice-2',
+                'sess_race-1',
+                'sess_race-2'
+            ]);
+        });
+
+        it('compares laps across all sessions when sorting by time', () => {
+            state.sortMode = 'time';
+            const sorted = getSortedLaps();
+
+            expect(sorted.map(l => l.lapId)).toEqual([
+                'sess_race-1',     // 50.000
+                'sess_race-2',     // 51.000
+                'sess_practice-2', // 52.000
+                'sess_practice-1'  // 55.000
+            ]);
+        });
+    });
 });
+
 
 
 

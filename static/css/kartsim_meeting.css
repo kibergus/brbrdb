@@ -624,6 +624,26 @@ body {
     font-weight: 700;
 }
 
+#session-dropdown-menu {
+    background: #0f172a !important;
+    backdrop-filter: none !important;
+    border: 1px solid var(--border-color);
+}
+
+.session-dropdown-item {
+    background: #0f172a;
+    transition: background 0.15s ease;
+}
+
+.session-dropdown-item:hover {
+    background: #1e293b !important;
+}
+
+.session-dropdown-item.active {
+    background: #1e293b !important;
+    font-weight: 700;
+}
+
 .item-color-dot {
     width: 10px;
     height: 10px;

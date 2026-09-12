@@ -1456,16 +1456,21 @@ export function renderDeltaPlot() {
         state.bottomPlotIndices = state.bottomPlotIndices || {};
         state.bottomPlotIndices['plot-area-delta'] = {};
 
-        // Use the fastest selected lap in group A as the reference lap (respects sorting criteria like turn-by-turn)
-        const refLap = state.fastestGroupALap;
-        const refLapId = state.fastestGroupALapId;
+        // Use the fastest selected lap in group A as the reference lap (or fastest selected lap overall)
+        const refLap = state.fastestGroupALap || state.fastestSelectedLap;
+        const refLapId = state.fastestGroupALapId || state.fastestSelectedLapId || (refLap && (refLap.lapId || `${refLap.session_id}-${refLap.lap_num}`));
 
-        const lapsA = Array.from(state.groupASelection).map(id => {
+        const lapsA = state.groupAVisibleMap ? Array.from(state.groupASelection).map(id => {
             return { lapId: id, ...state.lapDataLookup[id] };
-        }).filter(l => l && l.points && l.points.length > 0);
+        }).filter(l => l && l.points && l.points.length > 0) : [];
 
-        if (!refLap || lapsA.length < 1) {
+        const lapsB = state.groupBVisibleMap ? Array.from(state.groupBSelection).map(id => {
+            return { lapId: id, ...state.lapDataLookup[id] };
+        }).filter(l => l && l.points && l.points.length > 0) : [];
+
+        if (!refLap || (lapsA.length < 1 && lapsB.length < 1)) {
             Plotly.purge(targetEl);
+            state.deltaPlotInitialized = false;
             return;
         }
 
@@ -1483,16 +1488,16 @@ export function renderDeltaPlot() {
 
         if (refStartTime === undefined) {
             Plotly.purge(targetEl);
+            state.deltaPlotInitialized = false;
             return;
         }
 
-        const lapsToDelta = sortLapsByTime(lapsA.filter(l => l.lapId !== refLapId));
-        lapsToDelta.forEach((lap, i) => {
+        const computeDeltaTrace = (lap) => {
             const x = [];
             const y = [];
             const lapAtStart = getPointAtDistance(lap, startDist, 'time');
             const lapStartTime = lapAtStart ? lapAtStart.time : lap.points[0].time;
-            if (lapStartTime === undefined) return;
+            if (lapStartTime === undefined) return null;
 
             let lastD = -1;
             const targetDists = [];
@@ -1528,12 +1533,38 @@ export function renderDeltaPlot() {
             }
 
             if (x.length > 0) {
-                const alpha = getLapAlpha(i, lapsToDelta.length);
-                state.bottomPlotIndices['plot-area-delta'][lap.lapId] = [data.length];
+                return { x, y };
+            }
+            return null;
+        };
+
+        const lapsToDeltaA = sortLapsByTime(lapsA.filter(l => l.lapId !== refLapId));
+        lapsToDeltaA.forEach((lap, i) => {
+            const traceData = computeDeltaTrace(lap);
+            if (traceData) {
+                const alpha = getLapAlpha(i, lapsToDeltaA.length);
+                state.bottomPlotIndices['plot-area-delta'][lap.lapId] = state.bottomPlotIndices['plot-area-delta'][lap.lapId] || [];
+                state.bottomPlotIndices['plot-area-delta'][lap.lapId].push(data.length);
                 data.push({
-                    x: x, y: y, mode: 'lines',
+                    x: traceData.x, y: traceData.y, mode: 'lines',
                     name: `Lap ${lap.lap_num}`,
                     line: { color: `rgba(251, 146, 60, ${alpha})`, width: 2 },
+                    hoverinfo: 'none'
+                });
+            }
+        });
+
+        const lapsToDeltaB = sortLapsByTime(lapsB.filter(l => l.lapId !== refLapId));
+        lapsToDeltaB.forEach((lap, i) => {
+            const traceData = computeDeltaTrace(lap);
+            if (traceData) {
+                const alpha = getLapAlpha(i, lapsToDeltaB.length, 0.8);
+                state.bottomPlotIndices['plot-area-delta'][lap.lapId] = state.bottomPlotIndices['plot-area-delta'][lap.lapId] || [];
+                state.bottomPlotIndices['plot-area-delta'][lap.lapId].push(data.length);
+                data.push({
+                    x: traceData.x, y: traceData.y, mode: 'lines',
+                    name: `Lap ${lap.lap_num} (B)`,
+                    line: { color: `rgba(56, 189, 248, ${alpha})`, width: 2, dash: 'solid' },
                     hoverinfo: 'none'
                 });
             }
@@ -1604,19 +1635,24 @@ export function renderSpeedPlot() {
         state.bottomPlotIndices = state.bottomPlotIndices || {};
         state.bottomPlotIndices['plot-area-speed'] = {};
 
-        const lapsA = Array.from(state.groupASelection).map(id => {
+        const lapsA = state.groupAVisibleMap ? Array.from(state.groupASelection).map(id => {
             return { lapId: id, ...state.lapDataLookup[id] };
-        }).filter(l => l && l.points && l.points.length > 0);
+        }).filter(l => l && l.points && l.points.length > 0) : [];
 
-        if (lapsA.length < 1) {
+        const lapsB = state.groupBVisibleMap ? Array.from(state.groupBSelection).map(id => {
+            return { lapId: id, ...state.lapDataLookup[id] };
+        }).filter(l => l && l.points && l.points.length > 0) : [];
+
+        if (lapsA.length < 1 && lapsB.length < 1) {
             Plotly.purge(targetEl);
+            state.speedPlotInitialized = false;
             return;
         }
 
         const maxDist = (state.trackData && state.trackData.lap_length) ? state.trackData.lap_length : 999999;
 
-        const lapsToSpeed = sortLapsByTime(lapsA);
-        lapsToSpeed.forEach((lap, i) => {
+        const lapsToSpeedA = sortLapsByTime(lapsA);
+        lapsToSpeedA.forEach((lap, i) => {
             const x = [];
             const y = [];
             const points = lap.points;
@@ -1632,12 +1668,42 @@ export function renderSpeedPlot() {
             }
 
             if (x.length > 0) {
-                const alpha = getLapAlpha(i, lapsToSpeed.length);
-                state.bottomPlotIndices['plot-area-speed'][lap.lapId] = [data.length];
+                const alpha = getLapAlpha(i, lapsToSpeedA.length);
+                state.bottomPlotIndices['plot-area-speed'][lap.lapId] = state.bottomPlotIndices['plot-area-speed'][lap.lapId] || [];
+                state.bottomPlotIndices['plot-area-speed'][lap.lapId].push(data.length);
                 data.push({
                     x: x, y: y, mode: 'lines',
                     name: `Lap ${lap.lap_num}`,
                     line: { color: `rgba(251, 146, 60, ${alpha})`, width: 2 },
+                    hoverinfo: 'none'
+                });
+            }
+        });
+
+        const lapsToSpeedB = sortLapsByTime(lapsB);
+        lapsToSpeedB.forEach((lap, i) => {
+            const x = [];
+            const y = [];
+            const points = lap.points;
+
+            for (let j = 0; j < points.length; j += 4) {
+                const p = points[j];
+                const d = p.dist;
+                if (d < 0) continue;
+                if (d > maxDist + 10) break;
+
+                x.push(d);
+                y.push(p.speed);
+            }
+
+            if (x.length > 0) {
+                const alpha = getLapAlpha(i, lapsToSpeedB.length, 0.8);
+                state.bottomPlotIndices['plot-area-speed'][lap.lapId] = state.bottomPlotIndices['plot-area-speed'][lap.lapId] || [];
+                state.bottomPlotIndices['plot-area-speed'][lap.lapId].push(data.length);
+                data.push({
+                    x: x, y: y, mode: 'lines',
+                    name: `Lap ${lap.lap_num} (B)`,
+                    line: { color: `rgba(56, 189, 248, ${alpha})`, width: 2, dash: 'solid' },
                     hoverinfo: 'none'
                 });
             }
@@ -1671,7 +1737,7 @@ export function renderSpeedPlot() {
             },
             annotations: [
                 {
-                    text: `Speed Analysis (Group A)`,
+                    text: `Speed Analysis`,
                     xref: 'paper', yref: 'paper', x: 0, y: 1.0,
                     showarrow: false, font: { size: 11, color: '#94a3b8' }, xanchor: 'left'
                 }

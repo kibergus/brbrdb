@@ -19,7 +19,7 @@
  * Main entry point for the kartsim meeting page.
  */
 import { state } from './state.js';
-import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, initReportInteractions, onSessionChange, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer } from './lap_selection.js';
+import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, initReportInteractions, onSessionChange, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, updateSessionSelectorColors, toggleSessionDropdown, selectSessionFromDropdown } from './lap_selection.js';
 import { setMapType, setTrajectoryColorMode, toggleTrajDropdown, updateDistanceMarker } from './map.js';
 import { stepDistance } from './telemetry.js';
 import { initExpandablePlots } from './plots_sync.js';
@@ -32,6 +32,8 @@ window.showStatsSubTab = showStatsSubTab;
 window.setSort = setSort;
 window.selectTurnAndSwitchToMap = selectTurnAndSwitchToMap;
 window.onSessionChange = onSessionChange;
+window.toggleSessionDropdown = toggleSessionDropdown;
+window.selectSessionFromDropdown = selectSessionFromDropdown;
 
 window.toggleAllLaps = toggleAllLaps;
 window.toggleGroupVisibility = toggleGroupVisibility;
@@ -51,6 +53,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const dropdown = document.getElementById('traj-color-dropdown');
         if (dropdown && !dropdown.contains(e.target)) {
             dropdown.classList.remove('open');
+        }
+        const sessionDropdown = document.getElementById('session-dropdown');
+        if (sessionDropdown && !sessionDropdown.contains(e.target)) {
+            sessionDropdown.classList.remove('open');
         }
     });
     const slider = document.getElementById('distance-slider');
@@ -113,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initExpandablePlots();
     initSidePanelResizer();
     initAllLapsHandlers();
+    updateSessionSelectorColors();
     initReportInteractions();
 
     if (isReportMode) {

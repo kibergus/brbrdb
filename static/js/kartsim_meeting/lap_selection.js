@@ -243,9 +243,210 @@ export function initSidePanelResizer() {
     });
 }
 
+export const SESSION_PALETTE = [
+    '#3b82f6', // Blue
+    '#10b981', // Emerald
+    '#a855f7', // Purple
+    '#f59e0b', // Amber
+    '#ec4899', // Pink
+    '#06b6d4', // Cyan
+    '#84cc16', // Lime
+    '#f97316', // Orange
+    '#6366f1', // Indigo
+    '#14b8a6', // Teal
+];
+
+export function getSessionColor(sessionId) {
+    if (!sessionId || sessionId === 'all') return '#94a3b8';
+
+    if (state.sessionColors && state.sessionColors[sessionId]) {
+        return state.sessionColors[sessionId];
+    }
+
+    const selector = typeof document !== 'undefined' ? document.getElementById('session-selector') : null;
+    if (selector && selector.options) {
+        let sessionIdx = 0;
+        for (let i = 0; i < selector.options.length; i++) {
+            const opt = selector.options[i];
+            if (opt.value === 'all') continue;
+            if (opt.value === sessionId) {
+                const color = (opt.dataset && opt.dataset.color) || SESSION_PALETTE[sessionIdx % SESSION_PALETTE.length];
+                state.sessionColors = state.sessionColors || {};
+                state.sessionColors[sessionId] = color;
+                return color;
+            }
+            sessionIdx++;
+        }
+    }
+
+    if (state.allSessionsData && state.allSessionsData.length > 0) {
+        const idx = state.allSessionsData.findIndex(s => s.session_id === sessionId);
+        if (idx !== -1) {
+            const color = SESSION_PALETTE[idx % SESSION_PALETTE.length];
+            state.sessionColors = state.sessionColors || {};
+            state.sessionColors[sessionId] = color;
+            return color;
+        }
+    }
+
+    return SESSION_PALETTE[0];
+}
+
+export function getSessionOrderIndex(sessionId) {
+    if (!sessionId || sessionId === 'all') return 999999;
+    const selector = typeof document !== 'undefined' ? document.getElementById('session-selector') : null;
+    if (selector && selector.options) {
+        let sessionIdx = 0;
+        for (let i = 0; i < selector.options.length; i++) {
+            const opt = selector.options[i];
+            if (opt.value === 'all') continue;
+            if (String(opt.value) === String(sessionId)) {
+                return sessionIdx;
+            }
+            sessionIdx++;
+        }
+    }
+
+    if (state.allSessionsData && state.allSessionsData.length > 0) {
+        const idx = state.allSessionsData.findIndex(s => String(s.session_id) === String(sessionId));
+        if (idx !== -1) return idx;
+    }
+
+    return 999999;
+}
+
+export function compareLaps(a, b) {
+    try {
+        if (state.sortMode === 'time') {
+            return parseLapTime(a.lap_time) - parseLapTime(b.lap_time);
+        } else if (state.sortMode === 'turn') {
+            const turnSelector = typeof document !== 'undefined' ? document.getElementById('turn-selector') : null;
+            const turnIdx = parseInt(turnSelector && turnSelector.value !== "" ? turnSelector.value : state.currentTurnIdx || 0);
+            return (getTurnTime(a, turnIdx) || 999999) - (getTurnTime(b, turnIdx) || 999999);
+        }
+        // Sorting by lap number: split by session first, then lap number
+        if (a.sessionId !== b.sessionId) {
+            const orderA = getSessionOrderIndex(a.sessionId);
+            const orderB = getSessionOrderIndex(b.sessionId);
+            if (orderA !== orderB) return orderA - orderB;
+            const nameCmp = (a.sessionName || "").localeCompare(b.sessionName || "");
+            if (nameCmp !== 0) return nameCmp;
+            const idCmp = String(a.sessionId || "").localeCompare(String(b.sessionId || ""));
+            if (idCmp !== 0) return idCmp;
+        }
+        if (a.lap_num !== b.lap_num) return a.lap_num - b.lap_num;
+        return String(a.lapId || "").localeCompare(String(b.lapId || ""));
+    } catch (e) {
+        console.error("Sort error:", e);
+        return 0;
+    }
+}
+
+export function toggleSessionDropdown(event) {
+    if (event && event.stopPropagation) event.stopPropagation();
+    const dropdown = document.getElementById('session-dropdown');
+    if (dropdown && dropdown.classList) {
+        dropdown.classList.toggle('open');
+    }
+}
+
+export function selectSessionFromDropdown(sessionId) {
+    const dropdown = document.getElementById('session-dropdown');
+    if (dropdown && dropdown.classList) {
+        dropdown.classList.remove('open');
+    }
+    const selector = document.getElementById('session-selector');
+    if (selector) {
+        selector.value = sessionId;
+    }
+    onSessionChange(sessionId);
+}
+
+export function updateSessionSelectorColors() {
+    if (typeof document === 'undefined') return;
+    const selector = document.getElementById('session-selector');
+    if (!selector || !selector.options) return;
+
+    let sessionIdx = 0;
+    for (let i = 0; i < selector.options.length; i++) {
+        const opt = selector.options[i];
+        if (opt.value === 'all') {
+            opt.style.backgroundColor = '#0f172a';
+            opt.style.color = 'var(--text-primary, #f8fafc)';
+            continue;
+        }
+        const color = (opt.dataset && opt.dataset.color) || SESSION_PALETTE[sessionIdx % SESSION_PALETTE.length];
+        state.sessionColors = state.sessionColors || {};
+        state.sessionColors[opt.value] = color;
+        opt.style.backgroundColor = '#0f172a';
+        opt.style.color = color;
+        sessionIdx++;
+    }
+
+    const curVal = selector.value;
+    const isAll = !curVal || curVal === 'all';
+    const activeColor = isAll ? 'var(--text-primary, #f8fafc)' : getSessionColor(curVal);
+
+    if (selector.style) {
+        selector.style.backgroundColor = '#0f172a';
+        selector.style.color = activeColor;
+    }
+
+    const dropdownBtn = document.getElementById('session-dropdown-btn');
+    if (dropdownBtn && dropdownBtn.style) {
+        dropdownBtn.style.backgroundColor = '#0f172a';
+        dropdownBtn.style.color = activeColor;
+    }
+
+    const currentLabel = document.getElementById('session-dropdown-current-label');
+    if (currentLabel) {
+        if (isAll) {
+            currentLabel.textContent = 'All Sessions';
+        } else {
+            const selectedOpt = Array.from(selector.options).find(o => o.value === curVal);
+            if (selectedOpt) {
+                currentLabel.textContent = (selectedOpt.textContent || '').trim();
+            } else {
+                const sessionObj = state.allSessionsData && state.allSessionsData.find(s => s.session_id === curVal);
+                if (sessionObj) {
+                    currentLabel.textContent = sessionObj.session_name;
+                }
+            }
+        }
+    }
+
+    const dropdownMenu = document.getElementById('session-dropdown-menu');
+    if (dropdownMenu && dropdownMenu.querySelectorAll) {
+        const items = dropdownMenu.querySelectorAll('.dropdown-item');
+        if (items) {
+            items.forEach(item => {
+                const sessId = item.getAttribute('data-session-id');
+                const isActive = sessId === curVal || (isAll && sessId === 'all');
+                if (item.classList) {
+                    if (isActive) {
+                        item.classList.add('active');
+                    } else {
+                        item.classList.remove('active');
+                    }
+                }
+                if (item.style) {
+                    item.style.backgroundColor = isActive ? '#1e293b' : '#0f172a';
+                    if (sessId && sessId !== 'all') {
+                        const itemColor = (item.dataset && item.dataset.color) || getSessionColor(sessId);
+                        item.style.color = itemColor;
+                    } else if (sessId === 'all') {
+                        item.style.color = 'var(--text-primary, #f8fafc)';
+                    }
+                }
+            });
+        }
+    }
+}
+
 export function onSessionChange(sessionId) {
     state.selectedSessionId = sessionId;
     state.mapInitialized = false;
+    updateSessionSelectorColors();
     debouncedUpdateURL();
     loadTrackPoints(sessionId);
 }
@@ -789,6 +990,7 @@ export function setSort(mode, turnIdx = undefined) {
 export function renderLapList() {
     const lapList = document.getElementById('lap-list');
     if (!lapList) return;
+    updateSessionSelectorColors();
     lapList.innerHTML = '';
 
     let allLaps = [];
@@ -805,22 +1007,7 @@ export function renderLapList() {
         });
     });
 
-    allLaps.sort((a, b) => {
-        try {
-            if (state.sortMode === 'time') {
-                return parseLapTime(a.lap_time) - parseLapTime(b.lap_time);
-            } else if (state.sortMode === 'turn') {
-                const turnSelector = document.getElementById('turn-selector');
-                const turnIdx = parseInt(turnSelector && turnSelector.value !== "" ? turnSelector.value : state.currentTurnIdx || 0);
-                return (getTurnTime(a, turnIdx) || 999999) - (getTurnTime(b, turnIdx) || 999999);
-            }
-            if (a.lap_num !== b.lap_num) return a.lap_num - b.lap_num;
-            return (a.sessionName || "").localeCompare(b.sessionName || "");
-        } catch (e) {
-            console.error("Sort error:", e);
-            return 0;
-        }
-    });
+    allLaps.sort(compareLaps);
 
     if (allLaps.length === 0) {
         lapList.innerHTML = '<div style="padding: 1rem; text-align: center; opacity: 0.5;">No valid laps found</div>';
@@ -832,6 +1019,7 @@ export function renderLapList() {
             const lapId = lap.lapId;
             const isInA = state.groupASelection.has(lapId);
             const isInB = state.groupBSelection.has(lapId);
+            const sessionColor = getSessionColor(lap.sessionId);
 
             const lapItem = document.createElement('div');
             lapItem.className = 'lap-item';
@@ -853,10 +1041,9 @@ export function renderLapList() {
                         <input type="checkbox" id="chk-b-${lapId}" ${isInB ? 'checked' : ''}>
                     </div>
                     <label for="chk-a-${lapId}" class="${lap.is_valid ? 'lap-valid' : 'lap-invalid'}" style="flex: 1; margin-left: 0.25rem;">
-                        <span>Lap ${lap.lap_num}</span>
+                        <span style="color: ${sessionColor}; font-weight: 600;">Lap ${lap.lap_num}</span>
                         <span class="lap-time">${timeLabel}</span>
                     </label>
-                    <div class="lap-indicator" id="ind-${lapId}" style="width: 8px; height: 8px; border-radius: 50%; border: 1px solid var(--border-color); background: ${state.baseColor};"></div>
                 `;
                 
             const checkboxes = lapItem.querySelectorAll('input[type="checkbox"]');
@@ -912,13 +1099,6 @@ export function highlightLap(lapId, active) {
                          (state.groupBSelection && state.groupBSelection.has(lapId) && state.groupBVisibleMap);
     
     const reallyActive = active && isLapVisible;
-
-    const indicator = document.getElementById('ind-' + lapId);
-    if (indicator) {
-        indicator.style.background = reallyActive ? state.highlightColor : state.baseColor;
-        indicator.style.transform = reallyActive ? 'scale(1.5)' : 'scale(1)';
-        indicator.style.transition = 'all 0.2s';
-    }
 
     // Map polyline highlighting and dimming
     const lapIds = Object.keys(state.lapPolylines);
@@ -1027,13 +1207,16 @@ function highlightBottomPlotTraces(plotId, activeLapId) {
         if (trace.originalColor === undefined && trace.line && trace.line.color) {
             trace.originalColor = trace.line.color;
         }
+        if (trace.originalWidth === undefined && trace.line && trace.line.width) {
+            trace.originalWidth = trace.line.width;
+        }
 
         const isActiveTrace = targetIndices.includes(i);
-        const isGroupB = trace.line && trace.line.dash === 'dash';
+        const isGroupB = (trace.line && trace.line.dash === 'dash') || (trace.name && trace.name.includes('(B)'));
 
         if (activeLapId === null) {
             opacities.push(1.0);
-            widths.push(isGroupB ? 1.5 : 2.0);
+            widths.push(trace.originalWidth !== undefined ? trace.originalWidth : (isGroupB ? 1.5 : 2.0));
             colors.push(trace.originalColor || (trace.line && trace.line.color));
         } else if (isActiveTrace) {
             opacities.push(1.0);
@@ -1076,22 +1259,7 @@ export function getSortedLaps() {
         });
     });
 
-    allLaps.sort((a, b) => {
-        try {
-            if (state.sortMode === 'time') {
-                return parseLapTime(a.lap_time) - parseLapTime(b.lap_time);
-            } else if (state.sortMode === 'turn') {
-                const turnSelector = document.getElementById('turn-selector');
-                const turnIdx = parseInt(turnSelector && turnSelector.value !== "" ? turnSelector.value : state.currentTurnIdx || 0);
-                return (getTurnTime(a, turnIdx) || 999999) - (getTurnTime(b, turnIdx) || 999999);
-            }
-            if (a.lap_num !== b.lap_num) return a.lap_num - b.lap_num;
-            return (a.sessionName || "").localeCompare(b.sessionName || "");
-        } catch (e) {
-            console.error("Sort error:", e);
-            return 0;
-        }
-    });
+    allLaps.sort(compareLaps);
     return allLaps;
 }
 
