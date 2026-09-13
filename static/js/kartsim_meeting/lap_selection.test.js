@@ -15,6 +15,7 @@
  * ==============================================================================
  */
 
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds, setSort, selectTurnAndSwitchToMap, getSessionColor, updateSessionSelectorColors, renderLapList, toggleSessionDropdown, selectSessionFromDropdown, SESSION_PALETTE, getSessionOrderIndex, compareLaps, getSortedLaps } from './lap_selection.js';
 import { setTrajectoryColorMode } from './map.js';
 import { state } from './state.js';

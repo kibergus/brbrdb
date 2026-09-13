@@ -24,6 +24,34 @@ import { state } from './state.js';
 let updateTimeout = null;
 
 /**
+ * Encodes a lapId into a short index-based notation (e.g. "0_4" for 4th lap of 1st session)
+ * if session data is available, otherwise returns lapId.
+ */
+export function formatLapForUrl(lapId) {
+    const lap = state.lapDataLookup ? state.lapDataLookup[lapId] : null;
+    if (lap && state.allSessionsData && state.allSessionsData.length > 0) {
+        const sIdx = state.allSessionsData.findIndex(s => s.session_id === lap.session_id);
+        if (sIdx !== -1 && lap.lap_num !== undefined) {
+            return `${sIdx}_${lap.lap_num}`;
+        }
+    }
+    return lapId;
+}
+
+/**
+ * Compares two short lap keys (e.g. "0_4", "1_10") in session-index and lap-number order.
+ */
+export function compareShortLapKeys(a, b) {
+    const [sA, lA] = a.split('_').map(Number);
+    const [sB, lB] = b.split('_').map(Number);
+    if (!isNaN(sA) && !isNaN(sB)) {
+        if (sA !== sB) return sA - sB;
+        if (!isNaN(lA) && !isNaN(lB)) return lA - lB;
+    }
+    return a.localeCompare(b);
+}
+
+/**
  * Debounces URL updates to ensure smooth scrolling/dragging performance.
  */
 export function debouncedUpdateURL() {
@@ -58,14 +86,16 @@ export function updateURL() {
         // 2. Group A & B Lap Selection
         if (state.groupASelection) {
             if (state.groupASelection.size > 0) {
-                params.set('lapsA', Array.from(state.groupASelection).join(','));
+                const formatted = Array.from(state.groupASelection).map(formatLapForUrl).sort(compareShortLapKeys);
+                params.set('lapsA', formatted.join(','));
             } else {
                 params.set('lapsA', 'none');
             }
         }
         if (state.groupBSelection) {
             if (state.groupBSelection.size > 0) {
-                params.set('lapsB', Array.from(state.groupBSelection).join(','));
+                const formatted = Array.from(state.groupBSelection).map(formatLapForUrl).sort(compareShortLapKeys);
+                params.set('lapsB', formatted.join(','));
             } else {
                 params.set('lapsB', 'none');
             }

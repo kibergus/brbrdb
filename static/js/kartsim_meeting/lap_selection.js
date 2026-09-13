@@ -1041,7 +1041,7 @@ export function renderLapList() {
                         <input type="checkbox" id="chk-b-${lapId}" ${isInB ? 'checked' : ''}>
                     </div>
                     <label for="chk-a-${lapId}" class="${lap.is_valid ? 'lap-valid' : 'lap-invalid'}" style="flex: 1; margin-left: 0.25rem;">
-                        <span style="color: ${sessionColor}; font-weight: 600;">Lap ${lap.lap_num}</span>
+                        <span style="color: ${sessionColor}; font-weight: 600;">${lap.is_outlap ? 'Outlap' : `Lap ${lap.lap_num}`}</span>
                         <span class="lap-time">${timeLabel}</span>
                     </label>
                 `;
@@ -1664,11 +1664,11 @@ export function selectLaps(lapsA, lapsB) {
             const arr = Array.isArray(lapsA) ? lapsA : String(lapsA).split(',');
             const requested = new Set(arr.map(s => String(s).trim()).filter(Boolean));
             if (state.allSessionsData && state.allSessionsData.length > 0) {
-                state.allSessionsData.forEach(session => {
+                state.allSessionsData.forEach((session, sIdx) => {
                     if (!session.laps) return;
                     session.laps.forEach(lap => {
                         const lapId = `${session.session_id}-${lap.lap_num}`;
-                        if (matchesRequestedLap(requested, lapId, session, lap)) {
+                        if (matchesRequestedLap(requested, lapId, session, lap, sIdx)) {
                             state.groupASelection.add(lapId);
                         }
                     });
@@ -1686,11 +1686,11 @@ export function selectLaps(lapsA, lapsB) {
             const arr = Array.isArray(lapsB) ? lapsB : String(lapsB).split(',');
             const requested = new Set(arr.map(s => String(s).trim()).filter(Boolean));
             if (state.allSessionsData && state.allSessionsData.length > 0) {
-                state.allSessionsData.forEach(session => {
+                state.allSessionsData.forEach((session, sIdx) => {
                     if (!session.laps) return;
                     session.laps.forEach(lap => {
                         const lapId = `${session.session_id}-${lap.lap_num}`;
-                        if (matchesRequestedLap(requested, lapId, session, lap)) {
+                        if (matchesRequestedLap(requested, lapId, session, lap, sIdx)) {
                             state.groupBSelection.add(lapId);
                         }
                     });
@@ -1827,14 +1827,14 @@ export function resetReportView(e) {
     const customLapsB = new Set(arrB.map(id => String(id).trim()));
 
     if (state.allSessionsData) {
-        state.allSessionsData.forEach(session => {
+        state.allSessionsData.forEach((session, sIdx) => {
             if (!session.laps) return;
             session.laps.forEach(lap => {
                 const lapId = `${session.session_id}-${lap.lap_num}`;
-                if (matchesRequestedLap(customLapsA, lapId, session, lap)) {
+                if (matchesRequestedLap(customLapsA, lapId, session, lap, sIdx)) {
                     state.groupASelection.add(lapId);
                 }
-                if (matchesRequestedLap(customLapsB, lapId, session, lap)) {
+                if (matchesRequestedLap(customLapsB, lapId, session, lap, sIdx)) {
                     state.groupBSelection.add(lapId);
                 }
             });

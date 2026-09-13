@@ -13,10 +13,11 @@
 # limitations under the License.
 # ==============================================================================
 
+from pathlib import Path
 import json
 import pytest
 from mcp.server.fastmcp import Image
-from mcp_server import server
+from mcp_server import server, image_tools
 
 
 def test_list_sessions_all() -> None:
@@ -51,7 +52,7 @@ def test_list_sessions_filtered_by_driver() -> None:
 def test_get_track_info_success() -> None:
     info = server.get_track_info("Lydd")
     assert isinstance(info, dict)
-    assert info["track_name"] == "Lydd Karting 2026"
+    assert info["track_name"] == "Lydd"
     assert info["lap_length"] > 0
     assert isinstance(info["sector_end"], list)
     assert len(info["sector_end"]) > 0
@@ -190,3 +191,24 @@ def test_get_session_consistency_image() -> None:
     assert isinstance(res, Image)
     img_bytes = res.data
     assert img_bytes is not None and img_bytes.startswith(b'\x89PNG\r\n\x1a\n')
+
+
+def test_extract_raw_lap_data_with_outlap(tmp_path: Path) -> None:
+    csv_content = """Format,RaceTools CSV
+Driver name,Alexey
+
+Time,Latitude,Longitude,Record,Lap,Lap Distance (m),Speed (km/h)
+2026-09-12T11:02:00.000Z,50.934,0.907,1,1,117.2,30.0
+2026-09-12T11:02:30.000Z,50.934,0.907,2,1,1040.0,75.0
+2026-09-12T11:02:40.000Z,50.934,0.907,3,2,0.0,70.0
+2026-09-12T11:03:28.409Z,50.934,0.907,4,2,1040.0,72.0
+"""
+    test_file = tmp_path / "outlap_extract_test.csv"
+    test_file.write_text(csv_content)
+
+    # Request normalized Lap 1 (flying lap 1, which corresponds to raw CSV Lap 2)
+    data = image_tools.extract_raw_lap_data(str(test_file), [1], ["Speed (km/h)"])
+    assert 1 in data
+    assert len(data[1]['dist']) == 2
+    assert data[1]['dist'] == [0.0, 1040.0]
+    assert data[1]['Speed (km/h)'] == [70.0, 72.0]

@@ -108,12 +108,12 @@ export function renderStatsPlots() {
     state.groupASelection.forEach(lapId => {
       const lap = state.lapDataLookup[lapId];
       if (lap) {
-        const sessionId = lapId.split('-')[0];
+        const sessionId = lap.session_id || lapId.slice(0, lapId.lastIndexOf('-'));
         const session = state.allSessionsData.find(s => s.session_id == sessionId);
         selectedLaps.push({
           ...lap,
           group: 'A',
-          session_name: session ? session.session_name : '',
+          session_name: session ? session.session_name : (lap.session_name || ''),
           lapId: lapId
         });
       }
@@ -125,12 +125,12 @@ export function renderStatsPlots() {
     state.groupBSelection.forEach(lapId => {
       const lap = state.lapDataLookup[lapId];
       if (lap) {
-        const sessionId = lapId.split('-')[0];
+        const sessionId = lap.session_id || lapId.slice(0, lapId.lastIndexOf('-'));
         const session = state.allSessionsData.find(s => s.session_id == sessionId);
         selectedLaps.push({
           ...lap,
           group: 'B',
-          session_name: session ? session.session_name : '',
+          session_name: session ? session.session_name : (lap.session_name || ''),
           lapId: lapId
         });
       }

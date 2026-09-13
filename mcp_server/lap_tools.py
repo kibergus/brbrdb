@@ -73,6 +73,9 @@ def _load_all_telemetry_laps(
                 if driver_name.lower() not in csv_driver.lower():
                     continue
 
+            df_official = db.load(leagues=s.league, classes=s.class_name, date=s.date, track=track)
+            location_handlers._override_with_official_laps(laps, df_official, s.session_id, csv_driver)
+
             location_handlers._compute_lap_segments(laps, sector_ends, turns_def)
 
             speed_col = None
@@ -93,18 +96,24 @@ def _load_all_telemetry_laps(
             if steering_col:
                 channels_to_fetch.append(steering_col)
 
-            lap_numbers = [lap_item['lap_num'] for lap_item in laps]
+            lap_numbers = [
+                lap_item['lap_num']
+                for lap_item in laps
+                if not lap_item.get('is_outlap') and lap_item.get('is_valid', True)
+            ]
 
             raw_channel_data: dict[int, dict[str, list[float]]] = {}
             if channels_to_fetch:
-                try:
-                    raw_channel_data = image_tools.extract_raw_lap_data(csv_path, lap_numbers, channels_to_fetch)
-                except ValueError:
-                    pass
+                raw_channel_data = image_tools.extract_raw_lap_data(
+                    csv_path, lap_numbers, channels_to_fetch, parsed_laps=laps
+                )
 
             driver_label = csv_driver or (session_drivers[0] if session_drivers else 'Unknown')
 
             for l_item in laps:
+                if l_item.get('is_outlap') or not l_item.get('is_valid', True):
+                    continue
+
                 l_num = l_item['lap_num']
                 dists = l_item.get('dists', [])
                 times = l_item.get('times', [])
@@ -112,7 +121,21 @@ def _load_all_telemetry_laps(
                 if not is_lap_valid(np.array(dists), turns_def, lap_length):
                     continue
 
-                duration = times[-1] - times[0]
+                duration = times[-1] - times[0] if len(times) > 1 else 0.0
+                time_s = None
+                lap_time_str = l_item.get('lap_time')
+                if lap_time_str and lap_time_str != 'Unknown':
+                    try:
+                        if ':' in lap_time_str:
+                            p = lap_time_str.split(':')
+                            time_s = round(float(p[0]) * 60 + float(p[1]), 3)
+                        else:
+                            time_s = round(float(lap_time_str), 3)
+                    except (ValueError, TypeError):
+                        pass
+                if time_s is None or time_s <= 0:
+                    time_s = round(l_item.get('duration') or duration, 3)
+
                 ch_lap = raw_channel_data.get(l_num, {})
 
                 sp_vals = ch_lap.get(speed_col, []) if speed_col else []
@@ -138,7 +161,7 @@ def _load_all_telemetry_laps(
                     'date': s.date,
                     'driver_name': driver_label,
                     'lap': l_num,
-                    'time_s': round(duration, 3),
+                    'time_s': time_s,
                     'points': points,
                     'sector_times': l_item.get('sector_times', []),
                     'turn_times': l_item.get('turn_times', []),

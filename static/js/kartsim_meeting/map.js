@@ -554,13 +554,26 @@ export function clearLapPolylines() {
     state.lapPolylines = {};
 }
 
-export function matchesRequestedLap(requestedSet, lapId, session, lap) {
+export function matchesRequestedLap(requestedSet, lapId, session, lap, sIdx = null) {
     if (!requestedSet || requestedSet.size === 0) return false;
     if (requestedSet.has(lapId)) return true;
+
+    let sessionIndex = sIdx;
+    if ((sessionIndex === null || sessionIndex === undefined) && state.allSessionsData && session) {
+        sessionIndex = state.allSessionsData.findIndex(s => s === session || s.session_id === session.session_id);
+    }
+
     for (const req of requestedSet) {
         if (!req) continue;
         const cleaned = String(req).replace(/\.csv(?=-|\b)/i, '').replace(/\.csv$/i, '').trim();
         if (cleaned === lapId) return true;
+
+        // Check index notation: e.g. "0_4" or "0-4" (session index _ lap number)
+        if (sessionIndex !== -1 && sessionIndex !== null && sessionIndex !== undefined && lap && lap.lap_num !== undefined) {
+            if (cleaned === `${sessionIndex}_${lap.lap_num}` || cleaned === `${sessionIndex}-${lap.lap_num}`) {
+                return true;
+            }
+        }
 
         const reqParts = cleaned.split('-');
         const reqLapNum = parseInt(reqParts[reqParts.length - 1], 10);
@@ -722,7 +735,7 @@ export function loadTrackPoints(overrideSessionId) {
                     precalculateLapData(lap);
 
                     if (hasCustomLapsA) {
-                        if (matchesRequestedLap(customLapsA, lapId, session, lap)) {
+                        if (matchesRequestedLap(customLapsA, lapId, session, lap, sIdx)) {
                             state.groupASelection.add(lapId);
                         }
                     } else {
@@ -731,7 +744,7 @@ export function loadTrackPoints(overrideSessionId) {
                         }
                     }
                     if (hasCustomLapsB) {
-                        if (matchesRequestedLap(customLapsB, lapId, session, lap)) {
+                        if (matchesRequestedLap(customLapsB, lapId, session, lap, sIdx)) {
                             state.groupBSelection.add(lapId);
                         }
                     } else {

@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { state } from './state.js';
-import { addTrackMarker, addTrackMarkerAtDistance, initTrackMarkers, clearLapPolylines, calculateSegmentColor, setTrajectoryColorMode, loadBaseColumnsForSessions, hasBrakeChannel, loadTrackPoints, LAP_PALETTE } from './map.js';
+import { addTrackMarker, addTrackMarkerAtDistance, initTrackMarkers, clearLapPolylines, calculateSegmentColor, setTrajectoryColorMode, loadBaseColumnsForSessions, hasBrakeChannel, loadTrackPoints, LAP_PALETTE, matchesRequestedLap } from './map.js';
 
 function createMockElement(tagName = 'div') {
     const children = [];
@@ -522,6 +522,42 @@ describe('loadTrackPoints default color mode', () => {
 
         global.window = oldWindow;
         global.document = oldDocument;
+    });
+
+    describe('matchesRequestedLap with index notation', () => {
+        const session0 = { session_id: 'club100/cadet/2026-09-12/Lydd/09_48_cadet_group_b' };
+        const session1 = { session_id: 'club100_south/cadet_lw/2026-09-12/Lydd/11_02_practice' };
+        const lap0_4 = { lap_num: 4 };
+        const lap1_4 = { lap_num: 4 };
+        const lap1_2 = { lap_num: 2 };
+
+        beforeEach(() => {
+            state.allSessionsData = [session0, session1];
+        });
+
+        it('matches by session index and lap number: "0_4"', () => {
+            const requested = new Set(['0_4']);
+            expect(matchesRequestedLap(requested, 'id0-4', session0, lap0_4, 0)).toBe(true);
+            expect(matchesRequestedLap(requested, 'id1-4', session1, lap1_4, 1)).toBe(false);
+            expect(matchesRequestedLap(requested, 'id1-2', session1, lap1_2, 1)).toBe(false);
+        });
+
+        it('matches by session index and lap number without explicit sIdx passed', () => {
+            const requested = new Set(['1_2']);
+            expect(matchesRequestedLap(requested, 'id0-4', session0, lap0_4)).toBe(false);
+            expect(matchesRequestedLap(requested, 'id1-2', session1, lap1_2)).toBe(true);
+        });
+
+        it('matches by hyphen index notation: "1-2"', () => {
+            const requested = new Set(['1-2']);
+            expect(matchesRequestedLap(requested, 'id1-2', session1, lap1_2)).toBe(true);
+            expect(matchesRequestedLap(requested, 'id0-4', session0, lap0_4)).toBe(false);
+        });
+
+        it('maintains backward compatibility with full lapId', () => {
+            const requested = new Set(['id0-4']);
+            expect(matchesRequestedLap(requested, 'id0-4', session0, lap0_4)).toBe(true);
+        });
     });
 });
 

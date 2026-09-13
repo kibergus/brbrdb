@@ -26,6 +26,7 @@ import numpy as np
 
 from database import db
 from mcp_server import lap_tools
+import location_handlers
 
 # Use non-interactive Agg backend to render images in headless server environment without GUI dependencies
 matplotlib.use('Agg')
@@ -64,7 +65,8 @@ def find_telemetry_csv(session_id: str, track: str, date: str) -> str:
 def extract_raw_lap_data(
     csv_path: str,
     laps: list[int],
-    channels: list[str]
+    channels: list[str],
+    parsed_laps: list[dict] | None = None
 ) -> dict[int, dict[str, list[float]]]:
     """Read CSV file and extract raw distance, time, and requested channel values per lap."""
     with open(csv_path, 'r', encoding='utf-8') as f:
@@ -110,7 +112,36 @@ def extract_raw_lap_data(
         if not is_delta_time_ch(ch):
             channel_col_map[ch] = find_header_col(ch)
 
-    lap_set = set(laps)
+    if parsed_laps is None:
+        parsed_laps, _, csv_driver = location_handlers.parse_telemetry_csv(csv_path)
+        csv_file = os.path.basename(csv_path)
+        tel_dir = os.path.dirname(csv_path)
+        meeting_dir = os.path.dirname(tel_dir)
+        sessions = [s for s in db.find_sessions() if s.meeting_dir == meeting_dir]
+        if sessions:
+            matching_sid = location_handlers._match_session(csv_file, sessions)
+            if matching_sid:
+                s0 = next((s for s in sessions if s.session_id == matching_sid), sessions[0])
+                df_official = db.load(leagues=s0.league, classes=s0.class_name, date=s0.date, track=s0.track)
+                location_handlers._override_with_official_laps(parsed_laps, df_official, matching_sid, csv_driver)
+
+    norm_to_raw: dict[int, int] = {}
+    raw_laps_present: set[int] = set()
+    for plap in parsed_laps:
+        norm_to_raw[plap['lap_num']] = plap.get('raw_lap_num', plap['lap_num'])
+        if 'raw_lap_num' in plap:
+            raw_laps_present.add(plap['raw_lap_num'])
+
+    raw_to_requested: dict[int, list[int]] = {}
+    for l_num in laps:
+        if l_num in norm_to_raw:
+            raw_target = norm_to_raw[l_num]
+        elif l_num in raw_laps_present:
+            raw_target = l_num
+        else:
+            raw_target = l_num
+        raw_to_requested.setdefault(raw_target, []).append(l_num)
+
     raw_lap_data: dict[int, dict[str, list[float]]] = {
         l_num: {'dist': [], 'time': []} for l_num in laps
     }
@@ -124,22 +155,23 @@ def extract_raw_lap_data(
             continue
         try:
             lap_val = int(row[lap_idx])
-            if lap_val not in lap_set:
+            if lap_val not in raw_to_requested:
                 continue
 
             dist_val = float(row[dist_idx])
             time_str = row[time_idx]
             time_val = _parse_time_seconds(time_str)
 
-            raw_lap_data[lap_val]['dist'].append(dist_val)
-            raw_lap_data[lap_val]['time'].append(time_val)
+            for req_l_num in raw_to_requested[lap_val]:
+                raw_lap_data[req_l_num]['dist'].append(dist_val)
+                raw_lap_data[req_l_num]['time'].append(time_val)
 
-            for ch in channels:
-                if not is_delta_time_ch(ch):
-                    c_idx = header.index(channel_col_map[ch])
-                    val_str = row[c_idx].strip()
-                    val = float(val_str) if val_str != '' else np.nan
-                    raw_lap_data[lap_val][ch].append(val)
+                for ch in channels:
+                    if not is_delta_time_ch(ch):
+                        c_idx = header.index(channel_col_map[ch])
+                        val_str = row[c_idx].strip()
+                        val = float(val_str) if val_str != '' else np.nan
+                        raw_lap_data[req_l_num][ch].append(val)
         except (ValueError, IndexError):
             continue
 

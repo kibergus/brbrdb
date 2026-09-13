@@ -1,6 +1,6 @@
 {% extends "layout.html" %}
 
-{% block title %}{{ date }} - {{ track }}{% if track_conditions %} ({{ track_conditions }}){% endif %}{% if is_report_mode and report_title %} - {{ report_title }}{% endif %} - BrBrDb{% endblock %}
+{% block title %}{% if date %}{{ date }} - {% endif %}{{ track }}{% if track_conditions %} ({{ track_conditions }}){% endif %}{% if is_report_mode and report_title %} - {{ report_title }}{% endif %} - BrBrDb{% endblock %}
 
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/kartsim_meeting.css') }}">
@@ -11,11 +11,13 @@
 
 {% block breadcrumb %}
 <a href="{{ url_for('league_list') }}">Leagues</a> /
+{% if league and class_name %}
 <a href="{{ url_for('league_view', league=league) }}">{{ get_league_name(league) }}</a> /
 <a href="{{ url_for('class_view', league=league, class_name=class_name) }}">
     {{get_class_info(class_name).name}}
 </a> /
-{{ date }} - {{ track }}{% if track_conditions %} ({{ track_conditions }}){% endif %}{% if is_report_mode and report_title %} / <span style="color: var(--accent);">Report: {{ report_title }}</span>{% endif %}
+{% endif %}
+{% if date %}{{ date }} - {% endif %}{{ track }}{% if track_conditions %} ({{ track_conditions }}){% endif %}{% if is_report_mode and report_title %} / <span style="color: var(--accent);">Report: {{ report_title }}</span>{% endif %}
 {% endblock %}
 
 {% block content %}
@@ -458,7 +460,7 @@
 
 <script>
     window.KART_CONFIG = {
-        getTrackPointsUrl: "{{ url_for('location.get_track_points', league=league, class_name=class_name, date=date, track=track, **({'track_conditions': track_conditions} if track_conditions else {})) | safe }}",
+        getTrackPointsUrl: "{{ get_track_points_url | safe }}",
         getTrackDataUrl: "{{ url_for('location.get_track_data', track=track) | safe }}",
         trackName: "{{ track }}",
         sessionId: "{{ selected_session_id or '' }}",

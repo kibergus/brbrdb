@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { updateURL } from './url_sync.js';
+import { updateURL, formatLapForUrl, compareShortLapKeys } from './url_sync.js';
 import { state } from './state.js';
 
 describe('url_sync.js updateURL', () => {
@@ -26,6 +26,8 @@ describe('url_sync.js updateURL', () => {
         state.mapInitialized = true;
         state.groupASelection = new Set();
         state.groupBSelection = new Set();
+        state.allSessionsData = [];
+        state.lapDataLookup = {};
         mockReplaceState = vi.fn();
 
         vi.stubGlobal('window', {
@@ -52,7 +54,7 @@ describe('url_sync.js updateURL', () => {
         expect(urlCall).toContain('lapsB=none');
     });
 
-    it('sets lapsA and lapsB comma-separated lists when laps are selected', () => {
+    it('sets lapsA and lapsB comma-separated lists when laps are selected without sessions data', () => {
         state.groupASelection.add('lap-1');
         state.groupASelection.add('lap-2');
         state.groupBSelection.add('lap-3');
@@ -63,6 +65,43 @@ describe('url_sync.js updateURL', () => {
         const urlCall = mockReplaceState.mock.calls[0][2];
         expect(urlCall).toContain('lapsA=lap-1%2Clap-2');
         expect(urlCall).toContain('lapsB=lap-3');
+    });
+
+    it('encodes laps using session index and lap number when sessions data is available', () => {
+        state.allSessionsData = [
+            { session_id: 'club100/cadet/2026-09-12/Lydd/09_48_cadet_group_b' },
+            { session_id: 'club100_south/cadet_lw/2026-09-12/Lydd/11_02_practice' }
+        ];
+        const lapA1 = 'club100/cadet/2026-09-12/Lydd/09_48_cadet_group_b-4';
+        const lapA2 = 'club100_south/cadet_lw/2026-09-12/Lydd/11_02_practice-2';
+        const lapB1 = 'club100/cadet/2026-09-12/Lydd/09_48_cadet_group_b-1';
+
+        state.lapDataLookup = {
+            [lapA1]: { session_id: 'club100/cadet/2026-09-12/Lydd/09_48_cadet_group_b', lap_num: 4 },
+            [lapA2]: { session_id: 'club100_south/cadet_lw/2026-09-12/Lydd/11_02_practice', lap_num: 2 },
+            [lapB1]: { session_id: 'club100/cadet/2026-09-12/Lydd/09_48_cadet_group_b', lap_num: 1 }
+        };
+
+        expect(formatLapForUrl(lapA1)).toBe('0_4');
+        expect(formatLapForUrl(lapA2)).toBe('1_2');
+        expect(formatLapForUrl(lapB1)).toBe('0_1');
+
+        state.groupASelection.add(lapA1);
+        state.groupASelection.add(lapA2);
+        state.groupBSelection.add(lapB1);
+
+        updateURL();
+
+        expect(mockReplaceState).toHaveBeenCalled();
+        const urlCall = mockReplaceState.mock.calls[0][2];
+        expect(urlCall).toContain('lapsA=0_4%2C1_2');
+        expect(urlCall).toContain('lapsB=0_1');
+    });
+
+    it('sorts short lap keys numerically', () => {
+        const keys = ['1_10', '0_4', '0_1', '1_2'];
+        keys.sort(compareShortLapKeys);
+        expect(keys).toEqual(['0_1', '0_4', '1_2', '1_10']);
     });
 
     it('sets tcol parameter when trajectoryColorMode is not pedals', () => {

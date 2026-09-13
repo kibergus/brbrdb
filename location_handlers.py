@@ -14,12 +14,15 @@
 # ==============================================================================
 
 import os
+import re
 import csv
 import logging
 import gzip
+from urllib.parse import unquote, quote
 import brotli  # type: ignore[import-untyped]
 from typing import Any
-from flask import Blueprint, render_template, abort, request, jsonify, Response, url_for
+from flask import Blueprint, render_template, abort, request, jsonify, Response, url_for, redirect
+import werkzeug.wrappers as werkzeug_wrappers
 
 from database import db, config
 import plot_handlers
@@ -29,6 +32,7 @@ import numpy as np
 import auth
 import struct
 import report_parser
+import upload_handlers
 
 
 location_blueprint = Blueprint('location', __name__)
@@ -115,6 +119,11 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
             if dist_col in header:
                 dist_col_indices.append(header.index(dist_col))
 
+        speed_col_indices = []
+        for speed_col in ['Speed (km/h)', 'Speed', 'Speed (m/s)', 'Speed (mph)', 'GPS_Speed', 'GPS Speed']:
+            if speed_col in header:
+                speed_col_indices.append(header.index(speed_col))
+
         idx = 0
         for row in data_rows:
             if not row or len(row) < len(header):
@@ -140,7 +149,8 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
                         'start_idx': idx,
                         'end_idx': idx,
                         'times': [],
-                        'dists': []
+                        'dists': [],
+                        'speeds': []
                     }
 
                 session_laps[lap_num]['end_idx'] = idx
@@ -163,13 +173,31 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
                 if dist_val is not None:
                     session_laps[lap_num]['dists'].append(dist_val)
 
+                # Speed
+                speed_val = None
+                for speed_col_idx in speed_col_indices:
+                    val_str = row[speed_col_idx]
+                    if val_str != '':
+                        try:
+                            speed_val = float(val_str)
+                            break
+                        except ValueError:
+                            pass
+                if speed_val is not None:
+                    session_laps[lap_num]['speeds'].append(speed_val)
+
                 idx += 1
             except (ValueError, KeyError, IndexError):
                 continue
 
     laps_list = []
     sorted_laps = sorted(session_laps.items())
-    for i, (lap_num, data) in enumerate(sorted_laps):
+
+    has_outlap = False
+    if len(sorted_laps) > 1 and sorted_laps[0][0] == 1:
+        has_outlap = _detect_is_outlap(sorted_laps[0][1], sorted_laps[1][1])
+
+    for i, (raw_lap, data) in enumerate(sorted_laps):
         times = data['times']
         lap_time_str = 'Unknown'
         if i < len(sorted_laps) - 1:
@@ -184,10 +212,26 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
         if duration > 0:
             lap_time_str = _parse_lap_time(duration)
 
+        if has_outlap:
+            if i == 0:
+                lap_num = 0
+                is_outlap = True
+                is_valid = False
+            else:
+                lap_num = i
+                is_outlap = False
+                is_valid = True
+        else:
+            lap_num = raw_lap
+            is_outlap = (raw_lap == 0)
+            is_valid = (raw_lap != 0)
+
         laps_list.append({
             'lap_num': lap_num,
+            'raw_lap_num': raw_lap,
             'lap_time': lap_time_str,
-            'is_valid': True,
+            'is_valid': is_valid,
+            'is_outlap': is_outlap,
             'start_idx': data['start_idx'],
             'end_idx': data['end_idx'],
             'dists': data['dists'],
@@ -195,6 +239,27 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
             'duration': duration
         })
     return laps_list, columns, driver_name
+
+
+def _detect_is_outlap(first_lap: dict, second_lap: dict) -> bool:
+    """Detect whether the first lap of a telemetry session is an outlap from pits."""
+    d0 = first_lap.get('dists', [])
+    d1 = second_lap.get('dists', [])
+    if not d0:
+        return False
+
+    # 1. Distance starts away from start/finish line (>15m) e.g. Lydd pit exit joins at ~117m
+    starts_away = (d0[0] > 15.0) or (min(d0[:min(len(d0), 5)]) > 15.0)
+
+    # 2. Distance covered is significantly shorter than the next lap (<90%)
+    is_short = False
+    if d1:
+        span0 = max(d0) - min(d0)
+        span1 = max(d1) - min(d1)
+        if span1 > 0 and span0 < span1 * 0.9:
+            is_short = True
+
+    return starts_away or is_short
 
 
 def _render_telemetry_meeting(
@@ -208,7 +273,8 @@ def _render_telemetry_meeting(
     report_title: str | None = None,
     report_html: str | None = None,
     report_state: dict | None = None,
-    report_name: str | None = None
+    report_name: str | None = None,
+    get_track_points_url: str | None = None
 ) -> str:
     acl = auth.get_current_acl()
     if not auth.can_see_telemetry(acl, league=league):
@@ -271,6 +337,13 @@ def _render_telemetry_meeting(
 
     google_maps_api_key = config.get('google_maps_api_key', '')
 
+    filter_session_ids: set[str] = set()
+    if session_id and session_id != 'all':
+        for sid in session_id.split(','):
+            s_clean = sid.strip()
+            if s_clean and s_clean != 'all':
+                filter_session_ids.add(s_clean)
+
     # Check if this meeting folder has telemetry
     meeting_dir = sessions[0].meeting_dir
     has_telemetry = db.has_telemetry(meeting_dir)
@@ -280,12 +353,32 @@ def _render_telemetry_meeting(
         csv_files = [f for f in os.listdir(telemetry_dir) if f.endswith('.csv')]
         seen_sids = set()
         for csv_file in csv_files:
-            sid = _match_session(csv_file, sessions)
-            if sid:
-                seen_sids.add(sid)
+            matched_sid = _match_session(csv_file, sessions)
+            if matched_sid:
+                seen_sids.add(matched_sid)
         for s in sessions:
             if s.session_id in seen_sids:
-                telemetry_sessions.append(s)
+                if not filter_session_ids or s.session_id in filter_session_ids:
+                    telemetry_sessions.append(s)
+
+    selected_sid_for_render = session_id
+    if len(filter_session_ids) > 1:
+        selected_sid_for_render = 'all'
+    elif len(filter_session_ids) == 1:
+        selected_sid_for_render = next(iter(filter_session_ids))
+
+    if not get_track_points_url:
+        track_points_kwargs: dict[str, Any] = {
+            'league': league,
+            'class_name': class_name,
+            'date': date,
+            'track': track,
+        }
+        if track_conditions:
+            track_points_kwargs['track_conditions'] = track_conditions
+        if session_id and ',' in session_id:
+            track_points_kwargs['session_id'] = session_id
+        get_track_points_url = url_for('location.get_track_points', **track_points_kwargs)
 
     return render_template(
         'kartsim_meeting.html',
@@ -296,7 +389,9 @@ def _render_telemetry_meeting(
         track_conditions=track_conditions,
         sessions=sessions,
         telemetry_sessions=telemetry_sessions,
-        selected_session_id=session_id,
+        selected_session_id=selected_sid_for_render,
+        session_id=session_id,
+        get_track_points_url=get_track_points_url,
         plot_titles=plot_titles,
         available_classes=other_classes,
         google_maps_api_key=google_maps_api_key,
@@ -313,8 +408,108 @@ def _render_telemetry_meeting(
     )
 
 
+class TelemetrySessionItem:
+    def __init__(
+        self,
+        session_id: str,
+        session_name: str,
+        session_start_datetime: str | None = None,
+        league: str | None = None,
+        class_name: str | None = None,
+        date: str | None = None
+    ):
+        self.session_id = session_id
+        self.session_name = session_name
+        self.session_start_datetime = session_start_datetime
+        self.league = league
+        self.class_name = class_name
+        self.date = date
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+
+@location_blueprint.route('/telemetry/<track>')
+def telemetry_track_view(track: str) -> str | werkzeug_wrappers.Response | Response:
+    session_params = request.args.getlist('session')
+    if not session_params:
+        return redirect(url_for('location.telemetry_launcher'))
+
+    acl = auth.get_current_acl()
+    telemetry_sessions: list[TelemetrySessionItem] = []
+
+    for param in session_params:
+        parts = param.split('/')
+        if len(parts) != 5:
+            continue
+        lg, cls, dt, trk, sid = parts
+        if not auth.can_see_telemetry(acl, league=lg):
+            abort(403, description=f'Access to telemetry data for league "{lg}" is restricted')
+
+        sessions = db.find_sessions(leagues=lg, classes=cls, date=dt, track=trk)
+        matching_s = next((s for s in sessions if s.session_id == sid), None) if sessions else None
+
+        unique_sid = f"{lg}/{cls}/{dt}/{trk}/{sid}"
+        s_name = matching_s.session_name if matching_s else sid
+        full_name = f"{dt} {cls} - {s_name}"
+        s_dt = matching_s.session_start_datetime if matching_s else None
+        item = TelemetrySessionItem(
+            session_id=unique_sid,
+            session_name=full_name,
+            session_start_datetime=s_dt,
+            league=lg,
+            class_name=cls,
+            date=dt
+        )
+        telemetry_sessions.append(item)
+
+    if not telemetry_sessions:
+        abort(404, description='No valid sessions found')
+
+    query_parts = [f"track={quote(track)}"]
+    for sp in session_params:
+        query_parts.append(f"session={quote(sp)}")
+    get_track_points_url = f"/api/telemetry?{'&'.join(query_parts)}"
+
+    google_maps_api_key = config.get('google_maps_api_key', '')
+    primary_league = telemetry_sessions[0].league if telemetry_sessions else None
+    primary_class = telemetry_sessions[0].class_name if telemetry_sessions else None
+    primary_date = telemetry_sessions[0].date if telemetry_sessions else None
+
+    return render_template(
+        'kartsim_meeting.html',
+        league=primary_league,
+        class_name=primary_class,
+        date=primary_date,
+        track=track,
+        track_conditions=None,
+        sessions=telemetry_sessions,
+        telemetry_sessions=telemetry_sessions,
+        selected_session_id='all',
+        session_id=None,
+        get_track_points_url=get_track_points_url,
+        plot_titles=[],
+        available_classes=[],
+        google_maps_api_key=google_maps_api_key,
+        has_telemetry=True,
+        prev_meeting_url='',
+        next_meeting_url='',
+        prev_meeting_title='',
+        next_meeting_title='',
+        is_report_mode=False,
+        report_title=None,
+        report_html=None,
+        report_state={},
+        report_name=None
+    )
+
+
 @location_blueprint.route('/telemetry/<league>/<class_name>/<path:date>/<track>')
-def telemetry_view(league: str, class_name: str, date: str, track: str) -> str:
+def telemetry_view(league: str, class_name: str, date: str, track: str) -> str | werkzeug_wrappers.Response | Response:
+    session_params = request.args.getlist('session')
+    if session_params:
+        return telemetry_track_view(track)
+
     session_id = request.args.get('session_id')
     report_param = request.args.get('report')
     track_conditions = request.args.get('track_conditions') or request.args.get('conditions')
@@ -346,6 +541,98 @@ def telemetry_view(league: str, class_name: str, date: str, track: str) -> str:
         report_html=report_html,
         report_state=report_state,
         report_name=report_param
+    )
+
+
+SESSION_URL_PATTERN = re.compile(
+    r'/session/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)'
+)
+
+
+def parse_session_urls(text: str) -> list[dict[str, str]]:
+    """Parse session URLs from pasted text and extract session metadata."""
+    results: list[dict[str, str]] = []
+    if not text:
+        return results
+    for match in SESSION_URL_PATTERN.finditer(text):
+        league, class_name, date, track, session_id = [unquote(p) for p in match.groups()]
+        results.append({
+            'league': league,
+            'class_name': class_name,
+            'date': date,
+            'track': track,
+            'session_id': session_id,
+            'original_url': match.group(0)
+        })
+    return results
+
+
+@location_blueprint.route('/telemetry', methods=['GET', 'POST'])
+@location_blueprint.route('/telemetry/', methods=['GET', 'POST'])
+def telemetry_launcher() -> str | werkzeug_wrappers.Response | Response:
+    acl = auth.get_current_acl()
+    if not auth.can_see_telemetry(acl):
+        abort(403, description='Access to telemetry data is restricted')
+
+    error = None
+    input_text = ''
+
+    if request.method == 'POST':
+        input_text = request.form.get('session_links', '').strip()
+    elif request.method == 'GET' and (request.args.get('links') or request.args.get('session')):
+        input_text = request.args.get('links') or request.args.get('session') or ''
+
+    if input_text:
+        sessions = parse_session_urls(input_text)
+        if not sessions:
+            error = (
+                "No valid session links found. Please paste URLs like "
+                "https://brbrdb.brbrkitten.com/session/<league>/<class>/<date>/<track>/<session_id>"
+            )
+        else:
+            tracks = list(dict.fromkeys(s['track'] for s in sessions))
+            if len(tracks) > 1:
+                error = (
+                    f"Cannot open telemetry: sessions belong to different tracks: "
+                    f"{', '.join(tracks)}. All sessions must be on the same track."
+                )
+            else:
+                track = tracks[0]
+                leagues = list(dict.fromkeys(s['league'] for s in sessions))
+                for lg in leagues:
+                    if not auth.can_see_telemetry(acl, league=lg):
+                        abort(403, description=f'Access to telemetry data for league "{lg}" is restricted')
+
+                meetings = list(dict.fromkeys((s['league'], s['class_name'], s['date']) for s in sessions))
+                if len(meetings) == 1:
+                    league = sessions[0]['league']
+                    class_name = sessions[0]['class_name']
+                    date = sessions[0]['date']
+                    session_ids = list(dict.fromkeys(s['session_id'] for s in sessions))
+                    target_url = url_for(
+                        'location.telemetry_view',
+                        league=league,
+                        class_name=class_name,
+                        date=date,
+                        track=track,
+                        session_id=','.join(session_ids)
+                    )
+                else:
+                    session_params = list(dict.fromkeys(
+                        f"{s['league']}/{s['class_name']}/{s['date']}/{s['track']}/{s['session_id']}"
+                        for s in sessions
+                    ))
+                    target_url = url_for(
+                        'location.telemetry_track_view',
+                        track=track,
+                        session=session_params
+                    )
+                return redirect(target_url)
+
+    return render_template(
+        'telemetry_launcher.html',
+        error=error,
+        input_text=input_text
     )
 
 
@@ -515,37 +802,115 @@ def _override_with_official_laps(
     laps: list, df_official: pd.DataFrame, matching_sid: str | None, driver_name: str | None
 ) -> None:
     """Override GPS-calculated lap times with official ones if available."""
-    if not matching_sid or not driver_name or df_official.empty:
+    if not matching_sid or not driver_name or df_official.empty or not laps:
         return
 
     # Filter official lap times for this session and driver
+    clean_driver = driver_name.lower().strip()
     official_laps = df_official[
         (df_official['SessionID'] == matching_sid) &
-        (df_official['Name'].str.lower() == driver_name.lower())
+        (df_official['Name'].str.lower().str.strip() == clean_driver)
     ]
+    if official_laps.empty:
+        official_laps = df_official[
+            (df_official['SessionID'] == matching_sid) &
+            (df_official['Name'].str.lower().str.contains(clean_driver, regex=False) |
+             df_official['Name'].apply(lambda n: str(n).lower().strip() in clean_driver))
+        ]
 
-    if not official_laps.empty:
-        # Create mapping of lap_num -> lap_time string
-        # We use the raw 'LapTime' string if available, otherwise format 'LapTimeSeconds'
-        lap_map = {}
-        for _, row in official_laps.iterrows():
+    if official_laps.empty:
+        return
+
+    # Build structured list of official laps sorted by Lap number
+    official_laps = official_laps.sort_values(by='Lap')
+    off_items = []
+    lap_map = {}
+    for _, row in official_laps.iterrows():
+        try:
             l_num = int(row['Lap'])
-            l_time = row.get('LapTime')
-            # In rFactor 2 results, LapTimeDeleted=True means the lap was invalidated (e.g. cut)
-            is_deleted = row.get('LapTimeDeleted', False)
-            if pd.isna(is_deleted):
-                is_deleted = False
+        except (ValueError, TypeError):
+            continue
+        l_time = row.get('LapTime')
+        is_deleted = row.get('LapTimeDeleted', False)
+        if pd.isna(is_deleted):
+            is_deleted = False
 
-            if pd.isna(l_time) or not l_time:
-                l_time = _parse_lap_time(row['LapTimeSeconds'])
-            lap_map[l_num] = {'time': str(l_time), 'is_valid': not is_deleted}
+        sec = row.get('LapTimeSeconds', 0.0)
+        if pd.isna(sec) or sec is None:
+            sec = 0.0
+        else:
+            sec = float(sec)
 
-        # Override computed lap times and validity with official ones
+        if (pd.isna(l_time) or not l_time) and sec > 0:
+            l_time = _parse_lap_time(sec)
+
+        time_str = str(l_time) if (pd.notna(l_time) and l_time) else _parse_lap_time(sec)
+        item = {
+            'lap_num': l_num,
+            'seconds': sec,
+            'time': time_str,
+            'is_valid': (not is_deleted) and (sec > 0)
+        }
+        off_items.append(item)
+        lap_map[l_num] = item
+
+    if not off_items:
+        return
+
+    N = len(laps)
+    M = len(off_items)
+
+    # Correlate official lap duration sequence against GPS lap durations
+    best_shift = None
+    best_avg_diff = float('inf')
+    min_compare_count = min(3, M)
+
+    for shift in range(-(M - 1), N):
+        diff_sum = 0.0
+        compare_count = 0
+        for i in range(N):
+            j = i - shift
+            if 0 <= j < M:
+                off_sec = off_items[j]['seconds']
+                tel_dur = laps[i].get('duration', 0.0)
+                if off_sec > 0 and tel_dur > 0:
+                    diff_sum += abs(tel_dur - off_sec)
+                    compare_count += 1
+
+        if compare_count >= min_compare_count:
+            avg_diff = diff_sum / compare_count
+            if avg_diff < best_avg_diff:
+                best_avg_diff = avg_diff
+                best_shift = shift
+
+    if best_shift is not None and best_avg_diff <= 1.5:
+        for i in range(N):
+            j = i - best_shift
+            if j < 0:
+                # Prior to official session start (e.g. outlaps, pit exit, formation/warmup lap)
+                laps[i]['lap_num'] = 0
+                laps[i]['is_outlap'] = True
+                laps[i]['is_valid'] = False
+            elif 0 <= j < M:
+                # Matching official lap
+                off = off_items[j]
+                laps[i]['lap_num'] = off['lap_num']
+                laps[i]['lap_time'] = off['time']
+                laps[i]['is_valid'] = off['is_valid']
+                laps[i]['is_outlap'] = False
+            else:
+                # After official session laps (e.g. cool-down lap, in-lap)
+                laps[i]['is_valid'] = False
+                laps[i]['is_outlap'] = False
+    else:
+        # Fallback to direct lap_num matching
         for lap in laps:
             l_num = lap['lap_num']
             if l_num in lap_map:
                 lap['lap_time'] = lap_map[l_num]['time']
                 lap['is_valid'] = lap_map[l_num]['is_valid']
+            if lap.get('is_outlap'):
+                lap['is_valid'] = False
 
 
 def _compute_lap_segments(laps: list, sector_ends: list, turns: list) -> None:
@@ -604,13 +969,126 @@ def _compute_lap_segments(laps: list, sector_ends: list, turns: list) -> None:
 def get_track_points() -> Response | tuple[Response, int]:
     # Check see_telemetry permission
     acl = auth.get_current_acl()
+    track = request.args.get('track')
+    session_params = request.args.getlist('session')
+
+    if session_params:
+        if not track:
+            return jsonify({'error': 'Missing track parameter'}), 400
+        track_data = db.get_track(track) or {}
+        sector_ends = track_data.get('sector_end', [])
+        turns = track_data.get('turns', [])
+        lap_length = track_data.get('lap_length')
+
+        hero_names = plot_handlers.get_hero_names()
+        sanitized_heroes = [sanitize.sanitize_filename(h) for h in hero_names]
+
+        raw_sids = request.args.getlist('session_id')
+        filter_session_id = raw_sids[-1] if raw_sids else None
+        if filter_session_id == 'all':
+            filter_session_id = None
+
+        all_session_data = []
+        for param in session_params:
+            parts = param.split('/')
+            if len(parts) != 5:
+                continue
+            s_league, s_class, s_date, s_track, s_sid = parts
+            unique_sid = f"{s_league}/{s_class}/{s_date}/{s_track}/{s_sid}"
+
+            if filter_session_id and filter_session_id != unique_sid and filter_session_id != s_sid:
+                continue
+
+            if not auth.can_see_telemetry(acl, league=s_league):
+                continue
+
+            sessions = db.find_sessions(leagues=s_league, classes=s_class, date=s_date, track=s_track)
+            if not sessions:
+                continue
+
+            meeting_dir = sessions[0].meeting_dir
+            telemetry_dir = os.path.join(meeting_dir, 'telemetry')
+            if not os.path.exists(telemetry_dir):
+                continue
+
+            csv_files = sorted([f for f in os.listdir(telemetry_dir) if f.endswith('.csv')])
+            target_csv = None
+            matching_s = next((s for s in sessions if s.session_id == s_sid), None)
+            if s_sid in csv_files:
+                target_csv = s_sid
+            else:
+                for f in csv_files:
+                    if matching_s and _match_session(f, [matching_s]) == s_sid:
+                        target_csv = f
+                        break
+                    elif _match_session(f, sessions) == s_sid:
+                        target_csv = f
+                        break
+            if not target_csv:
+                for f in csv_files:
+                    if s_sid in f:
+                        target_csv = f
+                        break
+            if not target_csv:
+                continue
+
+            if sanitized_heroes and not any(h in target_csv.lower() for h in sanitized_heroes):
+                continue
+
+            csv_path = os.path.join(telemetry_dir, target_csv)
+            laps, columns, driver_name = parse_telemetry_csv(csv_path)
+            if not laps:
+                continue
+            if not auth.can_see_telemetry(acl, league=s_league, driver=driver_name):
+                continue
+
+            df_official = db.load(leagues=s_league, classes=s_class, date=s_date, track=s_track)
+            _override_with_official_laps(laps, df_official, s_sid, driver_name)
+
+            for lap in laps:
+                if lap.get('is_outlap'):
+                    lap['is_valid'] = False
+                elif not lap.get('is_valid', True):
+                    continue
+                elif lap_length:
+                    dists = lap.get('dists', [])
+                    if dists:
+                        dist_covered = max(dists) - min(dists)
+                        if dist_covered < lap_length * 0.9:
+                            lap['is_valid'] = False
+                        elif turns:
+                            if not upload_handlers.is_lap_valid(np.array(dists), turns, lap_length):
+                                lap['is_valid'] = False
+
+            _compute_lap_segments(laps, sector_ends, turns)
+            for lap in laps:
+                lap.pop('dists', None)
+                lap.pop('times', None)
+
+            s_name = matching_s.session_name if matching_s else _get_display_name(target_csv)
+            display_name = f"{s_date} {s_class} - {s_name}"
+            all_session_data.append({
+                'session_id': unique_sid,
+                'session_name': display_name,
+                'columns': columns,
+                'laps': laps
+            })
+
+        return jsonify(all_session_data)
+
     league = request.args.get('league')
     if not auth.can_see_telemetry(acl, league=league):
         return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
     class_name = request.args.get('class_name')
     date = request.args.get('date')
-    track = request.args.get('track')
-    filter_session_id = request.args.get('session_id')
+    raw_sids = request.args.getlist('session_id')
+    filter_session_id = raw_sids[-1] if raw_sids else None
+    filter_session_ids: set[str] = set()
+    if filter_session_id and filter_session_id != 'all':
+        for sid in filter_session_id.split(','):
+            s_clean = sid.strip()
+            if s_clean and s_clean != 'all':
+                filter_session_ids.add(s_clean)
     track_conditions = request.args.get('track_conditions') or request.args.get('conditions')
 
     if not league or not class_name or not date or not track:
@@ -659,8 +1137,8 @@ def get_track_points() -> Response | tuple[Response, int]:
             if not matching_sid or matching_sid not in valid_sids:
                 continue
 
-        if filter_session_id and filter_session_id != 'all':
-            if matching_sid != filter_session_id and csv_file != filter_session_id:
+        if filter_session_ids:
+            if matching_sid not in filter_session_ids and csv_file not in filter_session_ids:
                 continue
 
         csv_path = os.path.join(telemetry_dir, csv_file)
@@ -672,14 +1150,21 @@ def get_track_points() -> Response | tuple[Response, int]:
                 continue
             _override_with_official_laps(laps, df_official, matching_sid, driver_name)
 
-            # Mark laps as invalid based on distance (automatic check)
+            # Mark laps as invalid based on distance and turns (automatic check)
             for lap in laps:
-                if lap_length:
+                if lap.get('is_outlap'):
+                    lap['is_valid'] = False
+                elif not lap.get('is_valid', True):
+                    continue
+                elif lap_length:
                     dists = lap.get('dists', [])
                     if dists:
                         dist_covered = max(dists) - min(dists)
                         if dist_covered < lap_length * 0.9:
                             lap['is_valid'] = False
+                        elif turns:
+                            if not upload_handlers.is_lap_valid(np.array(dists), turns, lap_length):
+                                lap['is_valid'] = False
 
             _compute_lap_segments(laps, sector_ends, turns)
 
@@ -748,14 +1233,20 @@ def smooth_telemetry_data(values: list[float]) -> list[float]:
 def get_telemetry_channel() -> Response | tuple[Response, int]:
     # Check see_telemetry permission
     acl = auth.get_current_acl()
+    session_id = request.args.get('session_id')
+    channel = request.args.get('channel')
     league = request.args.get('league')
-    if not auth.can_see_telemetry(acl, league=league):
-        return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
     class_name = request.args.get('class_name')
     date = request.args.get('date')
     track = request.args.get('track')
-    session_id = request.args.get('session_id')
-    channel = request.args.get('channel')
+
+    if session_id and '/' in session_id:
+        parts = session_id.split('/')
+        if len(parts) == 5:
+            league, class_name, date, track, session_id = parts
+
+    if not auth.can_see_telemetry(acl, league=league):
+        return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
 
     if not league or not class_name or not date or not track or not session_id or not channel:
         return jsonify({'error': 'Missing parameters'}), 400
@@ -780,7 +1271,7 @@ def get_telemetry_channel() -> Response | tuple[Response, int]:
         target_csv = session_id
     else:
         for csv_f in csv_files:
-            if csv_f.endswith('.csv') and _match_session(csv_f, sessions) == session_id:
+            if csv_f.endswith('.csv') and (_match_session(csv_f, sessions) == session_id or session_id in csv_f):
                 target_csv = csv_f
                 break
 

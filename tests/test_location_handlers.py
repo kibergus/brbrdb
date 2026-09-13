@@ -71,6 +71,21 @@ def test_override_with_official_laps() -> None:
     location_handlers._override_with_official_laps(laps_2, df_official, 'S1', 'driver a')
     assert laps_2[0]['lap_time'] == '0:59.000'
 
+    # Test that outlap (lap_num=0) remains invalid and official lap 1 matches flying lap 1
+    laps_outlap = [
+        {'lap_num': 0, 'lap_time': '0:55.000', 'is_outlap': True, 'is_valid': False},
+        {'lap_num': 1, 'lap_time': '1:00.000', 'is_valid': True},
+        {'lap_num': 2, 'lap_time': '1:01.000', 'is_valid': True}
+    ]
+    location_handlers._override_with_official_laps(laps_outlap, df_official, 'S1', 'Driver A')
+    assert laps_outlap[0]['lap_num'] == 0
+    assert laps_outlap[0]['is_outlap'] is True
+    assert laps_outlap[0]['is_valid'] is False
+    assert laps_outlap[1]['lap_time'] == '0:59.000'
+    assert laps_outlap[1]['is_valid'] is True
+    assert laps_outlap[2]['lap_time'] == '1:00.500'
+    assert laps_outlap[2]['is_valid'] is True
+
 
 def test_compute_lap_segments() -> None:
     laps = [{
@@ -290,6 +305,66 @@ Time,Latitude,Longitude,Record,Lap
     assert np.isclose(laps_multi[1]['duration'], 56.1)
     # Lap 3 final lap fallback duration: 12:31:52.100 - 12:31:52.100 = 0.0s (1 point)
     assert laps_multi[2]['lap_time'] == "Unknown"
+
+
+def test_detect_is_outlap() -> None:
+    # 1. Pit exit downstream of S/F (e.g. Lydd starting at 117m)
+    lap0_away = {'dists': [117.2, 125.0, 1040.0]}
+    lap1_normal = {'dists': [0.0, 500.0, 1040.0]}
+    assert location_handlers._detect_is_outlap(lap0_away, lap1_normal) is True
+
+    # 2. Pit exit joining near end of lap (covers only small distance span <90%)
+    lap0_short = {'dists': [900.0, 950.0, 1040.0]}
+    lap1_full = {'dists': [0.0, 500.0, 1040.0]}
+    assert location_handlers._detect_is_outlap(lap0_short, lap1_full) is True
+
+    # 3. Normal flying lap starting at S/F line (0m) covering full distance
+    lap0_standing = {'dists': [0.0, 500.0, 1040.0]}
+    assert location_handlers._detect_is_outlap(lap0_standing, lap1_normal) is False
+
+    # 4. No distance data available
+    assert location_handlers._detect_is_outlap({'dists': []}, lap1_normal) is False
+
+
+def test_parse_telemetry_csv_with_outlap(tmp_path: Path) -> None:
+    # Session with Lap 1 starting at 117m (outlap) and Lap 2 & 3 starting at 0m (flying laps)
+    csv_content = """Format,RaceTools CSV
+Driver name,Alexey
+
+Time,Latitude,Longitude,Record,Lap,Lap Distance (m),Speed (km/h)
+2026-09-12T11:02:00.000Z,50.934,0.907,1,1,117.2,30.0
+2026-09-12T11:02:30.000Z,50.934,0.907,2,1,1040.0,75.0
+2026-09-12T11:02:40.000Z,50.934,0.907,3,2,0.0,70.0
+2026-09-12T11:03:28.409Z,50.934,0.907,4,2,1040.0,72.0
+2026-09-12T11:03:28.500Z,50.934,0.907,5,3,0.0,71.0
+2026-09-12T11:04:16.800Z,50.934,0.907,6,3,1040.0,73.0
+"""
+    test_file = tmp_path / "outlap_test.csv"
+    test_file.write_text(csv_content)
+
+    laps, columns, driver_name = location_handlers.parse_telemetry_csv(str(test_file))
+    assert driver_name == "Alexey"
+    assert len(laps) == 3
+
+    # Outlap: Lap 0, invalid, raw_lap_num = 1
+    assert laps[0]['lap_num'] == 0
+    assert laps[0]['raw_lap_num'] == 1
+    assert laps[0]['is_outlap'] is True
+    assert laps[0]['is_valid'] is False
+    assert np.isclose(laps[0]['duration'], 40.0)
+
+    # Flying Lap 1: Lap 1, valid, raw_lap_num = 2
+    assert laps[1]['lap_num'] == 1
+    assert laps[1]['raw_lap_num'] == 2
+    assert laps[1]['is_outlap'] is False
+    assert laps[1]['is_valid'] is True
+    assert np.isclose(laps[1]['duration'], 48.5)
+
+    # Flying Lap 2: Lap 2, valid, raw_lap_num = 3
+    assert laps[2]['lap_num'] == 2
+    assert laps[2]['raw_lap_num'] == 3
+    assert laps[2]['is_outlap'] is False
+    assert laps[2]['is_valid'] is True
 
 
 @patch('location_handlers.db')
@@ -919,3 +994,267 @@ def test_get_track_points_filter_track_conditions(tmp_path: Path) -> None:
         data = resp.get_json()
         assert len(data) == 1
         assert data[0]['session_id'] == '14_59_practice'
+
+
+def test_parse_session_urls() -> None:
+    text = (
+        "Check this session:\n"
+        "https://brbrdb.brbrkitten.com/session/club100_south/cadet_lw/2026-09-12/Lydd/"
+        "15_12_race_13_cadet_lightweight_south_c_final\n"
+        "and another relative one: /session/club100_south/cadet_lw/2026-09-12/Lydd/"
+        "12_14_race_3_cadet_lightweight_south_group_2_qualifying?param=1"
+    )
+    sessions = location_handlers.parse_session_urls(text)
+    assert len(sessions) == 2
+    assert sessions[0]['league'] == 'club100_south'
+    assert sessions[0]['class_name'] == 'cadet_lw'
+    assert sessions[0]['date'] == '2026-09-12'
+    assert sessions[0]['track'] == 'Lydd'
+    assert sessions[0]['session_id'] == '15_12_race_13_cadet_lightweight_south_c_final'
+
+    assert sessions[1]['session_id'] == '12_14_race_3_cadet_lightweight_south_group_2_qualifying'
+
+
+def test_telemetry_launcher_get() -> None:
+    client = flask_app.app.test_client()
+    with patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': True}):
+        resp = client.get('/telemetry/')
+        assert resp.status_code == 200
+        html = resp.data.decode('utf-8')
+        assert 'Telemetry Session Viewer' in html
+        assert 'Session Links' in html
+
+        resp2 = client.get('/telemetry')
+        assert resp2.status_code in (200, 308)  # standard or trailing-slash redirect
+
+
+def test_telemetry_launcher_get_restricted() -> None:
+    client = flask_app.app.test_client()
+    with patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': False}):
+        resp = client.get('/telemetry/')
+        assert resp.status_code == 403
+
+
+def test_telemetry_launcher_post_valid() -> None:
+    client = flask_app.app.test_client()
+    url = (
+        'https://brbrdb.brbrkitten.com/session/club100_south/cadet_lw/2026-09-12/Lydd/'
+        '15_12_race_13_cadet_lightweight_south_c_final'
+    )
+    with patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': True}):
+        resp = client.post('/telemetry/', data={'session_links': url})
+        assert resp.status_code == 302
+        expected_loc = (
+            '/telemetry/club100_south/cadet_lw/2026-09-12/Lydd?'
+            'session_id=15_12_race_13_cadet_lightweight_south_c_final'
+        )
+        assert resp.headers['Location'] == expected_loc
+
+
+def test_telemetry_launcher_post_multiple_valid() -> None:
+    client = flask_app.app.test_client()
+    links = (
+        "https://brbrdb.brbrkitten.com/session/club100_south/cadet_lw/2026-09-12/Lydd/12_14_race_3\n"
+        "https://brbrdb.brbrkitten.com/session/club100_south/cadet_lw/2026-09-12/Lydd/15_12_race_13\n"
+    )
+    with patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': True}):
+        resp = client.post('/telemetry/', data={'session_links': links})
+        assert resp.status_code == 302
+        assert resp.headers['Location'] == (
+            '/telemetry/club100_south/cadet_lw/2026-09-12/Lydd?session_id=12_14_race_3,15_12_race_13'
+        )
+
+
+def test_telemetry_launcher_post_different_tracks() -> None:
+    client = flask_app.app.test_client()
+    links = (
+        "https://brbrdb.brbrkitten.com/session/club100_south/cadet_lw/2026-09-12/Lydd/race_1\n"
+        "https://brbrdb.brbrkitten.com/session/club100_south/cadet_lw/2026-09-12/Shenington/race_2\n"
+    )
+    with patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': True}):
+        resp = client.post('/telemetry/', data={'session_links': links})
+        assert resp.status_code == 200
+        html = resp.data.decode('utf-8')
+        assert 'different tracks' in html
+
+
+def test_telemetry_launcher_post_different_meetings() -> None:
+    client = flask_app.app.test_client()
+    links = (
+        "https://brbrdb.brbrkitten.com/session/club100_south/cadet_lw/2026-09-12/Lydd/race_1\n"
+        "https://brbrdb.brbrkitten.com/session/club100/cadet/2026-09-12/Lydd/race_2\n"
+    )
+    with patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': True}):
+        resp = client.post('/telemetry/', data={'session_links': links})
+        assert resp.status_code == 302
+        assert resp.headers['Location'] == (
+            '/telemetry/Lydd?session=club100_south/cadet_lw/2026-09-12/Lydd/race_1'
+            '&session=club100/cadet/2026-09-12/Lydd/race_2'
+        )
+
+
+def test_telemetry_track_view() -> None:
+    client = flask_app.app.test_client()
+    s1 = MagicMock()
+    s1.session_id = 'race_1'
+    s1.session_name = 'Race 1'
+    s1.session_start_datetime = '2026-09-12T12:00:00'
+    s2 = MagicMock()
+    s2.session_id = 'race_2'
+    s2.session_name = 'Race 2'
+    s2.session_start_datetime = '2026-09-12T14:00:00'
+
+    def mock_find_sessions(leagues: str, classes: str, date: str, track: str) -> list[MagicMock]:
+        if leagues == 'club100_south':
+            return [s1]
+        return [s2]
+
+    with patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': True}), \
+         patch('location_handlers.db.find_sessions', side_effect=mock_find_sessions), \
+         patch('location_handlers.db.list_meetings', return_value=[]), \
+         patch('location_handlers.auth.can_see_telemetry', return_value=True):
+        url = (
+            '/telemetry/Lydd?'
+            'session=club100_south/cadet_lw/2026-09-12/Lydd/race_1&'
+            'session=club100/cadet/2026-09-12/Lydd/race_2'
+        )
+        resp = client.get(url)
+        assert resp.status_code == 200
+        html = resp.data.decode('utf-8')
+        assert 'Lydd' in html
+        assert 'getTrackPointsUrl' in html
+        assert '/api/telemetry?track=Lydd' in html
+        assert 'session=club100_south/cadet_lw/2026-09-12/Lydd/race_1' in html
+        assert 'session=club100/cadet/2026-09-12/Lydd/race_2' in html
+
+
+def test_telemetry_launcher_post_invalid() -> None:
+    client = flask_app.app.test_client()
+    with patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': True}):
+        resp = client.post('/telemetry/', data={'session_links': 'just random invalid text'})
+        assert resp.status_code == 200
+        html = resp.data.decode('utf-8')
+        assert 'No valid session links found' in html
+
+
+def test_get_track_points_multi_session_filter(tmp_path: Path) -> None:
+    client = flask_app.app.test_client()
+
+    meeting_dir = tmp_path / "meeting"
+    meeting_dir.mkdir()
+    telemetry_dir = meeting_dir / "telemetry"
+    telemetry_dir.mkdir()
+    sample_csv = (
+        "Format,RaceBox CSV\nData Source,KartSim\nConfiguration,Alice\n\n"
+        "Record,Time,Latitude,Longitude,Lap\n1,2026-08-29T14:59:00Z,50.0,-1.0,1\n"
+    )
+    (telemetry_dir / "sess1.csv").write_text(sample_csv)
+    (telemetry_dir / "sess2.csv").write_text(sample_csv)
+    (telemetry_dir / "sess3.csv").write_text(sample_csv)
+
+    s1 = MagicMock()
+    s1.session_id = 'sess1'
+    s1.meeting_dir = str(meeting_dir)
+
+    s2 = MagicMock()
+    s2.session_id = 'sess2'
+    s2.meeting_dir = str(meeting_dir)
+
+    s3 = MagicMock()
+    s3.session_id = 'sess3'
+    s3.meeting_dir = str(meeting_dir)
+
+    with patch('location_handlers.db.find_sessions', return_value=[s1, s2, s3]), \
+         patch('location_handlers.db.load', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.get_track', return_value={'sector_end': [], 'turns': []}), \
+         patch('location_handlers.plot_handlers.get_hero_names', return_value=[]), \
+         patch('location_handlers.auth.can_see_telemetry', return_value=True):
+        url = '/api/telemetry?league=kartsim&class_name=cadet&date=2026-08-29&track=Lydd&session_id=sess1,sess3'
+        resp = client.get(url)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data) == 2
+        returned_sids = {d['session_id'] for d in data}
+        assert returned_sids == {'sess1', 'sess3'}
+
+
+def test_get_track_points_multi_meeting(tmp_path: Path) -> None:
+    client = flask_app.app.test_client()
+
+    meeting_dir_1 = tmp_path / "m1"
+    meeting_dir_1.mkdir()
+    telem_1 = meeting_dir_1 / "telemetry"
+    telem_1.mkdir()
+
+    meeting_dir_2 = tmp_path / "m2"
+    meeting_dir_2.mkdir()
+    telem_2 = meeting_dir_2 / "telemetry"
+    telem_2.mkdir()
+
+    sample_csv = (
+        "Format,RaceBox CSV\nData Source,KartSim\nConfiguration,Alice\n\n"
+        "Record,Time,Latitude,Longitude,Lap\n1,2026-08-29T14:59:00Z,50.0,-1.0,1\n"
+    )
+    (telem_1 / "race_1.csv").write_text(sample_csv)
+    (telem_2 / "race_2.csv").write_text(sample_csv)
+
+    s1 = MagicMock()
+    s1.session_id = 'race_1'
+    s1.session_name = 'Race 1'
+    s1.meeting_dir = str(meeting_dir_1)
+
+    s2 = MagicMock()
+    s2.session_id = 'race_2'
+    s2.session_name = 'Race 2'
+    s2.meeting_dir = str(meeting_dir_2)
+
+    def mock_find_sessions(leagues: str, classes: str, date: str, track: str) -> list[MagicMock]:
+        if leagues == 'club100_south':
+            return [s1]
+        return [s2]
+
+    with patch('location_handlers.db.find_sessions', side_effect=mock_find_sessions), \
+         patch('location_handlers.db.load', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.get_track', return_value={'sector_end': [], 'turns': []}), \
+         patch('location_handlers.plot_handlers.get_hero_names', return_value=[]), \
+         patch('location_handlers.auth.can_see_telemetry', return_value=True):
+        url = (
+            '/api/telemetry?track=Lydd&'
+            'session=club100_south/cadet_lw/2026-09-12/Lydd/race_1&'
+            'session=club100/cadet/2026-09-12/Lydd/race_2'
+        )
+        resp = client.get(url)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data) == 2
+        assert data[0]['session_id'] == 'club100_south/cadet_lw/2026-09-12/Lydd/race_1'
+        assert data[1]['session_id'] == 'club100/cadet/2026-09-12/Lydd/race_2'
+
+
+def test_get_telemetry_channel_multi_meeting(tmp_path: Path) -> None:
+    client = flask_app.app.test_client()
+
+    meeting_dir = tmp_path / "meeting"
+    meeting_dir.mkdir()
+    telem = meeting_dir / "telemetry"
+    telem.mkdir()
+
+    sample_csv = (
+        "Format,RaceBox CSV\nData Source,KartSim\nConfiguration,Alice\n\n"
+        "Record,Time,Speed,Lap\n1,2026-08-29T14:59:00Z,25.5,1\n"
+    )
+    (telem / "race_1.csv").write_text(sample_csv)
+
+    s1 = MagicMock()
+    s1.session_id = 'race_1'
+    s1.meeting_dir = str(meeting_dir)
+
+    with patch('location_handlers.db.find_sessions', return_value=[s1]), \
+         patch('location_handlers.auth.can_see_telemetry', return_value=True):
+        # Pass composite session_id
+        url = (
+            '/api/telemetry/channel?session_id=club100_south/cadet_lw/2026-09-12/Lydd/race_1&channel=Speed'
+        )
+        resp = client.get(url)
+        assert resp.status_code == 200
+        assert resp.mimetype == 'application/octet-stream'

@@ -1538,6 +1538,18 @@ export function renderDeltaPlot() {
             return null;
         };
 
+        const allLapsInDelta = [...lapsA, ...lapsB];
+        const uniqueDeltaSids = new Set(allLapsInDelta.map(l => l.sessionId || l.session_id).filter(Boolean));
+        const isMultiSessionDelta = uniqueDeltaSids.size > 1;
+
+        const formatDeltaLabel = (lap, suffix = '') => {
+            const sName = lap.sessionName || lap.session_name || '';
+            if (isMultiSessionDelta && sName) {
+                return `${sName} L${lap.lap_num}${suffix}`;
+            }
+            return `Lap ${lap.lap_num}${suffix}`;
+        };
+
         const lapsToDeltaA = sortLapsByTime(lapsA.filter(l => l.lapId !== refLapId));
         lapsToDeltaA.forEach((lap, i) => {
             const traceData = computeDeltaTrace(lap);
@@ -1547,7 +1559,7 @@ export function renderDeltaPlot() {
                 state.bottomPlotIndices['plot-area-delta'][lap.lapId].push(data.length);
                 data.push({
                     x: traceData.x, y: traceData.y, mode: 'lines',
-                    name: `Lap ${lap.lap_num}`,
+                    name: formatDeltaLabel(lap),
                     line: { color: `rgba(251, 146, 60, ${alpha})`, width: 2 },
                     hoverinfo: 'none'
                 });
@@ -1563,7 +1575,7 @@ export function renderDeltaPlot() {
                 state.bottomPlotIndices['plot-area-delta'][lap.lapId].push(data.length);
                 data.push({
                     x: traceData.x, y: traceData.y, mode: 'lines',
-                    name: `Lap ${lap.lap_num} (B)`,
+                    name: formatDeltaLabel(lap, ' (B)'),
                     line: { color: `rgba(56, 189, 248, ${alpha})`, width: 2, dash: 'solid' },
                     hoverinfo: 'none'
                 });
@@ -1599,7 +1611,7 @@ export function renderDeltaPlot() {
             },
             annotations: [
                 {
-                    text: `Time Delta to Lap ${refLap.lap_num}`,
+                    text: `Time Delta to ${formatDeltaLabel(refLap)}`,
                     xref: 'paper', yref: 'paper', x: 0, y: 1.0,
                     showarrow: false, font: { size: 11, color: '#94a3b8' }, xanchor: 'left'
                 }
@@ -1649,6 +1661,18 @@ export function renderSpeedPlot() {
             return;
         }
 
+        const allLapsInSpeed = [...lapsA, ...lapsB];
+        const uniqueSpeedSids = new Set(allLapsInSpeed.map(l => l.sessionId || l.session_id).filter(Boolean));
+        const isMultiSessionSpeed = uniqueSpeedSids.size > 1;
+
+        const formatSpeedLabel = (lap, suffix = '') => {
+            const sName = lap.sessionName || lap.session_name || '';
+            if (isMultiSessionSpeed && sName) {
+                return `${sName} L${lap.lap_num}${suffix}`;
+            }
+            return `Lap ${lap.lap_num}${suffix}`;
+        };
+
         const maxDist = (state.trackData && state.trackData.lap_length) ? state.trackData.lap_length : 999999;
 
         const lapsToSpeedA = sortLapsByTime(lapsA);
@@ -1673,7 +1697,7 @@ export function renderSpeedPlot() {
                 state.bottomPlotIndices['plot-area-speed'][lap.lapId].push(data.length);
                 data.push({
                     x: x, y: y, mode: 'lines',
-                    name: `Lap ${lap.lap_num}`,
+                    name: formatSpeedLabel(lap),
                     line: { color: `rgba(251, 146, 60, ${alpha})`, width: 2 },
                     hoverinfo: 'none'
                 });
@@ -1702,7 +1726,7 @@ export function renderSpeedPlot() {
                 state.bottomPlotIndices['plot-area-speed'][lap.lapId].push(data.length);
                 data.push({
                     x: x, y: y, mode: 'lines',
-                    name: `Lap ${lap.lap_num} (B)`,
+                    name: formatSpeedLabel(lap, ' (B)'),
                     line: { color: `rgba(56, 189, 248, ${alpha})`, width: 2, dash: 'solid' },
                     hoverinfo: 'none'
                 });

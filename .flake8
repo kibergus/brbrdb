@@ -15,7 +15,7 @@
 
 [flake8]
 max-line-length = 120
-exclude = .git,__pycache__,docs/source/conf.py,old,build,dist,venv,.venv,.mypy_cache,.pytest_cache,notebook,testdata,node_modules,scratch,clean_duplicates.py
+exclude = .git,__pycache__,docs/source/conf.py,old,build,dist,venv,.venv,.mypy_cache,.pytest_cache,notebook,testdata,node_modules,scratch,clean_duplicates.py,generate_one_off_plot.py,generate_session_drivers_plot.py,inspect_session.py
 inline-quotes = single
 multiline-quotes = single
 docstring-quotes = double
