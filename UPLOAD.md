@@ -60,6 +60,7 @@ The metadata payload defines the session configuration and context.
 | `track_conditions` | String | No | General condition of the track surfaces. | `"Dry"`, `"Wet"`, `"Damp"` |
 | `temperature` | Float/String | No | Temperature of the venue. | `21.5` or `"21.5C"` |
 | `weather` | String | No | General atmospheric weather state. | `"Sunny"`, `"Dry"`, `"Rain"` |
+| `distance_to_rear_axle` | Float | No | Distance from rear axle center to camera in meters. | `1.5` |
 | `alphatiming_url` | String | No | Reference link to Alphatiming or session results page. | `"https://..."` |
 
 
@@ -148,6 +149,7 @@ Alternatively, detailed telemetry (e.g. from a simulator) can be streamed to thi
   | `Conditions` | No | General track condition (e.g. Dry, Wet, Damp). | `Conditions,Dry` |
   | `Temperature` | No | Temperature of the venue. | `Temperature,21.5` |
   | `Weather` | No | General weather state (e.g. Sunny, Dry, Rain). | `Weather,Sunny` |
+| `Distance to rear axle` | No | Distance from rear axle center to camera in meters. | `Distance to rear axle,1.5` |
 
   Example embedded header at the start of the stream:
   ```csv
@@ -196,6 +198,9 @@ Following the metadata block, the CSV must contain a header row containing `Reco
 | `Throttle` | `throttle`, `Throttle Pos` | **Yes** | Throttle application percentage (`0.0` to `100.0`). |
 | `Brake` | `brake`, `Brake Pos` | **Yes** | Brake application percentage (`0.0` to `100.0`). |
 | `Steering` | `steering` | **Yes** | Steering wheel rotation angle in degrees. |
+| `Yaw Rate` | - | No | Kart yaw rotation rate (angular velocity around vertical axis). |
+| `Pitch Rate` | - | No | Kart pitch rotation rate (angular velocity around lateral axis). |
+| `Roll Rate` | - | No | Kart roll rotation rate (angular velocity around longitudinal axis). |
 | `Lap` | `lap` | No | The current lap number of the point. |
 | `LapDistance`| `lap_distance` | No | Distance traveled along the track centerline (meters). |
 | `Toe FL` | `toe_fl` | No | Front-left wheel toe angle in radians. |

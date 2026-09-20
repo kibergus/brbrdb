@@ -122,7 +122,7 @@ def extract_raw_lap_data(
             matching_sid = location_handlers._match_session(csv_file, sessions)
             if matching_sid:
                 s0 = next((s for s in sessions if s.session_id == matching_sid), sessions[0])
-                df_official = db.load(leagues=s0.league, classes=s0.class_name, date=s0.date, track=s0.track)
+                df_official = db.load(leagues=s0.league, classes=s0.class_name, date=s0.date, track=s0.track_name)
                 location_handlers._override_with_official_laps(parsed_laps, df_official, matching_sid, csv_driver)
 
     norm_to_raw: dict[int, int] = {}

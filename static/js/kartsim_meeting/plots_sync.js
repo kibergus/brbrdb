@@ -38,6 +38,9 @@ const COLUMN_MAPPINGS = {
     rps_rr: ['RPS RR', 'RPS_RR', 'WheelSpd RR', 'Wheel Speed RR'],
     gx: ['GForceLon'],
     gy: ['GForceLat'],
+    gyro_yaw: ['Yaw Rate'],
+    gyro_pitch: ['Pitch Rate'],
+    gyro_roll: ['Roll Rate'],
     sp_fl: ['Slide Pct FL', 'Slide Pct_FL', 'Slide Pct FL (%)'],
     sp_fr: ['Slide Pct FR', 'Slide Pct_FR', 'Slide Pct FR (%)'],
     sp_rl: ['Slide Pct RL', 'Slide Pct_RL', 'Slide Pct RL (%)'],
@@ -66,6 +69,25 @@ const COLUMN_MAPPINGS = {
     sa_rear: ['Slip Angle Rear (deg)', 'Slip Angle Rear']
 };
 
+/**
+ * Map of channel group names (tab names) to the COLUMN_MAPPINGS keys required.
+ * A tab is considered available if at least one session has at least one column
+ * matching any of the keys for that channel group.
+ * For 'pedals', we check the base columns directly (Throttle, Brake).
+ */
+const CHANNEL_AVAILABILITY = {
+    pedals: { baseColumns: ['Throttle', 'Brake'] },
+    steering: { keys: ['steering'] },
+    rps: { keys: ['rps_fl', 'rps_fr', 'rps_rl', 'rps_rr'] },
+    gforce: { keys: ['gx', 'gy'] },
+    gyro: { keys: ['gyro_yaw', 'gyro_pitch', 'gyro_roll'] },
+    slide: { keys: ['sp_fl', 'sp_fr', 'sp_rl', 'sp_rr'] },
+    patch_vel: { keys: ['lpv_lat_fl', 'lpv_lat_fr', 'lpv_lat_rl', 'lpv_lat_rr', 'lpv_lon_fl', 'lpv_lon_fr', 'lpv_lon_rl', 'lpv_lon_rr'] },
+    force: { keys: ['lf_lat_fl', 'lf_lat_fr', 'lf_lat_rl', 'lf_lat_rr', 'lf_lon_fl', 'lf_lon_fr', 'lf_lon_rl', 'lf_lon_rr'] },
+    tyre_load: { keys: ['tl_fl', 'tl_fr', 'tl_rl', 'tl_rr'] },
+    slip_angle: { keys: ['sa_front', 'sa_rear'] }
+};
+
 export function ensureChannelLoaded(channel) {
     if (loadedChannels.has(channel)) {
         return Promise.resolve();
@@ -88,6 +110,7 @@ export function ensureChannelLoaded(channel) {
         steering: ['steering'],
         rps: ['rps_fl', 'rps_fr', 'rps_rl', 'rps_rr'],
         gforce: ['gx', 'gy'],
+        gyro: ['gyro_yaw', 'gyro_pitch', 'gyro_roll'],
         slide: ['sp_fl', 'sp_fr', 'sp_rl', 'sp_rr'],
         patch_vel: ['lpv_lat_fl', 'lpv_lat_fr', 'lpv_lat_rl', 'lpv_lat_rr', 'lpv_lon_fl', 'lpv_lon_fr', 'lpv_lon_rl', 'lpv_lon_rr'],
         force: ['lf_lat_fl', 'lf_lat_fr', 'lf_lat_rl', 'lf_lat_rr', 'lf_lon_fl', 'lf_lon_fr', 'lf_lon_rl', 'lf_lon_rr'],
@@ -1808,7 +1831,7 @@ export function renderSingleChannelPlot(activeTab) {
     const targetId = 'plot-area-' + activeTab;
     const targetEl = document.getElementById(targetId);
 
-    const lazyTabs = ['steering', 'rps', 'gforce', 'slide', 'patch_vel', 'force', 'tyre_load', 'slip_angle'];
+    const lazyTabs = ['steering', 'rps', 'gforce', 'gyro', 'slide', 'patch_vel', 'force', 'tyre_load', 'slip_angle'];
 
     if (lazyTabs.includes(activeTab)) {
         if (!loadedChannels.has(activeTab)) {
@@ -2003,6 +2026,27 @@ export function renderSingleChannelPlot(activeTab) {
                 if (state.gforcePlotActiveComponents.lat) addTrace(data, lap, 'gy', `rgba(236, 72, 153, ${alpha})`, 1.5, 'solid', 'Lat (B)', 'y', false);
                 if (state.gforcePlotActiveComponents.lon) addTrace(data, lap, 'gx', `rgba(168, 85, 247, ${alpha})`, 1.5, 'solid', 'Lon (B)', 'y', false);
                 if (state.gforcePlotActiveComponents.tot) addTrace(data, lap, 'gforce_tot', `rgba(251, 146, 60, ${alpha})`, 1.5, 'solid', 'Total (B)', 'y', false);
+            });
+        } else if (state.currentActivePlotTab === 'gyro') {
+            layout.yaxis.title = 'Angular Rate (deg/s)';
+            layout.showlegend = false;
+
+            if (!state.gyroPlotActiveComponents) {
+                state.gyroPlotActiveComponents = { yaw: true, pitch: false, roll: false };
+            }
+
+            lapsA.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsA.length);
+                if (state.gyroPlotActiveComponents.yaw) addTrace(data, lap, 'gyro_yaw', `rgba(56, 189, 248, ${alpha})`, 2, 'solid', 'Yaw', 'y', false);
+                if (state.gyroPlotActiveComponents.pitch) addTrace(data, lap, 'gyro_pitch', `rgba(34, 197, 94, ${alpha})`, 2, 'solid', 'Pitch', 'y', false);
+                if (state.gyroPlotActiveComponents.roll) addTrace(data, lap, 'gyro_roll', `rgba(251, 146, 60, ${alpha})`, 2, 'solid', 'Roll', 'y', false);
+            });
+
+            lapsB.forEach((lap, i) => {
+                const alpha = getLapAlpha(i, lapsB.length, 0.8);
+                if (state.gyroPlotActiveComponents.yaw) addTrace(data, lap, 'gyro_yaw', `rgba(56, 189, 248, ${alpha})`, 1.5, 'solid', 'Yaw (B)', 'y', false);
+                if (state.gyroPlotActiveComponents.pitch) addTrace(data, lap, 'gyro_pitch', `rgba(34, 197, 94, ${alpha})`, 1.5, 'solid', 'Pitch (B)', 'y', false);
+                if (state.gyroPlotActiveComponents.roll) addTrace(data, lap, 'gyro_roll', `rgba(251, 146, 60, ${alpha})`, 1.5, 'solid', 'Roll (B)', 'y', false);
             });
         } else if (state.currentActivePlotTab === 'slide') {
             layout.yaxis.title = 'Slide Pct (%)';
@@ -2201,7 +2245,7 @@ export function renderSingleChannelPlot(activeTab) {
         addCommonPlotElements(layout);
         if (targetEl) {
             Plotly.react(targetEl, data, layout, { responsive: true, displayModeBar: false, scrollZoom: true });
-            if (state.currentActivePlotTab === 'force' || state.currentActivePlotTab === 'gforce') {
+            if (state.currentActivePlotTab === 'force' || state.currentActivePlotTab === 'gforce' || state.currentActivePlotTab === 'gyro') {
                 renderCustomLegend(state.currentActivePlotTab, targetEl);
             } else {
                 const existing = targetEl.querySelector('.custom-plot-legend');
@@ -2260,7 +2304,7 @@ export function addTrace(data, lap, field, color, width, dash = 'solid', customN
     const x = [];
     const y = [];
     lap.points.forEach(p => {
-        if (p[field] !== undefined) {
+        if (p[field] !== undefined && p[field] !== null) {
             x.push(p.dist);
             y.push(p[field]);
         }
@@ -2492,6 +2536,7 @@ export function initExpandablePlots() {
         tab.addEventListener('click', () => {
             const target = tab.getAttribute('data-tab');
             if (!target) return;
+            if (!isChannelAvailable(target)) return;
 
             if (state.activePlotChannels.has(target)) {
                 state.activePlotChannels.delete(target);
@@ -2990,12 +3035,23 @@ function renderCustomLegend(tab, targetEl) {
             state.gforcePlotActiveComponents = { lat: true, lon: true, tot: false };
         }
 
+        const hasLat = isComponentAvailable('gy');
+        const hasLon = isComponentAvailable('gx');
+        const buttons = [];
+        if (hasLat) {
+            buttons.push(`<button class="legend-toggle-btn" data-comp="lat" style="background: ${state.gforcePlotActiveComponents.lat ? 'rgba(236, 72, 153, 0.25)' : 'transparent'}; border: 1px solid ${state.gforcePlotActiveComponents.lat ? '#ec4899' : 'rgba(255,255,255,0.1)'}; color: ${state.gforcePlotActiveComponents.lat ? '#fff' : '#94a3b8'}; padding: 4px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; cursor: pointer; transition: all 0.2s; outline: none; border-style: solid;">Lat</button>`);
+        }
+        if (hasLon) {
+            buttons.push(`<button class="legend-toggle-btn" data-comp="lon" style="background: ${state.gforcePlotActiveComponents.lon ? 'rgba(168, 85, 247, 0.25)' : 'transparent'}; border: 1px solid ${state.gforcePlotActiveComponents.lon ? '#a855f7' : 'rgba(255,255,255,0.1)'}; color: ${state.gforcePlotActiveComponents.lon ? '#fff' : '#94a3b8'}; padding: 4px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; cursor: pointer; transition: all 0.2s; outline: none; border-style: solid;">Lon</button>`);
+        }
+        if (hasLat && hasLon) {
+            buttons.push(`<button class="legend-toggle-btn" data-comp="tot" style="background: ${state.gforcePlotActiveComponents.tot ? 'rgba(251, 146, 60, 0.25)' : 'transparent'}; border: 1px solid ${state.gforcePlotActiveComponents.tot ? '#fb923c' : 'rgba(255,255,255,0.1)'}; color: ${state.gforcePlotActiveComponents.tot ? '#fff' : '#94a3b8'}; padding: 4px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; cursor: pointer; transition: all 0.2s; outline: none; border-style: solid;">Total</button>`);
+        }
+
         legendDiv.innerHTML = `
             <!-- Component Selectors -->
             <div style="display: flex; gap: 6px; justify-content: center; min-width: 140px;">
-                <button class="legend-toggle-btn" data-comp="lat" style="background: ${state.gforcePlotActiveComponents.lat ? 'rgba(236, 72, 153, 0.25)' : 'transparent'}; border: 1px solid ${state.gforcePlotActiveComponents.lat ? '#ec4899' : 'rgba(255,255,255,0.1)'}; color: ${state.gforcePlotActiveComponents.lat ? '#fff' : '#94a3b8'}; padding: 4px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; cursor: pointer; transition: all 0.2s; outline: none; border-style: solid;">Lat</button>
-                <button class="legend-toggle-btn" data-comp="lon" style="background: ${state.gforcePlotActiveComponents.lon ? 'rgba(168, 85, 247, 0.25)' : 'transparent'}; border: 1px solid ${state.gforcePlotActiveComponents.lon ? '#a855f7' : 'rgba(255,255,255,0.1)'}; color: ${state.gforcePlotActiveComponents.lon ? '#fff' : '#94a3b8'}; padding: 4px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; cursor: pointer; transition: all 0.2s; outline: none; border-style: solid;">Lon</button>
-                <button class="legend-toggle-btn" data-comp="tot" style="background: ${state.gforcePlotActiveComponents.tot ? 'rgba(251, 146, 60, 0.25)' : 'transparent'}; border: 1px solid ${state.gforcePlotActiveComponents.tot ? '#fb923c' : 'rgba(255,255,255,0.1)'}; color: ${state.gforcePlotActiveComponents.tot ? '#fff' : '#94a3b8'}; padding: 4px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; cursor: pointer; transition: all 0.2s; outline: none; border-style: solid;">Total</button>
+                ${buttons.join('')}
             </div>
         `;
 
@@ -3008,7 +3064,120 @@ function renderCustomLegend(tab, targetEl) {
                 renderSingleChannelPlot('gforce');
             });
         });
+    } else if (tab === 'gyro') {
+        if (!state.gyroPlotActiveComponents) {
+            state.gyroPlotActiveComponents = { yaw: true, pitch: false, roll: false };
+        }
+
+        const hasYaw = isComponentAvailable('gyro_yaw');
+        const hasPitch = isComponentAvailable('gyro_pitch');
+        const hasRoll = isComponentAvailable('gyro_roll');
+
+        const buttons = [];
+        if (hasYaw) {
+            buttons.push(`<button class="legend-toggle-btn" data-comp="yaw" style="background: ${state.gyroPlotActiveComponents.yaw ? 'rgba(56, 189, 248, 0.25)' : 'transparent'}; border: 1px solid ${state.gyroPlotActiveComponents.yaw ? '#38bdf8' : 'rgba(255,255,255,0.1)'}; color: ${state.gyroPlotActiveComponents.yaw ? '#fff' : '#94a3b8'}; padding: 4px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; cursor: pointer; transition: all 0.2s; outline: none; border-style: solid;">Yaw</button>`);
+        }
+        if (hasPitch) {
+            buttons.push(`<button class="legend-toggle-btn" data-comp="pitch" style="background: ${state.gyroPlotActiveComponents.pitch ? 'rgba(34, 197, 94, 0.25)' : 'transparent'}; border: 1px solid ${state.gyroPlotActiveComponents.pitch ? '#22c55e' : 'rgba(255,255,255,0.1)'}; color: ${state.gyroPlotActiveComponents.pitch ? '#fff' : '#94a3b8'}; padding: 4px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; cursor: pointer; transition: all 0.2s; outline: none; border-style: solid;">Pitch</button>`);
+        }
+        if (hasRoll) {
+            buttons.push(`<button class="legend-toggle-btn" data-comp="roll" style="background: ${state.gyroPlotActiveComponents.roll ? 'rgba(251, 146, 60, 0.25)' : 'transparent'}; border: 1px solid ${state.gyroPlotActiveComponents.roll ? '#fb923c' : 'rgba(255,255,255,0.1)'}; color: ${state.gyroPlotActiveComponents.roll ? '#fff' : '#94a3b8'}; padding: 4px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; cursor: pointer; transition: all 0.2s; outline: none; border-style: solid;">Roll</button>`);
+        }
+
+        legendDiv.innerHTML = `
+            <!-- Component Selectors -->
+            <div style="display: flex; gap: 6px; justify-content: center; min-width: 160px;">
+                ${buttons.join('')}
+            </div>
+        `;
+
+        // Event listeners for Component toggles
+        legendDiv.querySelectorAll('.legend-toggle-btn').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const comp = el.getAttribute('data-comp');
+                state.gyroPlotActiveComponents[comp] = !state.gyroPlotActiveComponents[comp];
+                renderSingleChannelPlot('gyro');
+            });
+        });
     }
 
     targetEl.appendChild(legendDiv);
+}
+
+export function isComponentAvailable(key) {
+    if (!state.allSessionsData || state.allSessionsData.length === 0) return true;
+    const choices = COLUMN_MAPPINGS[key] || [key];
+    return state.allSessionsData.some(session => {
+        const cols = session.columns;
+        if (!Array.isArray(cols)) return false;
+        return choices.some(choice =>
+            cols.some(col => col.toLowerCase() === choice.toLowerCase())
+        );
+    });
+}
+
+/**
+ * Returns true if the given channel tab has at least one matching column
+ * in any of the loaded sessions. Uses session.columns which is available
+ * without loading the full channel data.
+ */
+export function isChannelAvailable(channel) {
+    if (!state.allSessionsData || state.allSessionsData.length === 0) return false;
+
+    const spec = CHANNEL_AVAILABILITY[channel];
+    if (!spec) return true; // Unknown channel — show by default
+
+    return state.allSessionsData.some(session => {
+        const cols = session.columns;
+        if (!Array.isArray(cols)) return false;
+
+        if (spec.baseColumns) {
+            // Direct column name check (case-insensitive)
+            return spec.baseColumns.some(base =>
+                cols.some(col => col.toLowerCase() === base.toLowerCase())
+            );
+        }
+
+        if (spec.keys) {
+            // Check via COLUMN_MAPPINGS
+            return spec.keys.some(key => {
+                const choices = COLUMN_MAPPINGS[key] || [];
+                return choices.some(choice =>
+                    cols.some(col => col.toLowerCase() === choice.toLowerCase())
+                );
+            });
+        }
+
+        return false;
+    });
+}
+
+/**
+ * Show or hide plot tab buttons based on channel availability in the loaded
+ * session data. Call this after allSessionsData has been populated.
+ * Tabs for unavailable channels are hidden; if a hidden tab is currently
+ * active it is also deactivated.
+ */
+export function updateTabAvailability() {
+    const tabs = document.querySelectorAll('.plot-tab[data-tab]');
+    let changed = false;
+    tabs.forEach(tab => {
+        const target = tab.getAttribute('data-tab');
+        const available = isChannelAvailable(target);
+        tab.style.display = available ? '' : 'none';
+
+        // Deactivate a hidden tab that was previously enabled
+        if (!available && state.activePlotChannels && state.activePlotChannels.has(target)) {
+            state.activePlotChannels.delete(target);
+            const targetArea = document.getElementById('plot-area-' + target);
+            if (targetArea && typeof window !== 'undefined' && window.Plotly && window.Plotly.purge) {
+                window.Plotly.purge(targetArea);
+            }
+            changed = true;
+        }
+    });
+    if (changed) {
+        updateExpandablePlotsVisibility();
+    }
 }

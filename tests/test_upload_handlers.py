@@ -17,6 +17,7 @@ import os
 import csv
 import json
 import io
+import math
 import datetime
 from unittest.mock import patch
 from pathlib import Path
@@ -25,6 +26,7 @@ import pandas as pd
 import pytest
 import app
 import upload_handlers
+from upload_handlers import CSVSessionMetadata
 from database import db, config
 
 
@@ -659,7 +661,7 @@ def test_stream_upload_pruning_and_merging(tmp_path: Path) -> None:
         'Session,Practice\n'
         '\n'
         'Record,Time,Latitude,Longitude,Speed (m/s),GForceLat,GForceLon,'
-        'GForceVert,Throttle (%),Brake (%),Steering Wheel Angle (deg),Lap\n'
+        'GForceVert,Throttle,Brake,Steering Wheel Angle (deg),Lap\n'
         '1,2026-05-10T14:30:00.000Z,54.123,-3.123,10.0,0.1,0.2,0.3,50.0,0.0,10.0,1\n'
         '2,2026-05-10T14:30:01.000Z,54.124,-3.124,11.0,0.1,0.2,0.3,60.0,0.0,12.0,1\n'
         '3,2026-05-10T14:30:02.000Z,54.125,-3.125,12.0,0.1,0.2,0.3,70.0,0.0,14.0,1\n'
@@ -1001,3 +1003,449 @@ def test_process_telemetry_derivative_data_empty_lat_lon_strings() -> None:
         assert df_telemetry.iloc[0]['Longitude'] == ''
         assert float(df_telemetry.iloc[1]['Latitude']) == 50.8523
         assert float(df_telemetry.iloc[1]['Longitude']) == -2.5831
+
+
+def test_process_telemetry_derivative_data_gyroscope_channels() -> None:
+    records = [
+        {
+            'Time': '2026-09-05T09:21:00.000Z',
+            'Latitude': '50.8523',
+            'Longitude': '-2.5831',
+            'Speed': '12.5',
+            'Yaw Rate': '15.2345',
+            'Pitch Rate': '-2.100',
+            'Roll Rate': '0.5'
+        },
+        {
+            'Time': '2026-09-05T09:21:00.100Z',
+            'Latitude': '50.8524',
+            'Longitude': '-2.5830',
+            'Speed': '13.0',
+            'Yaw Rate': '-10.5',
+            'Pitch Rate': '0.0',
+            'Roll Rate': '-0.2'
+        }
+    ]
+    session_info = upload_handlers.CSVSessionMetadata(
+        track_name='Clay Pigeon',
+        session_name='Practice',
+        driver_name='Katia Guseinova',
+        league='fat_pro',
+        class_name='cadet',
+        session_start_datetime=datetime.datetime(2026, 9, 5, 9, 21),
+    )
+
+    with (patch('upload_handlers.db.get_track', return_value={}),
+          patch('upload_handlers.is_lap_valid', return_value=True)):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(
+            records, session_info, '/tmp'
+        )
+
+        assert 'Yaw Rate' in df_telemetry.columns
+        assert 'Pitch Rate' in df_telemetry.columns
+        assert 'Roll Rate' in df_telemetry.columns
+
+        assert df_telemetry.iloc[0]['Yaw Rate'] == '15.235'
+        assert df_telemetry.iloc[0]['Pitch Rate'] == '-2.100'
+        assert df_telemetry.iloc[0]['Roll Rate'] == '0.500'
+
+        assert df_telemetry.iloc[1]['Yaw Rate'] == '-10.500'
+        assert df_telemetry.iloc[1]['Pitch Rate'] == '0.000'
+        assert df_telemetry.iloc[1]['Roll Rate'] == '-0.200'
+
+
+def test_process_telemetry_derivative_data_does_not_inject_gyro_channels() -> None:
+    records = [
+        {
+            'Time': '2026-09-05T09:21:00.000Z',
+            'Latitude': '50.8523',
+            'Longitude': '-2.5831',
+            'Speed': '12.5'
+        }
+    ]
+    session_info = upload_handlers.CSVSessionMetadata(
+        track_name='Clay Pigeon',
+        session_name='Practice',
+        driver_name='Katia Guseinova',
+        league='fat_pro',
+        class_name='cadet',
+        session_start_datetime=datetime.datetime(2026, 9, 5, 9, 21),
+    )
+
+    with (patch('upload_handlers.db.get_track', return_value={}),
+          patch('upload_handlers.is_lap_valid', return_value=True)):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(
+            records, session_info, '/tmp'
+        )
+
+        assert 'Yaw Rate' not in df_telemetry.columns
+        assert 'Pitch Rate' not in df_telemetry.columns
+        assert 'Roll Rate' not in df_telemetry.columns
+
+
+def test_stream_upload_with_gyroscope_data(tmp_path: Path) -> None:
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['*']
+            },
+            'see_telemetry': True
+        }
+    }
+    client = app.app.test_client()
+    temp_data_dir = str(tmp_path)
+
+    csv_data = (
+        'Track name,Rowrah\n'
+        'Date,2026-05-10\n'
+        'Time,14:30:00\n'
+        'Driver name,Driver A\n'
+        'League,club100\n'
+        'Class,cadet\n'
+        'Session,Practice\n'
+        '\n'
+        'Time,Latitude,Longitude,Speed,Yaw Rate,Pitch Rate,Roll Rate\n'
+        '2026-05-10T14:30:00.000Z,54.123,-3.123,10.0,12.345,-1.200,0.500\n'
+        '2026-05-10T14:30:00.100Z,54.124,-3.122,12.0,14.500,-1.100,0.450\n'
+    )
+
+    with (patch('auth.load_keys', return_value=mock_keys),
+          patch('upload_handlers.DATA_DIR', temp_data_dir),
+          patch('upload_handlers.db.get_track', return_value={}),
+          patch('upload_handlers.populate_db.populate_single_session', return_value='session_123')):
+
+        response = client.post(
+            '/api/upload/stream',
+            data=csv_data,
+            headers={'X-API-Key': 'test_key'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response.status_code == 200
+
+        # Check that saved telemetry file has gyroscope columns
+        telemetry_dir = tmp_path / 'club100' / 'cadet' / '2026_05_10_rowrah' / 'telemetry'
+        csv_files = list(telemetry_dir.glob('*.csv'))
+        assert len(csv_files) == 1
+
+        content = csv_files[0].read_text()
+        assert 'Yaw Rate' in content
+        assert 'Pitch Rate' in content
+        assert 'Roll Rate' in content
+        assert '12.345' in content
+        assert '-1.200' in content
+
+
+def test_parse_csv_metadata_rows_distance_to_rear_axle() -> None:
+    rows = [
+        ['Track name', 'Rowrah'],
+        ['Date', '2026-05-10'],
+        ['Time', '14:30:00'],
+        ['Driver name', 'Driver A'],
+        ['League', 'club100'],
+        ['Class', 'cadet'],
+        ['Session', 'Practice'],
+        ['Distance to rear axle', '1.5'],
+    ]
+    meta = upload_handlers.parse_csv_metadata_rows(rows)
+    assert meta.distance_to_rear_axle == 1.5
+
+    # Missing distance
+    rows_no_dist = [
+        ['Track name', 'Rowrah'],
+        ['Date', '2026-05-10'],
+        ['Time', '14:30:00'],
+        ['Driver name', 'Driver A'],
+        ['League', 'club100'],
+        ['Class', 'cadet'],
+        ['Session', 'Practice'],
+    ]
+    meta_no_dist = upload_handlers.parse_csv_metadata_rows(rows_no_dist)
+    assert meta_no_dist.distance_to_rear_axle is None
+
+    # Invalid distance string
+    rows_invalid = rows_no_dist + [['Distance to rear axle', 'invalid_num']]
+    meta_invalid = upload_handlers.parse_csv_metadata_rows(rows_invalid)
+    assert meta_invalid.distance_to_rear_axle is None
+
+
+def test_process_telemetry_derivative_data_distance_to_rear_axle() -> None:
+    session_info = upload_handlers.CSVSessionMetadata(
+        driver_name='Driver A',
+        track_name='Rowrah',
+        league='club100',
+        class_name='cadet',
+        session_name='Practice',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        distance_to_rear_axle=1.75
+    )
+    records = [
+        {
+            'Time': '2026-05-10T14:30:00.000Z',
+            'Latitude': '54.123',
+            'Longitude': '-3.123',
+            'Speed': '10.0',
+        }
+    ]
+    with patch('upload_handlers.db.get_track', return_value={}):
+        _, metadata_json, _ = upload_handlers.process_telemetry_derivative_data(
+            records, session_info, '/dummy/dir'
+        )
+        assert metadata_json.get('distance_to_rear_axle') == 1.75
+
+    session_info_none = upload_handlers.CSVSessionMetadata(
+        driver_name='Driver A',
+        track_name='Rowrah',
+        league='club100',
+        class_name='cadet',
+        session_name='Practice',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        distance_to_rear_axle=None
+    )
+    with patch('upload_handlers.db.get_track', return_value={}):
+        _, metadata_json_none, _ = upload_handlers.process_telemetry_derivative_data(
+            records, session_info_none, '/dummy/dir'
+        )
+        assert 'distance_to_rear_axle' not in metadata_json_none
+
+
+def test_stream_upload_with_distance_to_rear_axle(tmp_path: Path) -> None:
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['*']
+            },
+            'see_telemetry': True
+        }
+    }
+    client = app.app.test_client()
+    temp_data_dir = str(tmp_path)
+
+    csv_data = (
+        'Format,RaceBox CSV\n'
+        'Data Source,GoPro Telemetry\n'
+        'Track,Lydd Karting 2026\n'
+        'Track name,Rowrah\n'
+        'Date,2026-05-10\n'
+        'Time,14:30:00\n'
+        'Driver name,Driver A\n'
+        'League,club100\n'
+        'Class,cadet\n'
+        'Session,Practice\n'
+        'Distance to rear axle,1.5\n'
+        '\n'
+        'Time,Latitude,Longitude,Speed\n'
+        '2026-05-10T14:30:00.000Z,54.123,-3.123,10.0\n'
+        '2026-05-10T14:30:00.100Z,54.124,-3.122,12.0\n'
+    )
+
+    with (patch('auth.load_keys', return_value=mock_keys),
+          patch('upload_handlers.DATA_DIR', temp_data_dir),
+          patch('upload_handlers.db.get_track', return_value={}),
+          patch('upload_handlers.populate_db.populate_single_session', return_value='session_123')):
+
+        response = client.post(
+            '/api/upload/stream',
+            data=csv_data,
+            headers={'X-API-Key': 'test_key'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response.status_code == 200
+
+        meeting_dir = tmp_path / 'club100' / 'cadet' / '2026_05_10_rowrah'
+        telemetry_dir = meeting_dir / 'telemetry'
+        csv_files = list(telemetry_dir.glob('*.csv'))
+        assert len(csv_files) == 1
+
+        content = csv_files[0].read_text()
+        assert 'Distance to rear axle,1.5' in content
+
+        meta_files = list(meeting_dir.glob('*_metadata.json'))
+        assert len(meta_files) == 1
+        with open(meta_files[0], 'r', encoding='utf-8') as f:
+            meta_json = json.load(f)
+        assert meta_json.get('distance_to_rear_axle') == 1.5
+
+
+def test_compute_gyro_rear_slip_angle_straight() -> None:
+    records = [
+        {'Time': f'2026-05-10T14:30:0{i:02d}.000Z', 'Yaw Rate': '0.0', 'GForceLat': '0.0'}
+        for i in range(10)
+    ]
+    course = np.full(10, 90.0)
+    speeds = np.full(10, 10.0)
+    dist = 1.5
+
+    heading, slip_rear = upload_handlers.compute_gyro_rear_slip_angle(records, course, speeds, dist)
+    assert len(heading) == 10
+    assert len(slip_rear) == 10
+    # On a straight, heading matches course (90°) and slip angle is 0.0
+    for h in heading:
+        assert abs(h - 90.0) < 1e-4
+    for s in slip_rear:
+        assert abs(s) < 1e-4
+
+
+def test_compute_gyro_rear_slip_angle_cornering_lever_arm() -> None:
+    # Test that lever arm correction subtracts camera lateral swing
+    # Pure roll on circle of radius 10m at 10 m/s:
+    # Omega_z = 1 rad/s = 57.2958 deg/s (CW, right turn)
+    # GoPro Yaw Rate = -57.2958 deg/s
+    # Camera at L=1.0m ahead moves at angle atan(1/10) = 0.09967 rad = 5.71 deg to the right of heading
+    # With lever arm L=1.0, slip angle at rear axle should be ~0 deg
+    # With lever arm L=0.0, slip angle remains ~5.71 deg
+    heading_ref = 90.0
+    omega_deg = 57.2958
+    cam_angle = math.degrees(math.atan2(1.0, 10.0))  # ~5.71°
+
+    # Point 0 is on a straight to anchor initial heading to heading_ref
+    records = [{'Time': '2026-05-10T14:30:00.000Z', 'Yaw Rate': '0.0', 'GForceLat': '0.0'}]
+    course_list = [heading_ref]
+
+    for i in range(1, 10):
+        records.append({
+            'Time': f'2026-05-10T14:30:00.{i}00Z',
+            'Yaw Rate': str(-omega_deg),
+            'GForceLat': '1.0',
+        })
+        curr_heading = heading_ref + omega_deg * (i * 0.1)
+        course_list.append(curr_heading + cam_angle)
+
+    course = np.array(course_list)
+    speeds = np.full(10, 10.0)
+
+    # With L = 1.0 m, lever arm eliminates the false slip angle
+    _, slip_with_lever = upload_handlers.compute_gyro_rear_slip_angle(
+        records, course, speeds, distance_to_rear_axle=1.0
+    )
+    # With L = 0.0 m, false slip angle of ~5.71° remains
+    _, slip_no_lever = upload_handlers.compute_gyro_rear_slip_angle(
+        records, course, speeds, distance_to_rear_axle=0.0
+    )
+
+    assert abs(slip_with_lever[-1]) < 0.1
+    assert abs(slip_no_lever[-1] - cam_angle) < 0.1
+
+
+def test_process_telemetry_derivative_data_gyro_slip_angle() -> None:
+    records = [
+        {
+            'Time': f'2026-05-10T14:30:00.{i}00Z',
+            'Latitude': f'54.{i}',
+            'Longitude': '-3.123',
+            'Speed': '10.0',
+            'Yaw Rate': '15.0',
+            'GForceLat': '0.5',
+        }
+        for i in range(10)
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='club100',
+        class_name='cadet',
+        session_name='Practice',
+        distance_to_rear_axle=1.5,
+    )
+
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+
+    assert 'Slip Angle Rear' in df_telemetry.columns
+    assert 'Kart Heading' in df_telemetry.columns
+    assert 'Yaw' in df_telemetry.columns
+    # Check that it's populated and not empty
+    assert df_telemetry.iloc[-1]['Slip Angle Rear'] != ''
+
+
+def test_process_telemetry_derivative_data_no_distance_skips_slip_angle() -> None:
+    # When distance_to_rear_axle is None, slip angle calculation must be skipped
+    records = [
+        {
+            'Time': f'2026-05-10T14:30:00.{i}00Z',
+            'Latitude': f'54.{i}',
+            'Longitude': '-3.123',
+            'Speed': '10.0',
+            'Yaw Rate': '15.0',
+        }
+        for i in range(5)
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='club100',
+        class_name='cadet',
+        session_name='Practice',
+        distance_to_rear_axle=None,
+    )
+
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+
+    # Slip Angle Rear should NOT be computed
+    assert 'Slip Angle Rear' not in df_telemetry.columns or (df_telemetry['Slip Angle Rear'] == '').all()
+
+
+def test_process_telemetry_derivative_data_kartsim_quats_unaffected() -> None:
+    # When quaternions are present (KartSim), gyro slip angle must be bypassed
+    records = [
+        {
+            'Time': f'2026-05-10T14:30:00.{i}00Z',
+            'Latitude': '54.123',
+            'Longitude': '-3.123',
+            'Speed': '10.0',
+            'Ori Quat X': '0.0',
+            'Ori Quat Y': '0.0',
+            'Ori Quat Z': '0.0',
+            'Ori Quat W': '1.0',
+            'Yaw Rate': '50.0',  # Gyro channel also present
+        }
+        for i in range(5)
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='kartsim',
+        class_name='cadet',
+        session_name='Practice',
+        distance_to_rear_axle=1.5,
+    )
+
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+
+    # Should have run quat_to_yaw path, not gyro integration
+    assert 'Ori Quat X' in df_telemetry.columns
+    assert 'Slip Angle Rear' in df_telemetry.columns
+
+
+def test_process_telemetry_derivative_data_existing_raw_slip_unaffected() -> None:
+    # When Slip Angle Rear is already in input, do not overwrite it with gyro calculation
+    records = [
+        {
+            'Time': f'2026-05-10T14:30:00.{i}00Z',
+            'Latitude': '54.123',
+            'Longitude': '-3.123',
+            'Speed': '10.0',
+            'Yaw Rate': '50.0',
+            'Slip Angle Rear': '99.50',
+        }
+        for i in range(5)
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='club100',
+        class_name='cadet',
+        session_name='Practice',
+        distance_to_rear_axle=1.5,
+    )
+
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+    assert df_telemetry.iloc[0]['Slip Angle Rear'] == '99.50'

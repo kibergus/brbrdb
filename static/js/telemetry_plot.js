@@ -174,8 +174,8 @@
           requestedChannels.forEach(function(ch) {
             var normCh = ch.toLowerCase().trim();
             if (normCh === 'speed' || normCh === 'speed (km/h)') channelColMap[ch] = findCol(['Speed', 'Speed (km/h)']);
-            else if (normCh === 'brake' || normCh === 'brake (%)') channelColMap[ch] = findCol(['Brake', 'Brake (%)']);
-            else if (normCh === 'throttle' || normCh === 'throttle (%)') channelColMap[ch] = findCol(['Throttle', 'Throttle (%)']);
+            else if (normCh === 'brake') channelColMap[ch] = findCol(['Brake']);
+            else if (normCh === 'throttle') channelColMap[ch] = findCol(['Throttle']);
             else if (normCh === 'steering' || normCh === 'steering angle' || normCh.indexOf('steering') !== -1) channelColMap[ch] = findCol(['Steering Angle', 'Steering Wheel Angle (deg)', 'Steering']);
             else if (!isDeltaTime(ch)) channelColMap[ch] = findCol([ch]);
           });

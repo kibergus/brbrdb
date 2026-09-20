@@ -62,6 +62,7 @@ class CSVSessionMetadata:
     track_conditions: str | None = None
     temperature: str | None = None
     weather: str | None = None
+    distance_to_rear_axle: float | None = None
 
 
 def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessionMetadata:
@@ -78,6 +79,7 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
     track_conditions = None
     temperature = None
     weather = None
+    distance_to_rear_axle = None
 
     date_str = None
     time_str = None
@@ -112,6 +114,11 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
             temperature = val
         elif key == 'weather':
             weather = val
+        elif key == 'distance to rear axle':
+            try:
+                distance_to_rear_axle = float(val)
+            except (ValueError, TypeError):
+                distance_to_rear_axle = None
 
     if date_str and time_str:
         session_start_datetime_str = f'{date_str} {time_str[:5]}'
@@ -144,7 +151,8 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
         kart_number=kart_number,
         track_conditions=track_conditions,
         temperature=temperature,
-        weather=weather
+        weather=weather,
+        distance_to_rear_axle=distance_to_rear_axle
     )
 
 
@@ -430,6 +438,91 @@ def load_existing_telemetry_lines(telemetry_path: str) -> list[str]:
         return f.read().splitlines()
 
 
+def compute_gyro_rear_slip_angle(
+    records: list[dict],
+    course: np.ndarray,
+    speeds_ms: np.ndarray,
+    distance_to_rear_axle: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Computes chassis heading and rear tire slip angle from gyro yaw rate and GPS course.
+
+    Uses straight-line intervals (low yaw rate, low lateral G, speed > 6 m/s) to
+    anchor the heading to GPS course and estimate gyro zero-rate bias.
+    Translates the velocity vector from the camera location to the rear axle using
+    distance_to_rear_axle and the yaw rate.
+    """
+    N = len(records)
+    if N == 0:
+        return np.zeros(0), np.zeros(0)
+
+    # Extract time deltas between points
+    dts = np.full(N, 0.1)
+    timestamps = [to_naive_datetime(r.get('Time')) for r in records]
+
+    for i in range(1, N):
+        t_prev = timestamps[i - 1]
+        t_curr = timestamps[i]
+        if t_prev is not None and t_curr is not None:
+            delta = (t_curr - t_prev).total_seconds()
+            if 0 < delta <= 1.0:
+                dts[i] = delta
+
+    yaw_rates = np.array([safe_float(r.get('Yaw Rate'), 0.0) for r in records])
+    glat = np.array([safe_float(r.get('GForceLat'), 0.0) for r in records])
+
+    heading = np.zeros(N)
+    slip_rear = np.zeros(N)
+
+    # Find initial anchor point where kart is moving
+    moving_idxs = np.where(speeds_ms > 3.0)[0]
+    start_idx = int(moving_idxs[0]) if len(moving_idxs) > 0 else 0
+    init_course = course[start_idx] if len(course) > start_idx else 0.0
+    heading[:start_idx + 1] = init_course
+
+    bias = 0.0
+    bias_samples: list[float] = []
+
+    for i in range(start_idx + 1, N):
+        dt = dts[i]
+        v = speeds_ms[i]
+        yr = yaw_rates[i]
+        cog = course[i]
+        lat_g = glat[i]
+
+        # Integrate heading: in compass coordinates (CW), dpsi/dt = -(yaw_rate - bias)
+        dpsi = -(yr - bias) * dt
+        psi_pred = (heading[i - 1] + dpsi) % 360.0
+
+        # Straight-line detection: speed > 6 m/s, low yaw rate, low lateral G
+        is_straight = (v > 6.0) and (abs(yr) < 4.0) and (abs(lat_g) < 0.25)
+        if is_straight:
+            err = (cog - psi_pred + 180.0) % 360.0 - 180.0
+            heading[i] = (psi_pred + 0.3 * err) % 360.0
+            bias_samples.append(yr)
+            if len(bias_samples) > 50:
+                bias_samples.pop(0)
+            bias = float(np.median(bias_samples))
+        else:
+            heading[i] = psi_pred
+
+        if v >= 2.0:
+            beta_cam_deg = (cog - heading[i] + 180.0) % 360.0 - 180.0
+            beta_cam_rad = math.radians(beta_cam_deg)
+            vx_cam = v * math.cos(beta_cam_rad)
+            vy_cam = v * math.sin(beta_cam_rad)
+
+            # Omega_z clockwise in rad/s:
+            omega_rad = math.radians(-(yr - bias))
+            vy_rear = vy_cam - omega_rad * distance_to_rear_axle
+            vx_rear = max(vx_cam, 0.5)
+
+            slip_rear[i] = math.degrees(math.atan2(vy_rear, vx_rear))
+        else:
+            slip_rear[i] = 0.0
+
+    return heading, slip_rear
+
+
 def process_telemetry_derivative_data(
     records: list[dict], session_info: CSVSessionMetadata, data_dir: str
 ) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
@@ -593,9 +686,35 @@ def process_telemetry_derivative_data(
     def wrap_180(a: float) -> float:
         return (a + 180) % 360 - 180
 
+    speeds_ms = np.zeros(len(records))
+    for i, r in enumerate(records):
+        s_val = safe_float(r.get('Speed'), 0.0)
+        speeds_ms[i] = s_val / 3.6 if s_val > 50.0 else s_val
+
     telemetry_rows = []
     has_quat = any('Ori Quat X' in r or 'q_x' in r or 'Ori Quat W' in r for r in records)
     has_toe = any('Toe FL' in r or 'toe_fl' in r for r in records)
+    has_raw_slip_rear = any(
+        r.get('Slip Angle Rear') is not None and str(r.get('Slip Angle Rear')).strip() != ''
+        for r in records
+    )
+    has_gyro = any(
+        r.get('Yaw Rate') is not None and str(r.get('Yaw Rate')).strip() != ''
+        for r in records
+    )
+    can_compute_gyro_slip = (
+        not has_quat
+        and not has_raw_slip_rear
+        and has_gyro
+        and session_info.distance_to_rear_axle is not None
+    )
+
+    if can_compute_gyro_slip and session_info.distance_to_rear_axle is not None:
+        gyro_heading_arr, gyro_slip_rear_arr = compute_gyro_rear_slip_angle(
+            records, course, speeds_ms, session_info.distance_to_rear_axle
+        )
+    else:
+        gyro_heading_arr, gyro_slip_rear_arr = np.zeros(len(records)), np.zeros(len(records))
 
     sim_channels = [
         'RPS FL', 'RPS FR', 'RPS RL', 'RPS RR',
@@ -658,6 +777,15 @@ def process_telemetry_derivative_data(
         if 'Steering Angle' in r:
             row['Steering Angle'] = f"{safe_float(r.get('Steering Angle'), 0.0):.1f}"
 
+        if 'Yaw Rate' in r:
+            row['Yaw Rate'] = f"{safe_float(r.get('Yaw Rate'), 0.0):.3f}"
+
+        if 'Pitch Rate' in r:
+            row['Pitch Rate'] = f"{safe_float(r.get('Pitch Rate'), 0.0):.3f}"
+
+        if 'Roll Rate' in r:
+            row['Roll Rate'] = f"{safe_float(r.get('Roll Rate'), 0.0):.3f}"
+
         # Orientation / Heading / Slip angles
         if has_quat:
             kart_heading = wrap_360(quat_to_yaw(q_x[i], q_y[i], q_z[i], q_w[i]))
@@ -687,11 +815,17 @@ def process_telemetry_derivative_data(
             else:
                 slip_rear = wrap_180(course_val - kart_heading + 180)
                 row['Slip Angle Rear'] = f'{slip_rear:.2f}'
+        elif can_compute_gyro_slip:
+            row['Kart Heading'] = f'{gyro_heading_arr[i]:.2f}'
+            row['Yaw'] = f'{gyro_heading_arr[i]:.2f}'
+            row['Slip Angle Rear'] = f'{gyro_slip_rear_arr[i]:.2f}'
         else:
             if 'Kart Heading' in r:
                 row['Kart Heading'] = f"{safe_float(r.get('Kart Heading'), 0.0):.2f}"
             if 'Yaw' in r:
                 row['Yaw'] = f"{safe_float(r.get('Yaw'), 0.0):.2f}"
+            if 'Slip Angle Rear' in r and r.get('Slip Angle Rear') not in (None, ''):
+                row['Slip Angle Rear'] = f"{safe_float(r.get('Slip Angle Rear'), 0.0):.2f}"
 
         # Optional simulation physics channels
         for ch in sim_channels:
@@ -768,6 +902,9 @@ def process_telemetry_derivative_data(
         'track_temperature': '',
         'sector_end': sector_end,
     }
+
+    if session_info.distance_to_rear_axle is not None:
+        metadata_json['distance_to_rear_axle'] = session_info.distance_to_rear_axle
 
     return df_telemetry, metadata_json, df_summary
 
@@ -870,6 +1007,17 @@ def stream_upload() -> Any:
     # and after each line check if 15 seconds have passed (or the file has been closed)
     # and write data to the filesystem and to the DB.
     existing_lines = load_existing_telemetry_lines(telemetry_path)
+    if metadata.distance_to_rear_axle is None and existing_lines:
+        for ex_line in existing_lines:
+            if not ex_line.strip():
+                break
+            parts = [p.strip() for p in ex_line.split(',', 1)]
+            if len(parts) == 2 and parts[0].lower() == 'distance to rear axle':
+                try:
+                    metadata.distance_to_rear_axle = float(parts[1])
+                except (ValueError, TypeError):
+                    pass
+                break
     pruned_and_merged = False
 
     written_rows_count = 0
@@ -889,6 +1037,8 @@ def stream_upload() -> Any:
         writer.writerow(['League', metadata.league])
         writer.writerow(['Class', metadata.class_name])
         writer.writerow(['Session', metadata.session_name])
+        if metadata.distance_to_rear_axle is not None:
+            writer.writerow(['Distance to rear axle', metadata.distance_to_rear_axle])
         writer.writerow([])  # Mandatory separator
 
         buffered_lines: list[str] = []

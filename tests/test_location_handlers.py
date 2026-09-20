@@ -281,6 +281,25 @@ Time,Latitude,Longitude,Record,Lap
     assert laps[0]['end_idx'] == 1
     assert columns == ['Time', 'Latitude', 'Longitude', 'Record', 'Lap']
 
+    # 4. Test filtering of dummy columns that are all 0.0 or empty
+    dummy_csv_content = """Format,RaceTools CSV
+Driver name,Katia
+
+Record,Time,Latitude,Longitude,Speed,Lap,Yaw Rate,Throttle,Brake,RPS FL,Slip Angle
+1,2026-09-12T08:48:10.600Z,50.933,0.907,15.0,1,25.5,0.0,0.0,0.00,
+2,2026-09-12T08:48:10.700Z,50.933,0.907,16.0,1,28.2,0.0,0.0,0.00,
+"""
+    dummy_file = tmp_path / "dummy.csv"
+    dummy_file.write_text(dummy_csv_content)
+
+    _, dummy_cols, _ = location_handlers.parse_telemetry_csv(str(dummy_file))
+    assert 'Yaw Rate' in dummy_cols
+    assert 'Speed' in dummy_cols
+    assert 'Throttle' not in dummy_cols
+    assert 'Brake' not in dummy_cols
+    assert 'RPS FL' not in dummy_cols
+    assert 'Slip Angle' not in dummy_cols
+
     # 3. Test Start-to-Start timing across adjacent laps
     multi_lap_csv = """Format,RaceTools CSV
 Driver name,Katia
@@ -1258,3 +1277,70 @@ def test_get_telemetry_channel_multi_meeting(tmp_path: Path) -> None:
         resp = client.get(url)
         assert resp.status_code == 200
         assert resp.mimetype == 'application/octet-stream'
+
+
+def test_get_telemetry_channel_and_track_points_gyroscope(tmp_path: Path) -> None:
+    client = flask_app.app.test_client()
+
+    meeting_dir = tmp_path / "meeting"
+    meeting_dir.mkdir()
+    telem = meeting_dir / "telemetry"
+    telem.mkdir()
+
+    sample_csv = (
+        "Format,RaceBox CSV\nDriver name,Driver A\n\n"
+        "Record,Time,Latitude,Longitude,Speed,Lap,Yaw Rate,Pitch Rate,Roll Rate\n"
+        "1,2026-08-29T14:59:00.000Z,51.864398,-1.684073,15.0,1,25.500,-1.200,0.800\n"
+        "2,2026-08-29T14:59:00.100Z,51.864400,-1.684070,16.0,1,28.200,-1.150,0.850\n"
+    )
+    (telem / "14_59_practice_driver_a.csv").write_text(sample_csv)
+
+    s1 = MagicMock()
+    s1.session_id = '14_59_practice'
+    s1.session_name = '14:59 Practice'
+    s1.meeting_dir = str(meeting_dir)
+    s1.league = 'club100'
+    s1.class_name = 'cadet'
+    s1.date = '2026-08-29'
+    s1.track = 'Lydd'
+
+    with patch('location_handlers.db.find_sessions', return_value=[s1]), \
+         patch('location_handlers.db.get_track', return_value={}), \
+         patch('location_handlers.db.load', return_value=pd.DataFrame()), \
+         patch('location_handlers.auth.can_see_telemetry', return_value=True):
+
+        # 1. Test /api/telemetry contains gyro columns
+        resp_points = client.get('/api/telemetry?league=club100&class_name=cadet&date=2026-08-29&track=Lydd')
+        assert resp_points.status_code == 200
+        data = resp_points.get_json()
+        assert len(data) == 1
+        assert 'Yaw Rate' in data[0]['columns']
+        assert 'Pitch Rate' in data[0]['columns']
+        assert 'Roll Rate' in data[0]['columns']
+
+        # 2. Test /api/telemetry/channel for Yaw Rate
+        url_yaw = '/api/telemetry/channel?session_id=club100/cadet/2026-08-29/Lydd/14_59_practice&channel=Yaw Rate'
+        resp_yaw = client.get(url_yaw)
+        assert resp_yaw.status_code == 200
+        mean_val, scale = struct.unpack("<dd", resp_yaw.data[:16])
+        deltas = np.frombuffer(resp_yaw.data[16:], dtype=np.int16)
+        reconstructed = [mean_val + deltas[0] * scale, mean_val + (deltas[0] + deltas[1]) * scale]
+        assert np.allclose(reconstructed, [25.5, 28.2], atol=1e-3)
+
+        # 3. Test /api/telemetry/channel for Pitch Rate
+        url_pitch = '/api/telemetry/channel?session_id=club100/cadet/2026-08-29/Lydd/14_59_practice&channel=Pitch Rate'
+        resp_pitch = client.get(url_pitch)
+        assert resp_pitch.status_code == 200
+        mean_val, scale = struct.unpack("<dd", resp_pitch.data[:16])
+        deltas = np.frombuffer(resp_pitch.data[16:], dtype=np.int16)
+        reconstructed_pitch = [mean_val + deltas[0] * scale, mean_val + (deltas[0] + deltas[1]) * scale]
+        assert np.allclose(reconstructed_pitch, [-1.2, -1.15], atol=1e-3)
+
+        # 4. Test /api/telemetry/channel for Roll Rate
+        url_roll = '/api/telemetry/channel?session_id=club100/cadet/2026-08-29/Lydd/14_59_practice&channel=Roll Rate'
+        resp_roll = client.get(url_roll)
+        assert resp_roll.status_code == 200
+        mean_val, scale = struct.unpack("<dd", resp_roll.data[:16])
+        deltas = np.frombuffer(resp_roll.data[16:], dtype=np.int16)
+        reconstructed_roll = [mean_val + deltas[0] * scale, mean_val + (deltas[0] + deltas[1]) * scale]
+        assert np.allclose(reconstructed_roll, [0.8, 0.85], atol=1e-3)

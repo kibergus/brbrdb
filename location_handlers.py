@@ -105,8 +105,7 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
                 break
 
         # The row immediately following the empty line is the column names (headers).
-        header = csv_rows[0]
-        columns = [col.strip() for col in header]
+        header = [col.strip() for col in csv_rows[0]]
         data_rows = csv_rows[1:]
 
         time_idx = header.index('Time') if 'Time' in header else -1
@@ -125,6 +124,7 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
                 speed_col_indices.append(header.index(speed_col))
 
         idx = 0
+        has_data = [False] * len(header)
         for row in data_rows:
             if not row or len(row) < len(header):
                 continue
@@ -142,6 +142,16 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
                 if np.isnan(f_lat) or np.isnan(f_lon) or (f_lat == 0.0 and f_lon == 0.0):
                     continue
                 lap_num = int(lap_val)
+
+                for c_i in range(len(header)):
+                    if not has_data[c_i]:
+                        val_clean = row[c_i].strip()
+                        if val_clean and val_clean.lower() not in ('nan', 'none', 'null'):
+                            try:
+                                if float(val_clean) != 0.0:
+                                    has_data[c_i] = True
+                            except ValueError:
+                                has_data[c_i] = True
 
                 if lap_num not in session_laps:
                     session_laps[lap_num] = {
@@ -238,6 +248,12 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
             'times': times,
             'duration': duration
         })
+    core_cols = {'Record', 'Time', 'Latitude', 'Longitude', 'Lap'}
+    active_columns = [
+        header[i] for i in range(len(header))
+        if has_data[i] or header[i] in core_cols
+    ]
+    columns = active_columns if active_columns else list(header)
     return laps_list, columns, driver_name
 
 
@@ -823,8 +839,8 @@ def _override_with_official_laps(
 
     # Build structured list of official laps sorted by Lap number
     official_laps = official_laps.sort_values(by='Lap')
-    off_items = []
-    lap_map = {}
+    off_items: list[dict[str, Any]] = []
+    lap_map: dict[int, dict[str, Any]] = {}
     for _, row in official_laps.iterrows():
         try:
             l_num = int(row['Lap'])
@@ -845,6 +861,9 @@ def _override_with_official_laps(
             l_time = _parse_lap_time(sec)
 
         time_str = str(l_time) if (pd.notna(l_time) and l_time) else _parse_lap_time(sec)
+        if sec == 0.0 and time_str:
+            sec = sanitize.parse_time(time_str) or 0.0
+
         item = {
             'lap_num': l_num,
             'seconds': sec,
@@ -871,8 +890,8 @@ def _override_with_official_laps(
         for i in range(N):
             j = i - shift
             if 0 <= j < M:
-                off_sec = off_items[j]['seconds']
-                tel_dur = laps[i].get('duration', 0.0)
+                off_sec = float(off_items[j]['seconds'] or 0.0)
+                tel_dur = float(laps[i].get('duration', 0.0) or 0.0)
                 if off_sec > 0 and tel_dur > 0:
                     diff_sum += abs(tel_dur - off_sec)
                     compare_count += 1

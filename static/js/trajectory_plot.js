@@ -197,8 +197,8 @@ export class TrajectoryPlot {
                 const distCol = this._findCol(cols, ['Lap Distance (m)', 'Lap Distance', 'LapDistance']);
                 const timeCol = this._findCol(cols, ['Time']);
                 const speedCol = this._findCol(cols, ['Speed', 'Speed (km/h)']);
-                const throttleCol = this._findCol(cols, ['Throttle (%)', 'Throttle', 'throttle']);
-                const brakeCol = this._findCol(cols, ['Brake (%)', 'Brake', 'brake']);
+                const throttleCol = this._findCol(cols, ['Throttle', 'throttle']);
+                const brakeCol = this._findCol(cols, ['Brake', 'brake']);
                 const glonCol = this._findCol(cols, ['GForceLon', 'gforcelon']);
 
                 const [xArr, yArr, distArr, timeArr, speedArr, throttleArr, brakeArr, glonArr] = await Promise.all([

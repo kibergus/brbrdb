@@ -461,8 +461,8 @@ export function loadBaseColumnsForSessions(sessionsData) {
         const timeCol = 'Time';
         const distCol = findCol(['Lap Distance (m)', 'Lap Distance']);
         const speedCol = findCol(['Speed (m/s)', 'Speed']);
-        const throttleCol = findCol(['Throttle (%)', 'Throttle']);
-        const brakeCol = findCol(['Brake (%)', 'Brake']);
+        const throttleCol = findCol(['Throttle']);
+        const brakeCol = findCol(['Brake']);
         const gxCol = findCol(['GForceLon']);
         const gyCol = findCol(['GForceLat']);
 
@@ -516,7 +516,7 @@ export function loadBaseColumnsForSessions(sessionsData) {
 
 export function hasBrakeChannel(sessionsData) {
     if (!Array.isArray(sessionsData)) return false;
-    const brakeNames = ['brake (%)', 'brake'];
+    const brakeNames = ['brake'];
     return sessionsData.some(session => {
         if (!session || !Array.isArray(session.columns)) return false;
         return session.columns.some(col => brakeNames.includes(col.toLowerCase()));
@@ -622,6 +622,7 @@ export function loadTrackPoints(overrideSessionId) {
         .then(sessionsData => loadBaseColumnsForSessions(sessionsData))
         .then(sessionsData => {
             state.allSessionsData = sessionsData;
+            import('./plots_sync.js').then(m => m.updateTabAvailability());
             if (lapList) lapList.innerHTML = '';
             const bounds = new google.maps.LatLngBounds();
 

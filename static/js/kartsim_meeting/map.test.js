@@ -447,7 +447,6 @@ describe('loadBaseColumnsForSessions', () => {
 describe('hasBrakeChannel', () => {
     it('returns true when brake channel is in session columns', () => {
         expect(hasBrakeChannel([{ columns: ['Time', 'Speed', 'Brake'] }])).toBe(true);
-        expect(hasBrakeChannel([{ columns: ['Time', 'Speed', 'Brake (%)'] }])).toBe(true);
     });
 
     it('returns false when no brake channel is present in session columns', () => {
