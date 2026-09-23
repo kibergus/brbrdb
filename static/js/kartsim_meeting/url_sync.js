@@ -83,27 +83,42 @@ export function updateURL() {
             params.delete('session_id');
         }
 
-        // 2. Group A & B Lap Selection
-        if (state.groupASelection) {
-            if (state.groupASelection.size > 0) {
-                const formatted = Array.from(state.groupASelection).map(formatLapForUrl).sort(compareShortLapKeys);
-                params.set('lapsA', formatted.join(','));
-            } else {
-                params.set('lapsA', 'none');
-            }
-        }
-        if (state.groupBSelection) {
-            if (state.groupBSelection.size > 0) {
-                const formatted = Array.from(state.groupBSelection).map(formatLapForUrl).sort(compareShortLapKeys);
-                params.set('lapsB', formatted.join(','));
-            } else {
-                params.set('lapsB', 'none');
-            }
+        // 2. Group Lap Selection & Dynamic Groups
+        const groups = state.groups || ['A', 'B'];
+        const isDefaultGroups = groups.length === 2 && groups[0] === 'A' && groups[1] === 'B';
+        if (!isDefaultGroups) {
+            params.set('groups', groups.join(','));
+        } else {
+            params.delete('groups');
         }
 
-        // 3. Group A/B Visibility
-        params.set('visA', state.groupAVisible ? '1' : '0');
-        params.set('visB', state.groupBVisible ? '1' : '0');
+        const disabled = groups.filter(g => g !== 'A' && state.groupEnabled && state.groupEnabled[g] === false);
+        if (disabled.length > 0) {
+            params.set('dis', disabled.join(','));
+        } else {
+            params.delete('dis');
+        }
+
+        // 3. Per-group Lap Selection and Visibility
+        for (let code = 65; code <= 90; code++) { // 'A' to 'Z'
+            const g = String.fromCharCode(code);
+            if (groups.includes(g)) {
+                const selection = state.groupSelections ? state.groupSelections[g] : null;
+                if (selection) {
+                    if (selection.size > 0) {
+                        const formatted = Array.from(selection).map(formatLapForUrl).sort(compareShortLapKeys);
+                        params.set('laps' + g, formatted.join(','));
+                    } else {
+                        params.set('laps' + g, 'none');
+                    }
+                }
+                const isVis = state.isGroupVisible ? state.isGroupVisible(g) : (g === 'A' ? state.groupAVisible : state.groupBVisible);
+                params.set('vis' + g, isVis ? '1' : '0');
+            } else {
+                params.delete('laps' + g);
+                params.delete('vis' + g);
+            }
+        }
 
         // 4. Bottom sidebar plots (delta, speed, active plot tab)
         params.set('delta', state.deltaPlotVisible ? '1' : '0');

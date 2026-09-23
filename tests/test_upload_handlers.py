@@ -1449,3 +1449,372 @@ def test_process_telemetry_derivative_data_existing_raw_slip_unaffected() -> Non
     with patch('upload_handlers.db.get_track', return_value={}):
         df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
     assert df_telemetry.iloc[0]['Slip Angle Rear'] == '99.50'
+
+
+def test_compute_gyro_rear_slip_angle_missing_data() -> None:
+    # Test handling when gyro data is missing/NaN on some points
+    records = [
+        {'Time': '2026-05-10T14:30:00.000Z', 'Yaw Rate': '0.0', 'GForceLat': '0.0'},
+        {'Time': '2026-05-10T14:30:00.100Z', 'Yaw Rate': '10.0', 'GForceLat': '0.2'},
+        {'Time': '2026-05-10T14:30:00.200Z', 'Yaw Rate': '', 'GForceLat': '0.2'},  # missing
+        {'Time': '2026-05-10T14:30:00.300Z', 'Yaw Rate': 'nan', 'GForceLat': '0.2'},  # NaN string
+        {'Time': '2026-05-10T14:30:00.400Z', 'Yaw Rate': '12.0', 'GForceLat': '0.2'},  # resumed
+    ]
+    course = np.full(5, 90.0)
+    speeds = np.full(5, 10.0)
+
+    heading, slip_rear = upload_handlers.compute_gyro_rear_slip_angle(
+        records, course, speeds, distance_to_rear_axle=1.0
+    )
+    assert not np.isnan(slip_rear[1])
+    assert np.isnan(slip_rear[2])  # point 2 missing gyro -> NaN slip
+    assert np.isnan(slip_rear[3])  # point 3 NaN gyro -> NaN slip
+    assert not np.isnan(slip_rear[4])  # resumed
+
+
+def test_process_telemetry_derivative_data_all_gyro_nan_skips_slip() -> None:
+    # When all Yaw Rate values are NaN or empty, slip angle must not be calculated
+    records = [
+        {
+            'Time': f'2026-05-10T14:30:00.{i}00Z',
+            'Latitude': f'54.{i}',
+            'Longitude': '-3.123',
+            'Speed': '10.0',
+            'Yaw Rate': 'nan',
+        }
+        for i in range(5)
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='club100',
+        class_name='cadet',
+        session_name='Practice',
+        distance_to_rear_axle=1.5,
+    )
+
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+
+    # Slip Angle Rear should not be computed (column absent or completely empty)
+    assert 'Slip Angle Rear' not in df_telemetry.columns or (df_telemetry['Slip Angle Rear'] == '').all()
+
+
+def test_process_telemetry_derivative_data_partial_gyro_nan() -> None:
+    # When some points have NaN gyro, only valid points receive Slip Angle Rear
+    records = [
+        {
+            'Time': '2026-05-10T14:30:00.000Z',
+            'Latitude': '54.123',
+            'Longitude': '-3.123',
+            'Speed': '10.0',
+            'Yaw Rate': '0.0',
+            'GForceLat': '0.0',
+        },
+        {
+            'Time': '2026-05-10T14:30:00.100Z',
+            'Latitude': '54.124',
+            'Longitude': '-3.123',
+            'Speed': '10.0',
+            'Yaw Rate': '15.0',
+            'GForceLat': '0.5',
+        },
+        {
+            'Time': '2026-05-10T14:30:00.200Z',
+            'Latitude': '54.125',
+            'Longitude': '-3.123',
+            'Speed': '10.0',
+            'Yaw Rate': 'nan',  # NaN gyro
+            'GForceLat': '0.5',
+        },
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='club100',
+        class_name='cadet',
+        session_name='Practice',
+        distance_to_rear_axle=1.5,
+    )
+
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+
+    assert df_telemetry.iloc[1]['Slip Angle Rear'] != ''
+    assert df_telemetry.iloc[2]['Slip Angle Rear'] == ''
+    assert df_telemetry.iloc[2]['Yaw Rate'] == ''
+
+
+def test_compute_gyro_forces_basic() -> None:
+    records = [
+        {
+            'Time': f'2026-05-10T14:30:00.{i}00Z',
+            'Yaw Rate': '10.0',
+            'GForceLat': '1.0',
+            'GForceLon': '0.2',
+            'Steering Angle': '5.0',
+        }
+        for i in range(10)
+    ]
+    speeds = np.full(10, 15.0)
+    f_yf, f_yr, f_xf, f_xr = upload_handlers.compute_gyro_forces(records, speeds, 0.44)
+
+    assert len(f_yf) == 10
+    # In steady state yaw rate, front lateral force should be roughly W_f * 1.0 ≈ 0.423
+    assert 0.35 < f_yf[5] < 0.50
+    # Rear lateral force should be roughly W_r * 1.0 ≈ 0.577
+    assert 0.50 < f_yr[5] < 0.65
+    # Sum of front and rear lateral force should equal total lateral acceleration (1.0g)
+    assert np.isclose(f_yf[5] + f_yr[5], 1.0, atol=1e-3)
+    # Front longitudinal force should be retarding (-f_yf * sin(delta))
+    assert f_xf[5] < 0.0
+    # Sum of front and rear longitudinal force should equal total longitudinal acceleration (0.2g)
+    assert np.isclose(f_xf[5] + f_xr[5], 0.2, atol=1e-3)
+
+
+def test_process_telemetry_derivative_data_gyro_forces() -> None:
+    records = [
+        {
+            'Time': f'2026-05-10T14:30:00.{i}00Z',
+            'Latitude': f'54.{i}',
+            'Longitude': '-3.123',
+            'Speed': '15.0',
+            'Yaw Rate': '12.0',
+            'GForceLat': '0.8',
+            'GForceLon': '0.1',
+        }
+        for i in range(10)
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='club100',
+        class_name='cadet',
+        session_name='Practice',
+        distance_to_rear_axle=0.44,
+    )
+
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+
+    assert 'Lat Force Front' in df_telemetry.columns
+    assert 'Lat Force Rear' in df_telemetry.columns
+    assert 'Long Force Front' in df_telemetry.columns
+    assert 'Long Force Rear' in df_telemetry.columns
+
+    # Verify values are populated and non-empty
+    assert df_telemetry.iloc[-1]['Lat Force Front'] != ''
+    assert df_telemetry.iloc[-1]['Lat Force Rear'] != ''
+    assert df_telemetry.iloc[-1]['Long Force Front'] != ''
+    assert df_telemetry.iloc[-1]['Long Force Rear'] != ''
+
+
+def test_process_telemetry_derivative_data_no_gyro_skips_forces() -> None:
+    records = [
+        {
+            'Time': f'2026-05-10T14:30:00.{i}00Z',
+            'Latitude': f'54.{i}',
+            'Longitude': '-3.123',
+            'Speed': '15.0',
+            'GForceLat': '0.8',
+            'GForceLon': '0.1',
+        }
+        for i in range(5)
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='club100',
+        class_name='cadet',
+        session_name='Practice',
+        distance_to_rear_axle=0.44,
+    )
+
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+
+    # Force channels should NOT be computed/injected when gyro is absent
+    assert 'Lat Force Front' not in df_telemetry.columns or (df_telemetry['Lat Force Front'] == '').all()
+
+
+def test_process_telemetry_derivative_data_forces_partial_nan_gyro() -> None:
+    records = [
+        {
+            'Time': '2026-05-10T14:30:00.000Z',
+            'Latitude': '54.123',
+            'Longitude': '-3.123',
+            'Speed': '10.0',
+            'Yaw Rate': '10.0',
+            'GForceLat': '0.5',
+            'GForceLon': '0.1',
+        },
+        {
+            'Time': '2026-05-10T14:30:00.100Z',
+            'Latitude': '54.124',
+            'Longitude': '-3.123',
+            'Speed': '10.0',
+            'Yaw Rate': 'nan',
+            'GForceLat': '0.5',
+            'GForceLon': '0.1',
+        },
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='club100',
+        class_name='cadet',
+        session_name='Practice',
+        distance_to_rear_axle=0.44,
+    )
+
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+
+    assert df_telemetry.iloc[0]['Lat Force Front'] != ''
+    assert df_telemetry.iloc[1]['Lat Force Front'] == ''
+    assert df_telemetry.iloc[1]['Long Force Rear'] == ''
+
+
+def test_process_telemetry_derivative_data_gopro_dummy_columns_allows_slip_and_forces() -> None:
+    # GoPro telemetry exported by RaceTools often contains dummy 0.00 for Lat Force FL and
+    # partial/empty Slip Angle Rear. These should not block gyro slip angle or per-axle forces.
+    records = [
+        {
+            'Time': f'2026-05-10T14:30:00.{i}00Z',
+            'Latitude': f'54.{i}',
+            'Longitude': '-3.123',
+            'Speed': '15.0',
+            'Yaw Rate': '12.0',
+            'GForceLat': '0.8',
+            'GForceLon': '0.1',
+            'Lat Force FL': '0.00',
+            'Lat Force FR': '0.00',
+            'Slip Angle Rear': '0.00' if i == 0 else '',
+        }
+        for i in range(5)
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='club100',
+        class_name='cadet',
+        session_name='Practice',
+        distance_to_rear_axle=1.5,
+    )
+
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+
+    # All points should have Slip Angle Rear and per-axle forces computed
+    for i in range(5):
+        assert df_telemetry.iloc[i]['Slip Angle Rear'] != ''
+        assert df_telemetry.iloc[i]['Lat Force Front'] != ''
+        assert df_telemetry.iloc[i]['Lat Force Rear'] != ''
+
+
+def test_process_telemetry_derivative_data_kartsim_per_wheel_forces_blocks_per_axle_forces() -> None:
+    # KartSim physics engine provides real per-wheel forces (e.g. Lat Force FL = 30.0).
+    # Per-axle forces must NOT be computed for KartSim.
+    records = [
+        {
+            'Time': f'2026-05-10T14:30:00.{i}00Z',
+            'Latitude': f'54.{i}',
+            'Longitude': '-3.123',
+            'Speed': '15.0',
+            'Yaw Rate': '12.0',
+            'GForceLat': '0.8',
+            'GForceLon': '0.1',
+            'Lat Force FL': '30.5',
+            'Lat Force FR': '-20.2',
+        }
+        for i in range(5)
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='kartsim',
+        class_name='cadet',
+        session_name='Practice',
+        distance_to_rear_axle=1.5,
+    )
+
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+
+    # Per-axle forces should NOT be computed
+    assert 'Lat Force Front' not in df_telemetry.columns or (df_telemetry['Lat Force Front'] == '').all()
+
+
+def test_coordinate_reference_and_bounds() -> None:
+    # 1. Test with track centerline
+    track_data = {
+        'center_line': [
+            {'lat': 54.551, 'lon': -3.442, 'dist': 0.0},
+            {'lat': 54.552, 'lon': -3.443, 'dist': 100.0}
+        ]
+    }
+    ref_lat, ref_lon, max_dist = upload_handlers.get_track_coordinate_reference(track_data, [], [])
+    assert ref_lat is not None and ref_lon is not None
+    assert math.isclose(ref_lat, 54.5515, rel_tol=1e-4)
+    assert math.isclose(ref_lon, -3.4425, rel_tol=1e-4)
+    assert max_dist == 5000.0
+
+    # Within bounds (nearby)
+    assert upload_handlers.is_coordinate_within_bounds(54.551, -3.442, ref_lat, ref_lon, max_dist)
+    # Outside bounds (North Pole / overseas)
+    assert not upload_handlers.is_coordinate_within_bounds(83.7, 73.2, ref_lat, ref_lon, max_dist)
+    assert not upload_handlers.is_coordinate_within_bounds(0.0, 0.0, ref_lat, ref_lon, max_dist)
+    assert not upload_handlers.is_coordinate_within_bounds(float('nan'), -3.442, ref_lat, ref_lon, max_dist)
+
+    # 2. Test fallback to median when track_data has no coordinates
+    lats = [54.551, 54.552, 54.553, 83.7]
+    lons = [-3.442, -3.443, -3.441, 73.2]
+    ref_lat_med, ref_lon_med, max_dist_med = upload_handlers.get_track_coordinate_reference({}, lats, lons)
+    assert ref_lat_med is not None and ref_lon_med is not None
+    assert math.isclose(ref_lat_med, 54.552, rel_tol=1e-3)
+    assert math.isclose(ref_lon_med, -3.442, rel_tol=1e-3)
+    assert upload_handlers.is_coordinate_within_bounds(54.551, -3.442, ref_lat_med, ref_lon_med, max_dist_med)
+    assert not upload_handlers.is_coordinate_within_bounds(83.7, 73.2, ref_lat_med, ref_lon_med, max_dist_med)
+
+
+def test_process_telemetry_derivative_data_filters_outlier_coordinates() -> None:
+    records = [
+        {
+            'Time': f'2026-05-10T14:30:0{i}.000Z',
+            'Latitude': '83.779642' if i == 0 else f'{54.551 + i * 0.0001:.6f}',
+            'Longitude': '73.235724' if i == 0 else f'{-3.442 + i * 0.0001:.6f}',
+            'Speed': '10.0',
+            'Lap': '1',
+        }
+        for i in range(5)
+    ]
+    meta = CSVSessionMetadata(
+        track_name='Rowrah',
+        session_start_datetime=datetime.datetime(2026, 5, 10, 14, 30),
+        driver_name='Driver A',
+        league='test_league',
+        class_name='cadet',
+        session_name='Practice',
+    )
+    track_data = {
+        'center_line': [
+            {'lat': 54.551, 'lon': -3.442, 'dist': 0.0},
+            {'lat': 54.552, 'lon': -3.443, 'dist': 100.0}
+        ]
+    }
+    with patch('upload_handlers.db.get_track', return_value=track_data):
+        df_telemetry, _, _ = upload_handlers.process_telemetry_derivative_data(records, meta, '/tmp')
+
+    # The first row with outlier coords (83.7, 73.2) should have blank Latitude and Longitude
+    assert df_telemetry['Latitude'].iloc[0] == ''
+    assert df_telemetry['Longitude'].iloc[0] == ''
+    # Remaining rows should have valid coordinates
+    assert df_telemetry['Latitude'].iloc[1] != ''
+    assert df_telemetry['Longitude'].iloc[1] != ''

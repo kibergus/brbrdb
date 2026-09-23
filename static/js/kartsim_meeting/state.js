@@ -15,9 +15,7 @@
  * ==============================================================================
  */
 
-/**
- * Global state for the kartsim meeting page.
- */
+import { getGroupColor } from './palette.js';
 
 export const state = {
     map: null,
@@ -31,14 +29,97 @@ export const state = {
     sortMode: 'time',
     baseColor: '#fb923c', // Orange
     highlightColor: '#38bdf8', // Light Blue
-    groupAVisibleMap: true,
-    groupBVisibleMap: false,
-    groupAVisibleStats: true,
-    groupBVisibleStats: true,
+
+    // Dynamic groups state
+    groups: ['A', 'B'],
+    groupSelections: {
+        A: new Set(),
+        B: new Set()
+    },
+    groupVisibilityMap: {
+        A: true,
+        B: false
+    },
+    groupVisibilityStats: {
+        A: true,
+        B: true
+    },
+    groupEnabled: {
+        A: true,
+        B: true
+    },
+
+    getActiveGroups() {
+        return this.groups.filter(g => this.groupEnabled[g] !== false);
+    },
+
+    isGroupVisible(group, tab) {
+        if (this.groupEnabled && this.groupEnabled[group] === false) return false;
+        const targetTab = tab || this.activeTab;
+        if (targetTab === 'stats') {
+            return this.groupVisibilityStats && this.groupVisibilityStats[group] !== undefined
+                ? Boolean(this.groupVisibilityStats[group])
+                : true;
+        } else {
+            return this.groupVisibilityMap && this.groupVisibilityMap[group] !== undefined
+                ? Boolean(this.groupVisibilityMap[group])
+                : false;
+        }
+    },
+
+    setGroupVisible(group, val, tab) {
+        const targetTab = tab || this.activeTab;
+        if (targetTab === 'stats') {
+            this.groupVisibilityStats[group] = val;
+        } else {
+            this.groupVisibilityMap[group] = val;
+        }
+    },
+
+    getGroupColor(group) {
+        return getGroupColor(group);
+    },
+
+    // Backward compatibility getters/setters
+    get groupASelection() {
+        return this.groupSelections.A || (this.groupSelections.A = new Set());
+    },
+    set groupASelection(val) {
+        this.groupSelections.A = val;
+    },
+    get groupBSelection() {
+        return this.groupSelections.B || (this.groupSelections.B = new Set());
+    },
+    set groupBSelection(val) {
+        this.groupSelections.B = val;
+    },
+    get groupAVisibleMap() {
+        return this.groupVisibilityMap.A !== undefined ? this.groupVisibilityMap.A : true;
+    },
+    set groupAVisibleMap(val) {
+        this.groupVisibilityMap.A = val;
+    },
+    get groupBVisibleMap() {
+        return this.groupVisibilityMap.B !== undefined ? this.groupVisibilityMap.B : false;
+    },
+    set groupBVisibleMap(val) {
+        this.groupVisibilityMap.B = val;
+    },
+    get groupAVisibleStats() {
+        return this.groupVisibilityStats.A !== undefined ? this.groupVisibilityStats.A : true;
+    },
+    set groupAVisibleStats(val) {
+        this.groupVisibilityStats.A = val;
+    },
+    get groupBVisibleStats() {
+        return this.groupVisibilityStats.B !== undefined ? this.groupVisibilityStats.B : true;
+    },
+    set groupBVisibleStats(val) {
+        this.groupVisibilityStats.B = val;
+    },
+
     activeTab: 'stats',
     selectedSessionId: null,
-    groupASelection: new Set(),
-    groupBSelection: new Set(),
     trackData: null,
     trackMarkers: [],
     distanceMarker: null,
@@ -94,23 +175,15 @@ export const state = {
     _syncRafId: null,
 
     get groupAVisible() {
-        return this.activeTab === 'stats' ? this.groupAVisibleStats : this.groupAVisibleMap;
+        return this.isGroupVisible('A');
     },
     set groupAVisible(val) {
-        if (this.activeTab === 'stats') {
-            this.groupAVisibleStats = val;
-        } else {
-            this.groupAVisibleMap = val;
-        }
+        this.setGroupVisible('A', val);
     },
     get groupBVisible() {
-        return this.activeTab === 'stats' ? this.groupBVisibleStats : this.groupBVisibleMap;
+        return this.isGroupVisible('B');
     },
     set groupBVisible(val) {
-        if (this.activeTab === 'stats') {
-            this.groupBVisibleStats = val;
-        } else {
-            this.groupBVisibleMap = val;
-        }
+        this.setGroupVisible('B', val);
     }
 };

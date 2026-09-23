@@ -70,7 +70,7 @@ def get_time_at_distance(points: list[dict], distance: float) -> float | None:
     return float(np.interp(distance, dists, times))
 
 
-def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
+def parse_telemetry_csv(csv_path: str, track_data: dict | None = None) -> tuple[list, list[str], str | None]:
     """
     Parse pre-generated RaceBox CSV file into laps and columns.
     Returns:
@@ -123,6 +123,12 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
             if speed_col in header:
                 speed_col_indices.append(header.index(speed_col))
 
+        ref_lat, ref_lon, max_dist_m = upload_handlers.get_track_coordinate_reference(track_data, [], [])
+        if ref_lat is None and lat_idx >= 0 and lon_idx >= 0:
+            raw_lats = [upload_handlers.parse_coordinate(r[lat_idx]) for r in data_rows if len(r) > lat_idx]
+            raw_lons = [upload_handlers.parse_coordinate(r[lon_idx]) for r in data_rows if len(r) > lon_idx]
+            ref_lat, ref_lon, max_dist_m = upload_handlers.get_track_coordinate_reference(None, raw_lats, raw_lons)
+
         idx = 0
         has_data = [False] * len(header)
         for row in data_rows:
@@ -136,10 +142,12 @@ def parse_telemetry_csv(csv_path: str) -> tuple[list, list[str], str | None]:
                 if not timestamp_str or lat_val is None or lon_val is None or lap_val is None:
                     continue
 
-                # Check that coordinates are valid numbers and not uninitialized.
+                # Check that coordinates are valid numbers and not uninitialized or outside track bounds.
                 f_lat = float(lat_val)
                 f_lon = float(lon_val)
-                if np.isnan(f_lat) or np.isnan(f_lon) or (f_lat == 0.0 and f_lon == 0.0):
+                if not upload_handlers.is_coordinate_within_bounds(
+                    f_lat, f_lon, ref_lat, ref_lon, max_dist_m
+                ):
                     continue
                 lap_num = int(lap_val)
 
@@ -445,12 +453,97 @@ class TelemetrySessionItem:
         return getattr(self, key)
 
 
-@location_blueprint.route('/telemetry/<track>')
-def telemetry_track_view(track: str) -> str | werkzeug_wrappers.Response | Response:
-    session_params = request.args.getlist('session')
-    if not session_params:
-        return redirect(url_for('location.telemetry_launcher'))
+SESSION_URL_PATTERN = re.compile(
+    r'/session/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)'
+)
 
+
+def parse_session_urls(text: str) -> list[dict[str, str]]:
+    """Parse session URLs from pasted text and extract session metadata."""
+    results: list[dict[str, str]] = []
+    if not text:
+        return results
+    for match in SESSION_URL_PATTERN.finditer(text):
+        league, class_name, date, track, session_id = [unquote(p) for p in match.groups()]
+        results.append({
+            'league': league,
+            'class_name': class_name,
+            'date': date,
+            'track': track,
+            'session_id': session_id,
+            'original_url': match.group(0)
+        })
+    return results
+
+
+def _resolve_report_session_params(meta: dict[str, Any], track: str | None = None) -> list[str]:
+    """Extract or resolve 5-part session parameters from report metadata.
+
+    Returns a list of 'league/class_name/date/track/session_id' strings,
+    or an empty list if not a multi-session report.
+    """
+    if not meta:
+        return []
+
+    # 1. Direct 'sessions' list in metadata
+    raw_sessions = meta.get('sessions')
+    if raw_sessions and isinstance(raw_sessions, list):
+        params: list[str] = []
+        for s in raw_sessions:
+            if not isinstance(s, str):
+                continue
+            s_clean = s.strip()
+            parsed = parse_session_urls(s_clean)
+            if parsed:
+                p = parsed[0]
+                params.append(f"{p['league']}/{p['class_name']}/{p['date']}/{p['track']}/{p['session_id']}")
+            elif s_clean.count('/') == 4:
+                params.append(s_clean)
+        if params:
+            return params
+
+    # 2. Check if session_id is a comma-separated list of multiple session IDs
+    raw_session_id = meta.get('session_id')
+    meta_track = meta.get('track') or track
+    meta_date = meta.get('date')
+    if raw_session_id and isinstance(raw_session_id, str) and ',' in raw_session_id and meta_track:
+        sids = [s.strip() for s in raw_session_id.split(',') if s.strip() and s.strip() != 'all']
+        if len(sids) > 1:
+            found = db.find_sessions(date=meta_date, track=meta_track, session_id=sids)
+            if not found or len(found) < len(sids):
+                found = db.find_sessions(track=meta_track, session_id=sids)
+
+            found_by_id: dict[str, Any] = {}
+            for s in found:
+                if s.session_id not in found_by_id:
+                    found_by_id[s.session_id] = s
+
+            if len(found_by_id) == len(sids):
+                params = []
+                meetings = set()
+                for sid in sids:
+                    s = found_by_id[sid]
+                    cls = s.class_name[0] if isinstance(s.class_name, list) and s.class_name else str(s.class_name)
+                    dt = s.date or meta_date or ''
+                    trk = s.track_name or meta_track or ''
+                    meetings.add((s.league, cls, dt))
+                    params.append(f"{s.league}/{cls}/{dt}/{trk}/{s.session_id}")
+
+                if len(meetings) > 1:
+                    return params
+
+    return []
+
+
+def _render_multi_session_telemetry(
+    track: str,
+    session_params: list[str],
+    is_report_mode: bool = False,
+    report_title: str | None = None,
+    report_html: str | None = None,
+    report_state: dict[str, Any] | None = None,
+    report_name: str | None = None
+) -> str:
     acl = auth.get_current_acl()
     telemetry_sessions: list[TelemetrySessionItem] = []
 
@@ -512,11 +605,45 @@ def telemetry_track_view(track: str) -> str | werkzeug_wrappers.Response | Respo
         next_meeting_url='',
         prev_meeting_title='',
         next_meeting_title='',
-        is_report_mode=False,
-        report_title=None,
-        report_html=None,
-        report_state={},
-        report_name=None
+        is_report_mode=is_report_mode,
+        report_title=report_title,
+        report_html=report_html,
+        report_state=report_state if report_state is not None else {},
+        report_name=report_name
+    )
+
+
+@location_blueprint.route('/telemetry/<track>')
+def telemetry_track_view(track: str) -> str | werkzeug_wrappers.Response | Response:
+    session_params = request.args.getlist('session')
+    report_param = request.args.get('report')
+    is_report_mode = False
+    report_title = None
+    report_html = None
+    report_state: dict[str, Any] = {}
+
+    if report_param:
+        res = report_parser.load_report(report_param)
+        if res:
+            meta, state, body = res
+            is_report_mode = True
+            report_title = meta.get('title', report_param)
+            report_html = body
+            report_state = state
+            if not session_params:
+                session_params = _resolve_report_session_params(meta, track)
+
+    if not session_params:
+        return redirect(url_for('location.telemetry_launcher'))
+
+    return _render_multi_session_telemetry(
+        track=track,
+        session_params=session_params,
+        is_report_mode=is_report_mode,
+        report_title=report_title,
+        report_html=report_html,
+        report_state=report_state,
+        report_name=report_param
     )
 
 
@@ -558,29 +685,6 @@ def telemetry_view(league: str, class_name: str, date: str, track: str) -> str |
         report_state=report_state,
         report_name=report_param
     )
-
-
-SESSION_URL_PATTERN = re.compile(
-    r'/session/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)'
-)
-
-
-def parse_session_urls(text: str) -> list[dict[str, str]]:
-    """Parse session URLs from pasted text and extract session metadata."""
-    results: list[dict[str, str]] = []
-    if not text:
-        return results
-    for match in SESSION_URL_PATTERN.finditer(text):
-        league, class_name, date, track, session_id = [unquote(p) for p in match.groups()]
-        results.append({
-            'league': league,
-            'class_name': class_name,
-            'date': date,
-            'track': track,
-            'session_id': session_id,
-            'original_url': match.group(0)
-        })
-    return results
 
 
 @location_blueprint.route('/telemetry', methods=['GET', 'POST'])
@@ -665,6 +769,31 @@ def telemetry_report_view(report_name: str) -> str:
     track = meta.get('track')
     session_id = request.args.get('session_id') or meta.get('session_id')
 
+    report_title = meta.get('title', report_name)
+    if not isinstance(report_title, str):
+        report_title = str(report_name)
+
+    query_session_params = request.args.getlist('session')
+    session_params = query_session_params or _resolve_report_session_params(meta, track)
+
+    if session_params:
+        target_track = track
+        if not target_track:
+            parts = session_params[0].split('/')
+            if len(parts) == 5:
+                target_track = parts[3]
+        if not target_track:
+            abort(400)
+        return _render_multi_session_telemetry(
+            track=target_track,
+            session_params=session_params,
+            is_report_mode=True,
+            report_title=report_title,
+            report_html=body,
+            report_state=state,
+            report_name=report_name
+        )
+
     if (
         not isinstance(league, str)
         or not isinstance(class_name, str)
@@ -672,10 +801,6 @@ def telemetry_report_view(report_name: str) -> str:
         or not isinstance(track, str)
     ):
         abort(400)
-
-    report_title = meta.get('title', report_name)
-    if not isinstance(report_title, str):
-        report_title = str(report_name)
 
     return _render_telemetry_meeting(
         league=league,
@@ -1055,7 +1180,7 @@ def get_track_points() -> Response | tuple[Response, int]:
                 continue
 
             csv_path = os.path.join(telemetry_dir, target_csv)
-            laps, columns, driver_name = parse_telemetry_csv(csv_path)
+            laps, columns, driver_name = parse_telemetry_csv(csv_path, track_data=track_data)
             if not laps:
                 continue
             if not auth.can_see_telemetry(acl, league=s_league, driver=driver_name):
@@ -1163,7 +1288,7 @@ def get_track_points() -> Response | tuple[Response, int]:
         csv_path = os.path.join(telemetry_dir, csv_file)
         display_name = _get_display_name(csv_file)
 
-        laps, columns, driver_name = parse_telemetry_csv(csv_path)
+        laps, columns, driver_name = parse_telemetry_csv(csv_path, track_data=track_data)
         if laps:
             if not auth.can_see_telemetry(acl, league=league, driver=driver_name):
                 continue
@@ -1213,6 +1338,8 @@ def _should_smooth_channel(channel: str) -> bool:
         # force
         "lat force fl", "lat force fr", "lat force rl", "lat force rr",
         "long force fl", "long force fr", "long force rl", "long force rr",
+        "lat force front", "lat force rear",
+        "long force front", "long force rear",
         # tyre load
         "tyre load fl", "tyre load fr", "tyre load rl", "tyre load rr"
     }
@@ -1337,6 +1464,15 @@ def get_telemetry_channel() -> Response | tuple[Response, int]:
         is_time = (channel == 'Time')
         is_speed = (channel.lower() in ('speed', 'speed (m/s)'))
 
+        track_data = db.get_track(track) if track else None
+        ref_lat, ref_lon, max_dist_m = upload_handlers.get_track_coordinate_reference(track_data, [], [])
+        if ref_lat is None and lat_idx >= 0 and lon_idx >= 0:
+            raw_lats = [upload_handlers.parse_coordinate(r[lat_idx]) for r in data_rows if len(r) > lat_idx]
+            raw_lons = [upload_handlers.parse_coordinate(r[lon_idx]) for r in data_rows if len(r) > lon_idx]
+            ref_lat, ref_lon, max_dist_m = upload_handlers.get_track_coordinate_reference(
+                None, raw_lats, raw_lons
+            )
+
         for row in data_rows:
             if not row or len(row) < len(header):
                 continue
@@ -1352,10 +1488,12 @@ def get_telemetry_channel() -> Response | tuple[Response, int]:
             try:
                 f_lat = float(lat_val)
                 f_lon = float(lon_val)
-                if np.isnan(f_lat) or np.isnan(f_lon) or (f_lat == 0.0 and f_lon == 0.0):
+                if not upload_handlers.is_coordinate_within_bounds(
+                    f_lat, f_lon, ref_lat, ref_lon, max_dist_m
+                ):
                     continue
                 int(lap_val)
-            except ValueError:
+            except (ValueError, TypeError):
                 continue
 
             if is_time:

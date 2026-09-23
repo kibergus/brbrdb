@@ -568,23 +568,57 @@ export function matchesRequestedLap(requestedSet, lapId, session, lap, sIdx = nu
         const cleaned = String(req).replace(/\.csv(?=-|\b)/i, '').replace(/\.csv$/i, '').trim();
         if (cleaned === lapId) return true;
 
-        // Check index notation: e.g. "0_4" or "0-4" (session index _ lap number)
-        if (sessionIndex !== -1 && sessionIndex !== null && sessionIndex !== undefined && lap && lap.lap_num !== undefined) {
-            if (cleaned === `${sessionIndex}_${lap.lap_num}` || cleaned === `${sessionIndex}-${lap.lap_num}`) {
-                return true;
+        // Check index notation with underscore: e.g. "0_4" (session index _ lap number)
+        const underscoreMatch = cleaned.match(/^(\d+)_(\d+)$/);
+        if (underscoreMatch) {
+            const reqSIdx = parseInt(underscoreMatch[1], 10);
+            const reqLapNum = parseInt(underscoreMatch[2], 10);
+            if (sessionIndex !== -1 && sessionIndex !== null && sessionIndex !== undefined && lap && lap.lap_num !== undefined) {
+                if (sessionIndex === reqSIdx && lap.lap_num === reqLapNum) {
+                    return true;
+                }
             }
+            continue;
         }
 
-        const reqParts = cleaned.split('-');
-        const reqLapNum = parseInt(reqParts[reqParts.length - 1], 10);
-        if (!isNaN(reqLapNum) && lap && lap.lap_num === reqLapNum) {
-            const reqSid = reqParts.slice(0, -1).join('-');
-            if (!reqSid || reqSid === 'lap') return true;
-            if (session) {
-                const sid = session.session_id || '';
-                const sname = session.session_name || '';
-                if (sid === reqSid || sid.startsWith(reqSid) || reqSid.startsWith(sid)) return true;
-                if (sname && (sname.toLowerCase().includes(reqSid.toLowerCase()) || reqSid.toLowerCase().includes(sname.toLowerCase()))) {
+        // Check index notation with hyphen: e.g. "0-4" (session index - lap number)
+        const hyphenIndexMatch = cleaned.match(/^(\d+)-(\d+)$/);
+        if (hyphenIndexMatch) {
+            const reqSIdx = parseInt(hyphenIndexMatch[1], 10);
+            const reqLapNum = parseInt(hyphenIndexMatch[2], 10);
+            if (sessionIndex !== -1 && sessionIndex !== null && sessionIndex !== undefined && lap && lap.lap_num !== undefined) {
+                if (sessionIndex === reqSIdx && lap.lap_num === reqLapNum) {
+                    return true;
+                }
+            }
+            if (session && session.session_id === hyphenIndexMatch[1] && lap && lap.lap_num === reqLapNum) {
+                return true;
+            }
+            continue;
+        }
+
+        const lastDashIdx = cleaned.lastIndexOf('-');
+        if (lastDashIdx !== -1) {
+            const reqSid = cleaned.slice(0, lastDashIdx);
+            const reqLapNumStr = cleaned.slice(lastDashIdx + 1);
+            if (/^\d+$/.test(reqLapNumStr)) {
+                const reqLapNum = parseInt(reqLapNumStr, 10);
+                if (lap && lap.lap_num === reqLapNum) {
+                    if (!reqSid || reqSid === 'lap') return true;
+                    if (session) {
+                        const sid = session.session_id || '';
+                        const sname = session.session_name || '';
+                        if (sid === reqSid || sid.startsWith(reqSid) || reqSid.startsWith(sid) || sid.endsWith('/' + reqSid) || sid.endsWith(reqSid)) return true;
+                        if (sname && (sname.toLowerCase().includes(reqSid.toLowerCase()) || reqSid.toLowerCase().includes(sname.toLowerCase()))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } else {
+            if (/^\d+$/.test(cleaned)) {
+                const reqLapNum = parseInt(cleaned, 10);
+                if (lap && lap.lap_num === reqLapNum) {
                     return true;
                 }
             }
@@ -637,48 +671,74 @@ export function loadTrackPoints(overrideSessionId) {
                 }
             }
 
-            state.groupASelection.clear();
-            state.groupBSelection.clear();
-
-            const urlLapsA = params.get('lapsA');
-            const urlLapsB = params.get('lapsB');
-            let hasCustomLapsA = params.has('lapsA') || Boolean(reportState.lapsA);
-            let customLapsA = new Set();
-            if (params.has('lapsA')) {
-                if (urlLapsA && urlLapsA !== 'none') {
-                    urlLapsA.split(',').forEach(id => {
-                        const trimmed = id ? id.trim() : '';
-                        if (trimmed && trimmed !== 'none') {
-                            customLapsA.add(trimmed);
-                        }
-                    });
+            // Check if URL specifies custom groups (e.g. groups=A,B,C)
+            if (params.has('groups')) {
+                const urlGroups = params.get('groups').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+                if (urlGroups.length > 0) {
+                    state.groups = urlGroups;
                 }
-            } else if (reportState.lapsA) {
-                const arrA = Array.isArray(reportState.lapsA) ? reportState.lapsA : (reportState.lapsA === 'none' ? [] : String(reportState.lapsA).split(','));
-                arrA.forEach(id => {
-                    const trimmed = id ? String(id).trim() : '';
-                    if (trimmed && trimmed !== 'none') customLapsA.add(trimmed);
+            } else {
+                for (let code = 67; code <= 90; code++) { // 'C' to 'Z'
+                    const letter = String.fromCharCode(code);
+                    if (params.has('laps' + letter) || Boolean(reportState['laps' + letter])) {
+                        if (!state.groups.includes(letter)) {
+                            state.groups.push(letter);
+                        }
+                    }
+                }
+            }
+
+            // Ensure selections and visibility exist for all groups
+            state.groups.forEach(g => {
+                if (!state.groupSelections[g]) state.groupSelections[g] = new Set();
+                state.groupSelections[g].clear();
+                if (state.groupVisibilityMap[g] === undefined) state.groupVisibilityMap[g] = true;
+                if (state.groupVisibilityStats[g] === undefined) state.groupVisibilityStats[g] = true;
+                if (state.groupEnabled[g] === undefined) state.groupEnabled[g] = true;
+
+                if (params.has('vis' + g)) {
+                    state.setGroupVisible(g, params.get('vis' + g) === '1');
+                }
+            });
+
+            if (params.has('dis')) {
+                const disGroups = params.get('dis').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+                disGroups.forEach(g => {
+                    if (g !== 'A' && state.groupEnabled[g] !== undefined) {
+                        state.groupEnabled[g] = false;
+                    }
                 });
             }
 
-            let hasCustomLapsB = params.has('lapsB') || Boolean(reportState.lapsB);
-            let customLapsB = new Set();
-            if (params.has('lapsB')) {
-                if (urlLapsB && urlLapsB !== 'none') {
-                    urlLapsB.split(',').forEach(id => {
-                        const trimmed = id ? id.trim() : '';
-                        if (trimmed && trimmed !== 'none') {
-                            customLapsB.add(trimmed);
-                        }
+            // Parse custom laps per group
+            const customLapsMap = {};
+            const hasCustomLapsMap = {};
+
+            state.groups.forEach(g => {
+                const paramName = 'laps' + g;
+                const urlVal = params.get(paramName);
+                let hasCustom = params.has(paramName) || Boolean(reportState[paramName]);
+                let customSet = new Set();
+
+                if (params.has(paramName)) {
+                    if (urlVal && urlVal !== 'none') {
+                        urlVal.split(',').forEach(id => {
+                            const trimmed = id ? id.trim() : '';
+                            if (trimmed && trimmed !== 'none') customSet.add(trimmed);
+                        });
+                    }
+                } else if (reportState[paramName]) {
+                    const arr = Array.isArray(reportState[paramName])
+                        ? reportState[paramName]
+                        : (reportState[paramName] === 'none' ? [] : String(reportState[paramName]).split(','));
+                    arr.forEach(id => {
+                        const trimmed = id ? String(id).trim() : '';
+                        if (trimmed && trimmed !== 'none') customSet.add(trimmed);
                     });
                 }
-            } else if (reportState.lapsB) {
-                const arrB = Array.isArray(reportState.lapsB) ? reportState.lapsB : (reportState.lapsB === 'none' ? [] : String(reportState.lapsB).split(','));
-                arrB.forEach(id => {
-                    const trimmed = id ? String(id).trim() : '';
-                    if (trimmed && trimmed !== 'none') customLapsB.add(trimmed);
-                });
-            }
+                hasCustomLapsMap[g] = hasCustom;
+                customLapsMap[g] = customSet;
+            });
 
             let allLaps = [];
             sessionsData.forEach(session => {
@@ -695,8 +755,8 @@ export function loadTrackPoints(overrideSessionId) {
             });
             allLaps.sort((a, b) => a.time - b.time);
             const fastest5Ids = new Set(allLaps.slice(0, 5).map(l => l.lapId));
-            const fastest80Count = Math.ceil(allLaps.length * 0.8);
-            const fastest80Ids = new Set(allLaps.slice(0, fastest80Count).map(l => l.lapId));
+            const fastest75Count = Math.ceil(allLaps.length * 0.75);
+            const fastest75Ids = new Set(allLaps.slice(0, fastest75Count).map(l => l.lapId));
 
             let globalMaxSpeed = 0;
             let globalMinSpeed = Infinity;
@@ -735,31 +795,26 @@ export function loadTrackPoints(overrideSessionId) {
 
                     precalculateLapData(lap);
 
-                    if (hasCustomLapsA) {
-                        if (matchesRequestedLap(customLapsA, lapId, session, lap, sIdx)) {
-                            state.groupASelection.add(lapId);
+                    state.groups.forEach(g => {
+                        if (hasCustomLapsMap[g]) {
+                            if (matchesRequestedLap(customLapsMap[g], lapId, session, lap, sIdx)) {
+                                state.groupSelections[g].add(lapId);
+                            }
+                        } else {
+                            if (g === 'A' && fastest5Ids.has(lapId)) {
+                                state.groupSelections[g].add(lapId);
+                            } else if (g === 'B' && fastest75Ids.has(lapId)) {
+                                state.groupSelections[g].add(lapId);
+                            }
                         }
-                    } else {
-                        if (fastest5Ids.has(lapId)) {
-                            state.groupASelection.add(lapId);
-                        }
-                    }
-                    if (hasCustomLapsB) {
-                        if (matchesRequestedLap(customLapsB, lapId, session, lap, sIdx)) {
-                            state.groupBSelection.add(lapId);
-                        }
-                    } else {
-                        if (fastest80Ids.has(lapId)) {
-                            state.groupBSelection.add(lapId);
-                        }
-                    }
+                    });
                     state.lapPolylines[lapId] = [];
 
                     const refLap = getReferenceLap();
                     const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
                     const isRefLap = (lapId === refLapId);
                     const segZIndex = (state.trajectoryColorMode === 'delta_t') ? (isRefLap ? 1 : 5) : 1;
-                    const isVisible = (state.groupASelection.has(lapId) && state.groupAVisibleMap) || (state.groupBSelection.has(lapId) && state.groupBVisibleMap);
+                    const isVisible = state.getActiveGroups().some(g => state.groupSelections[g] && state.groupSelections[g].has(lapId) && state.isGroupVisible(g, 'map'));
 
                     for (let i = 0; i < lap.points.length - 1; i++) {
                         const p1 = lap.points[i];
@@ -819,7 +874,9 @@ export function loadTrackPoints(overrideSessionId) {
             isFetchingTrackPoints = false;
 
             import('./lap_selection.js').then(ui => {
+                if (ui.renderGroupVisibilityControls) ui.renderGroupVisibilityControls();
                 ui.updateVisibilityIcons();
+                if (ui.updateSelectAllCheckboxes) ui.updateSelectAllCheckboxes();
 
                 const reportState = (window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
                 const params = new URLSearchParams(window.location.search);

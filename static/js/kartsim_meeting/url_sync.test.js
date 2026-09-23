@@ -122,4 +122,23 @@ describe('url_sync.js updateURL', () => {
         urlCall = mockReplaceState.mock.calls[mockReplaceState.mock.calls.length - 1][2];
         expect(urlCall).not.toContain('tcol=');
     });
+
+    it('serializes dynamic groups C and D and handles disabled groups in URL', () => {
+        state.groups = ['A', 'B', 'C'];
+        state.groupSelections['C'] = new Set(['lap-99']);
+        state.groupEnabled['B'] = false;
+
+        updateURL();
+
+        expect(mockReplaceState).toHaveBeenCalled();
+        const urlCall = mockReplaceState.mock.calls[mockReplaceState.mock.calls.length - 1][2];
+        expect(urlCall).toContain('groups=A%2CB%2CC');
+        expect(urlCall).toContain('lapsC=lap-99');
+        expect(urlCall).toContain('dis=B');
+
+        // Reset state for subsequent tests
+        state.groups = ['A', 'B'];
+        delete state.groupSelections['C'];
+        state.groupEnabled['B'] = true;
+    });
 });

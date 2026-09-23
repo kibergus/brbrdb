@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { StatsPlot, TrackMinimap } from './stats_plots.js';
+import { StatsPlot, TrackMinimap, generateMinimapSvg } from './stats_plots.js';
 
 function createMockElement(tagName = 'div') {
   return {
@@ -84,6 +84,37 @@ describe('stats_plots.js building bricks', () => {
 
       await TrackMinimap.render(container, { track: 'UnknownTrack' });
       expect(container.innerHTML).toContain('No track geometry available');
+    });
+
+    it('uses normalized viewBox and font size independent of track aspect ratio', () => {
+      const compactTrack = {
+        lap_length: 1000,
+        turns: [{ name: 'T1', start: 100, end: 200, apex: [150] }],
+        center_line: [
+          { lat: 51.0, lon: 0.0, dist: 0 },
+          { lat: 51.002, lon: 0.003, dist: 500 },
+          { lat: 51.0, lon: 0.0, dist: 1000 }
+        ]
+      };
+      const elongatedTrack = {
+        lap_length: 1000,
+        turns: [{ name: 'T1', start: 100, end: 200, apex: [150] }],
+        center_line: [
+          { lat: 51.0, lon: 0.0, dist: 0 },
+          { lat: 51.010, lon: 0.001, dist: 500 },
+          { lat: 51.0, lon: 0.0, dist: 1000 }
+        ]
+      };
+
+      const compactSvg = generateMinimapSvg(compactTrack);
+      const elongatedSvg = generateMinimapSvg(elongatedTrack);
+
+      expect(compactSvg).toContain('viewBox="0 0 320 320"');
+      expect(elongatedSvg).toContain('viewBox="0 0 320 320"');
+      expect(compactSvg).toContain('font-size="14"');
+      expect(elongatedSvg).toContain('font-size="14"');
+      expect(compactSvg).toContain('stroke-width="4.5"');
+      expect(elongatedSvg).toContain('stroke-width="4.5"');
     });
   });
 

@@ -25,6 +25,7 @@ import { updateTelemetryPlots, updateAccelerationPlot, updateSlipAnglePlot, rend
 import { renderStatsPlots } from './stats_plots.js';
 import { initMap, loadTrackPoints, calculateBoundsZoom, updateAllPolylineColors, getReferenceLap, updateDistanceMarker, setTrajectoryColorMode, matchesRequestedLap } from './map.js';
 import { debouncedUpdateURL } from './url_sync.js';
+import { GROUP_PALETTE, getGroupColor, hexToRgba } from './palette.js';
 
 export function showRightPanelTab(tabId) {
     state.activeRightTab = tabId;
@@ -243,18 +244,7 @@ export function initSidePanelResizer() {
     });
 }
 
-export const SESSION_PALETTE = [
-    '#3b82f6', // Blue
-    '#10b981', // Emerald
-    '#a855f7', // Purple
-    '#f59e0b', // Amber
-    '#ec4899', // Pink
-    '#06b6d4', // Cyan
-    '#84cc16', // Lime
-    '#f97316', // Orange
-    '#6366f1', // Indigo
-    '#14b8a6', // Teal
-];
+export const SESSION_PALETTE = GROUP_PALETTE;
 
 export function getSessionColor(sessionId) {
     if (!sessionId || sessionId === 'all') return '#94a3b8';
@@ -991,6 +981,7 @@ export function renderLapList() {
     const lapList = document.getElementById('lap-list');
     if (!lapList) return;
     updateSessionSelectorColors();
+    renderGroupVisibilityControls();
     lapList.innerHTML = '';
 
     let allLaps = [];
@@ -1014,11 +1005,11 @@ export function renderLapList() {
         return;
     }
 
+    const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+
     allLaps.forEach(lap => {
         try {
             const lapId = lap.lapId;
-            const isInA = state.groupASelection.has(lapId);
-            const isInB = state.groupBSelection.has(lapId);
             const sessionColor = getSessionColor(lap.sessionId);
 
             const lapItem = document.createElement('div');
@@ -1035,21 +1026,39 @@ export function renderLapList() {
                 timeLabel = t ? t.toFixed(3) + 's' : 'N/A';
             }
 
+            let checkboxesHtml = '';
+            activeGroups.forEach(g => {
+                const sel = state.groupSelections[g];
+                const isSelected = sel ? sel.has(lapId) : false;
+                checkboxesHtml += `<input type="checkbox" id="chk-${g.toLowerCase()}-${lapId}" ${isSelected ? 'checked' : ''} style="cursor: pointer;" title="Group ${g}">`;
+            });
+
+            const firstG = activeGroups.length > 0 ? activeGroups[0].toLowerCase() : 'a';
+
             lapItem.innerHTML = `
                     <div style="display: flex; gap: 4px; align-items: center;">
-                        <input type="checkbox" id="chk-a-${lapId}" ${isInA ? 'checked' : ''}>
-                        <input type="checkbox" id="chk-b-${lapId}" ${isInB ? 'checked' : ''}>
+                        ${checkboxesHtml}
                     </div>
-                    <label for="chk-a-${lapId}" class="${lap.is_valid ? 'lap-valid' : 'lap-invalid'}" style="flex: 1; margin-left: 0.25rem;">
+                    <label for="chk-${firstG}-${lapId}" class="${lap.is_valid ? 'lap-valid' : 'lap-invalid'}" style="flex: 1; margin-left: 0.25rem;">
                         <span style="color: ${sessionColor}; font-weight: 600;">${lap.is_outlap ? 'Outlap' : `Lap ${lap.lap_num}`}</span>
                         <span class="lap-time">${timeLabel}</span>
                     </label>
                 `;
                 
-            const checkboxes = lapItem.querySelectorAll('input[type="checkbox"]');
-            if (checkboxes.length >= 2) {
-                checkboxes[0].onchange = () => toggleLap(lapId, 'A');
-                checkboxes[1].onchange = () => toggleLap(lapId, 'B');
+            if (lapItem.querySelectorAll) {
+                const checkboxes = lapItem.querySelectorAll('input[type="checkbox"]');
+                checkboxes.forEach((chk, idx) => {
+                    if (idx < activeGroups.length) {
+                        chk.onchange = () => toggleLap(lapId, activeGroups[idx]);
+                    }
+                });
+            } else if (lapItem.querySelector) {
+                activeGroups.forEach(g => {
+                    const chk = lapItem.querySelector(`#chk-${g.toLowerCase()}-${lapId}`);
+                    if (chk) {
+                        chk.onchange = () => toggleLap(lapId, g);
+                    }
+                });
             }
             
             lapList.appendChild(lapItem);
@@ -1061,11 +1070,34 @@ export function renderLapList() {
 }
 
 export function updateSelectAllCheckboxes() {
+    const container = document.getElementById('select-all-groups-container');
+    const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
     const lapIds = Object.keys(state.lapPolylines);
+
+    if (container) {
+        const currentInputs = container.querySelectorAll('input[type="checkbox"]');
+        if (currentInputs.length !== activeGroups.length) {
+            let inputsHtml = '';
+            let labelParts = [];
+            activeGroups.forEach(g => {
+                const color = getGroupColor(g);
+                inputsHtml += `<input type="checkbox" id="chk-all-${g.toLowerCase()}" style="cursor: pointer;" title="Select All ${g}">`;
+                labelParts.push(`<span style="color: ${color};">${g}</span>`);
+            });
+            container.innerHTML = `
+                ${inputsHtml}
+                <label style="font-size: 0.75rem; color: var(--text-secondary); cursor: pointer; font-weight: 600; text-transform: uppercase; margin-left: 0.2rem;">
+                    All ${labelParts.join(' / ')}
+                </label>
+            `;
+            initAllLapsHandlers();
+        }
+    }
+
     if (lapIds.length === 0) return;
 
-    ['A', 'B'].forEach(group => {
-        const selection = group === 'A' ? state.groupASelection : state.groupBSelection;
+    activeGroups.forEach(group => {
+        const selection = state.groupSelections[group] || (state.groupSelections[group] = new Set());
         const master = document.getElementById(`chk-all-${group.toLowerCase()}`);
         if (master) {
             const checkedCount = selection.size;
@@ -1077,12 +1109,20 @@ export function updateSelectAllCheckboxes() {
 
 export function toggleLap(lapId, group) {
     const chk = document.getElementById(`chk-${group.toLowerCase()}-${lapId}`);
-    const selection = group === 'A' ? state.groupASelection : state.groupBSelection;
+    const selection = state.groupSelections[group] || (state.groupSelections[group] = new Set());
 
-    if (chk.checked) {
-        selection.add(lapId);
+    if (chk) {
+        if (chk.checked) {
+            selection.add(lapId);
+        } else {
+            selection.delete(lapId);
+        }
     } else {
-        selection.delete(lapId);
+        if (selection.has(lapId)) {
+            selection.delete(lapId);
+        } else {
+            selection.add(lapId);
+        }
     }
 
     updateFastestSelectedLap();
@@ -1095,8 +1135,12 @@ export function toggleLap(lapId, group) {
 }
 
 export function highlightLap(lapId, active) {
-    const isLapVisible = (state.groupASelection && state.groupASelection.has(lapId) && state.groupAVisibleMap) ||
-                         (state.groupBSelection && state.groupBSelection.has(lapId) && state.groupBVisibleMap);
+    const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+    const isLapVisible = activeGroups.some(g => {
+        const sel = state.groupSelections[g];
+        const visMap = state.groupVisibilityMap && state.groupVisibilityMap[g];
+        return sel && sel.has(lapId) && visMap;
+    });
     
     const reallyActive = active && isLapVisible;
 
@@ -1264,7 +1308,7 @@ export function getSortedLaps() {
 }
 
 export function clearSelection(group) {
-    const selection = group === 'A' ? state.groupASelection : state.groupBSelection;
+    const selection = state.groupSelections[group] || (state.groupSelections[group] = new Set());
     selection.clear();
     
     updateFastestSelectedLap();
@@ -1285,12 +1329,13 @@ export function clearSelection(group) {
     debouncedUpdateURL();
 }
 
-export function selectLapsByCriteria(group, type, value) {
-    const selection = group === 'A' ? state.groupASelection : state.groupBSelection;
-    const sortedLaps = getSortedLaps();
-    const totalCount = sortedLaps.length;
-
-    selection.clear();
+export function selectLapsByCriteria(group, type, value, targetSessionId = null, additive = false) {
+    const selection = state.groupSelections[group] || (state.groupSelections[group] = new Set());
+    let lapsToSelectFrom = getSortedLaps();
+    if (targetSessionId) {
+        lapsToSelectFrom = lapsToSelectFrom.filter(l => l.sessionId === targetSessionId);
+    }
+    const totalCount = lapsToSelectFrom.length;
 
     let countToSelect = 0;
     if (type === 'count') {
@@ -1303,8 +1348,23 @@ export function selectLapsByCriteria(group, type, value) {
         countToSelect = 0;
     }
 
+    if (!additive) {
+        if (targetSessionId && type === 'clear') {
+            // Clearing only this session's laps from the group
+            lapsToSelectFrom.forEach(l => selection.delete(l.lapId));
+        } else {
+            // Default replace: clear group selection
+            selection.clear();
+        }
+    } else {
+        // Additive: remove any existing laps for targetSessionId first to refresh selection
+        if (targetSessionId) {
+            lapsToSelectFrom.forEach(l => selection.delete(l.lapId));
+        }
+    }
+
     for (let i = 0; i < countToSelect; i++) {
-        selection.add(sortedLaps[i].lapId);
+        selection.add(lapsToSelectFrom[i].lapId);
     }
 
     updateFastestSelectedLap();
@@ -1333,68 +1393,172 @@ export function showSelectionMenu(e, group) {
     const menu = document.createElement('div');
     menu.id = 'lap-selection-menu';
     menu.className = `lap-selection-menu group-${group.toLowerCase()}`;
-    
-    const options = [
-        { label: 'Top 1', value: 1, type: 'count' },
-        { label: 'Top 3', value: 3, type: 'count' },
-        { label: 'Top 5', value: 5, type: 'count' },
-        { label: 'Top 10', value: 10, type: 'count' },
-        { label: 'Top 50%', value: 0.50, type: 'percent' },
-        { label: 'Top 75%', value: 0.75, type: 'percent' },
-        { label: 'Top 90%', value: 0.90, type: 'percent' },
-        { label: 'All Laps', value: 1, type: 'all' },
-        { label: 'Clear Selection', value: 0, type: 'clear' }
-    ];
 
-    options.forEach(opt => {
-        const item = document.createElement('div');
-        item.className = 'menu-item';
-        item.textContent = opt.label;
-        
-        item.onclick = () => {
-            selectLapsByCriteria(group, opt.type, opt.value);
-            menu.remove();
-        };
-        
-        menu.appendChild(item);
-    });
+    const isMultiSession = state.allSessionsData && state.allSessionsData.length > 1;
+
+    if (isMultiSession) {
+        menu.classList.add('multi-session');
+
+        // 1. All Sessions section
+        const allSec = document.createElement('div');
+        allSec.className = 'menu-section';
+        allSec.innerHTML = `<div class="menu-section-header"><span>All Sessions</span></div>`;
+
+        const allBtnRow = document.createElement('div');
+        allBtnRow.className = 'menu-btn-row';
+
+        const allPresets = [
+            { label: 'Top 1', type: 'count', value: 1 },
+            { label: 'Top 3', type: 'count', value: 3 },
+            { label: '50%', type: 'percent', value: 0.50 },
+            { label: '75%', type: 'percent', value: 0.75 },
+            { label: 'All', type: 'all', value: 1 },
+            { label: 'Clear All', type: 'clear', value: 0, isClear: true }
+        ];
+
+        allPresets.forEach(preset => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = preset.label;
+            if (preset.isClear) btn.className = 'btn-clear';
+            btn.onclick = (btnEv) => {
+                selectLapsByCriteria(group, preset.type, preset.value, null, btnEv.shiftKey);
+                menu.remove();
+            };
+            allBtnRow.appendChild(btn);
+        });
+        allSec.appendChild(allBtnRow);
+        menu.appendChild(allSec);
+
+        // 2. Sections per session
+        state.allSessionsData.forEach(session => {
+            const sId = session.session_id;
+            const sColor = getSessionColor(sId);
+            let sName = session.session_name || sId;
+            if (session.session_start_datetime && session.session_start_datetime.includes(' ')) {
+                const timePart = session.session_start_datetime.split(' ')[1];
+                if (timePart && !sName.includes(timePart)) {
+                    sName = `${timePart} ${sName}`;
+                }
+            }
+
+            const sec = document.createElement('div');
+            sec.className = 'menu-section';
+
+            const header = document.createElement('div');
+            header.className = 'menu-section-header';
+            header.innerHTML = `
+                <span class="session-dot" style="background: ${sColor};"></span>
+                <span style="color: ${sColor}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${sName}</span>
+            `;
+            sec.appendChild(header);
+
+            const btnRow = document.createElement('div');
+            btnRow.className = 'menu-btn-row';
+
+            const sessPresets = [
+                { label: 'Top 1', type: 'count', value: 1 },
+                { label: 'Top 3', type: 'count', value: 3 },
+                { label: '50%', type: 'percent', value: 0.50 },
+                { label: '75%', type: 'percent', value: 0.75 },
+                { label: 'All', type: 'all', value: 1 },
+                { label: 'Clear', type: 'clear', value: 0, isClear: true }
+            ];
+
+            sessPresets.forEach(preset => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.textContent = preset.label;
+                if (preset.isClear) btn.className = 'btn-clear';
+                btn.onclick = (btnEv) => {
+                    selectLapsByCriteria(group, preset.type, preset.value, sId, btnEv.shiftKey);
+                    menu.remove();
+                };
+                btnRow.appendChild(btn);
+            });
+            sec.appendChild(btnRow);
+            menu.appendChild(sec);
+        });
+
+        const hint = document.createElement('div');
+        hint.className = 'menu-hint';
+        hint.textContent = 'Shift+click to add to selection';
+        menu.appendChild(hint);
+    } else {
+        // Single session backward compatibility
+        const options = [
+            { label: 'Top 1', value: 1, type: 'count' },
+            { label: 'Top 3', value: 3, type: 'count' },
+            { label: 'Top 5', value: 5, type: 'count' },
+            { label: 'Top 10', value: 10, type: 'count' },
+            { label: 'Top 50%', value: 0.50, type: 'percent' },
+            { label: 'Top 75%', value: 0.75, type: 'percent' },
+            { label: 'Top 90%', value: 0.90, type: 'percent' },
+            { label: 'All Laps', value: 1, type: 'all' },
+            { label: 'Clear Selection', value: 0, type: 'clear' }
+        ];
+
+        options.forEach(opt => {
+            const item = document.createElement('div');
+            item.className = 'menu-item';
+            item.textContent = opt.label;
+            item.onclick = () => {
+                selectLapsByCriteria(group, opt.type, opt.value);
+                menu.remove();
+            };
+            menu.appendChild(item);
+        });
+    }
 
     document.body.appendChild(menu);
 
     const rect = e.target.getBoundingClientRect();
-    menu.style.left = `${window.scrollX + rect.left}px`;
-    menu.style.top = `${window.scrollY + rect.bottom + 6}px`;
+    const scrollX = typeof window !== 'undefined' ? (window.scrollX || window.pageXOffset || 0) : 0;
+    const scrollY = typeof window !== 'undefined' ? (window.scrollY || window.pageYOffset || 0) : 0;
+    const winWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
+
+    let left = scrollX + rect.left;
+    let top = scrollY + rect.bottom + 6;
+    const menuWidth = isMultiSession ? 300 : 160;
+
+    if (left + menuWidth > winWidth - 10) {
+        left = Math.max(10, winWidth - menuWidth - 10 + scrollX);
+    }
+
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
 
     const outsideClickListener = (event) => {
         if (!menu.contains(event.target) && event.target !== e.target) {
             menu.remove();
-            document.removeEventListener('click', outsideClickListener);
+            if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+                document.removeEventListener('click', outsideClickListener);
+            }
         }
     };
-    
+
     setTimeout(() => {
-        document.addEventListener('click', outsideClickListener);
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+            document.addEventListener('click', outsideClickListener);
+        }
     }, 10);
 }
 
 export function initAllLapsHandlers() {
-    ['A', 'B'].forEach(group => {
+    const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+    activeGroups.forEach(group => {
         const chk = document.getElementById(`chk-all-${group.toLowerCase()}`);
-        if (!chk) return;
+        if (!chk || chk._bound || typeof chk.addEventListener !== 'function') return;
+        chk._bound = true;
         
         chk.addEventListener('click', (e) => {
             e.preventDefault();
-            
-            const selection = group === 'A' ? state.groupASelection : state.groupBSelection;
+            const selection = state.groupSelections[group] || (state.groupSelections[group] = new Set());
             const lapIds = Object.keys(state.lapPolylines);
-            
             if (lapIds.length === 0) return;
-            
-            // If all laps are currently selected, clicking clears selection
             if (selection.size === lapIds.length) {
                 clearSelection(group);
             } else {
-                // Otherwise, show the selection menu
                 showSelectionMenu(e, group);
             }
         });
@@ -1402,7 +1566,7 @@ export function initAllLapsHandlers() {
 }
 
 export function toggleAllLaps(group) {
-    const selection = group === 'A' ? state.groupASelection : state.groupBSelection;
+    const selection = state.groupSelections[group] || (state.groupSelections[group] = new Set());
     const lapIds = Object.keys(state.lapPolylines);
     if (selection.size === lapIds.length) {
         clearSelection(group);
@@ -1411,9 +1575,14 @@ export function toggleAllLaps(group) {
     }
 }
 
-
 export function updateLapVisibility(lapId) {
-    const isVisible = (state.groupASelection.has(lapId) && state.groupAVisibleMap) || (state.groupBSelection.has(lapId) && state.groupBVisibleMap);
+    const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+    const isVisible = activeGroups.some(g => {
+        const sel = state.groupSelections[g];
+        const visMap = state.groupVisibilityMap && state.groupVisibilityMap[g];
+        return sel && sel.has(lapId) && visMap;
+    });
+
     if (state.lapPolylines[lapId]) {
         const refLap = getReferenceLap();
         const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
@@ -1431,8 +1600,8 @@ export function updateLapVisibility(lapId) {
 }
 
 export function toggleGroupVisibility(group) {
-    if (group === 'A') state.groupAVisible = !state.groupAVisible;
-    else state.groupBVisible = !state.groupBVisible;
+    const cur = state.isGroupVisible ? state.isGroupVisible(group) : (group === 'A' ? state.groupAVisible : state.groupBVisible);
+    state.setGroupVisible(group, !cur);
 
     updateVisibilityIcons();
 
@@ -1440,6 +1609,7 @@ export function toggleGroupVisibility(group) {
         updateFastestSelectedLap();
         Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
         renderExpandablePlots();
+        updateTelemetryPlots(state.currentTargetDist);
     } else if (state.activeTab === 'stats') {
         renderStatsPlots();
     }
@@ -1448,21 +1618,183 @@ export function toggleGroupVisibility(group) {
 }
 
 export function updateVisibilityIcons() {
-    const btnA = document.getElementById('btn-vis-a');
-    const btnB = document.getElementById('btn-vis-b');
+    const eyeEnabled = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+    const eyeDisabled = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
+
+    const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+    activeGroups.forEach(group => {
+        const btn = document.getElementById(`btn-vis-${group.toLowerCase()}`);
+        if (btn) {
+            const isVisible = state.isGroupVisible ? state.isGroupVisible(group) : (group === 'A' ? state.groupAVisible : state.groupBVisible);
+            const svg = btn.querySelector('svg');
+            if (svg) svg.innerHTML = isVisible ? eyeEnabled : eyeDisabled;
+            btn.style.opacity = isVisible ? '1' : '0.4';
+        }
+    });
+}
+
+export function renderGroupVisibilityControls() {
+    const container = document.getElementById('group-visibility-container');
+    if (!container) return;
+    const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+    container.innerHTML = '';
 
     const eyeEnabled = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
     const eyeDisabled = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
 
-    if (btnA) {
-        btnA.querySelector('svg').innerHTML = state.groupAVisible ? eyeEnabled : eyeDisabled;
-        btnA.style.opacity = state.groupAVisible ? '1' : '0.4';
-    }
+    activeGroups.forEach(group => {
+        const color = getGroupColor(group);
+        const isVisible = state.isGroupVisible ? state.isGroupVisible(group) : (group === 'A' ? state.groupAVisible : state.groupBVisible);
 
-    if (btnB) {
-        btnB.querySelector('svg').innerHTML = state.groupBVisible ? eyeEnabled : eyeDisabled;
-        btnB.style.opacity = state.groupBVisible ? '1' : '0.4';
+        const btn = document.createElement('div');
+        btn.id = `btn-vis-${group.toLowerCase()}`;
+        btn.className = 'group-visibility-btn';
+        btn.title = `Toggle Group ${group} Visibility`;
+        btn.style.color = color;
+        btn.style.opacity = isVisible ? '1' : '0.4';
+        btn.innerHTML = `
+            <span style="font-size: 0.75rem; font-weight: 800;">${group}</span>
+            <svg class="vis-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                ${isVisible ? eyeEnabled : eyeDisabled}
+            </svg>
+        `;
+        btn.onclick = () => toggleGroupVisibility(group);
+        container.appendChild(btn);
+    });
+}
+
+export function toggleGroupManagementPopup(event) {
+    if (event) event.stopPropagation();
+    const popup = document.getElementById('group-management-popup');
+    if (!popup) return;
+    const isHidden = popup.style.display === 'none' || !popup.style.display;
+    if (isHidden) {
+        renderGroupManagementPopup();
+        popup.style.display = 'flex';
+        const closeHandler = (e) => {
+            if (!popup.contains(e.target) && e.target.id !== 'btn-group-settings' && !e.target.closest('#btn-group-settings')) {
+                popup.style.display = 'none';
+                document.removeEventListener('click', closeHandler);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closeHandler), 10);
+    } else {
+        popup.style.display = 'none';
     }
+}
+
+export function renderGroupManagementPopup() {
+    const popup = document.getElementById('group-management-popup');
+    if (!popup) return;
+
+    popup.innerHTML = `
+        <div class="group-management-header">
+            <span>Groups</span>
+        </div>
+        <div class="group-management-list" id="group-management-list"></div>
+        <button type="button" class="group-add-btn" id="btn-add-group">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            Add Group
+        </button>
+    `;
+
+    const list = popup.querySelector('#group-management-list');
+    state.groups.forEach(group => {
+        const color = getGroupColor(group);
+
+        const row = document.createElement('div');
+        row.className = 'group-management-row';
+        row.innerHTML = `
+            <div class="group-row-left">
+                <span class="group-badge-dot" style="background: ${color};"></span>
+                <span class="group-row-name" style="color: ${color};">Group ${group}</span>
+            </div>
+            <div class="group-row-actions">
+                ${group !== 'A' ? `
+                <button type="button" class="group-row-delete-btn" title="Delete Group ${group}">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                </button>` : ''}
+            </div>
+        `;
+
+        const delBtn = row.querySelector('.group-row-delete-btn');
+        if (delBtn) {
+            delBtn.onclick = () => deleteGroup(group);
+        }
+
+        list.appendChild(row);
+    });
+
+    const addBtn = popup.querySelector('#btn-add-group');
+    if (addBtn) {
+        addBtn.onclick = () => addGroup();
+    }
+}
+
+export function addGroup() {
+    for (let c = 65; c <= 90; c++) {
+        const letter = String.fromCharCode(c);
+        if (!state.groups.includes(letter)) {
+            state.groups.push(letter);
+            state.groupSelections[letter] = new Set();
+            state.groupVisibilityMap[letter] = true;
+            state.groupVisibilityStats[letter] = true;
+            state.groupEnabled[letter] = true;
+            break;
+        }
+    }
+    renderGroupVisibilityControls();
+    renderGroupManagementPopup();
+    renderLapList();
+    updateSelectAllCheckboxes();
+    updateTelemetryPlots(state.currentTargetDist);
+    debouncedUpdateURL();
+}
+
+export function deleteGroup(group) {
+    if (group === 'A') return;
+    const idx = state.groups.indexOf(group);
+    if (idx !== -1) {
+        state.groups.splice(idx, 1);
+        delete state.groupSelections[group];
+        delete state.groupVisibilityMap[group];
+        delete state.groupVisibilityStats[group];
+        delete state.groupEnabled[group];
+    }
+    updateFastestSelectedLap();
+    if (state.lapPolylines) {
+        Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+    }
+    renderGroupVisibilityControls();
+    renderGroupManagementPopup();
+    renderLapList();
+    updateSelectAllCheckboxes();
+    renderExpandablePlots();
+    renderStatsPlots();
+    updateTelemetryPlots(state.currentTargetDist);
+    debouncedUpdateURL();
+}
+
+export function toggleGroupEnabled(group, enabled) {
+    state.groupEnabled[group] = enabled;
+    updateFastestSelectedLap();
+    if (state.lapPolylines) {
+        Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+    }
+    renderGroupVisibilityControls();
+    renderGroupManagementPopup();
+    renderLapList();
+    updateSelectAllCheckboxes();
+    renderExpandablePlots();
+    renderStatsPlots();
+    debouncedUpdateURL();
 }
 
 export function updateFastestSelectedLap() {
@@ -1474,7 +1806,14 @@ export function updateFastestSelectedLap() {
     let fastestIdA = null;
     let minTimeA = Infinity;
 
-    const selectedIds = new Set([...state.groupASelection, ...state.groupBSelection]);
+    const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+    const selectedIds = new Set();
+    activeGroups.forEach(g => {
+        if (state.groupSelections[g]) {
+            state.groupSelections[g].forEach(id => selectedIds.add(id));
+        }
+    });
+
     const turnSelector = document.getElementById('turn-selector');
     const turnIdx = parseInt(turnSelector && turnSelector.value !== "" ? turnSelector.value : state.currentTurnIdx || 0);
 
@@ -1494,7 +1833,7 @@ export function updateFastestSelectedLap() {
                     fastest = lap;
                     fastestId = id;
                 }
-                if (state.groupASelection.has(id) && t < minTimeA) {
+                if (state.groupSelections.A && state.groupSelections.A.has(id) && t < minTimeA) {
                     minTimeA = t;
                     fastestA = lap;
                     fastestIdA = id;
@@ -1509,7 +1848,7 @@ export function updateFastestSelectedLap() {
     if (typeof getSortedLaps === 'function' && state.allSessionsData && state.allSessionsData.length > 0) {
         const sorted = getSortedLaps();
         for (const l of sorted) {
-            if (state.groupASelection && state.groupASelection.has(l.lapId)) {
+            if (state.groupSelections.A && state.groupSelections.A.has(l.lapId)) {
                 firstIdA = l.lapId;
                 firstA = state.lapDataLookup ? (state.lapDataLookup[l.lapId] || l) : l;
                 break;
@@ -1658,48 +1997,84 @@ export function handleReportTriggerAction(data) {
 export function selectLaps(lapsA, lapsB) {
     let changed = false;
 
-    if (lapsA !== undefined) {
-        state.groupASelection.clear();
-        if (lapsA && lapsA !== 'none') {
-            const arr = Array.isArray(lapsA) ? lapsA : String(lapsA).split(',');
-            const requested = new Set(arr.map(s => String(s).trim()).filter(Boolean));
-            if (state.allSessionsData && state.allSessionsData.length > 0) {
-                state.allSessionsData.forEach((session, sIdx) => {
-                    if (!session.laps) return;
-                    session.laps.forEach(lap => {
-                        const lapId = `${session.session_id}-${lap.lap_num}`;
-                        if (matchesRequestedLap(requested, lapId, session, lap, sIdx)) {
-                            state.groupASelection.add(lapId);
-                        }
-                    });
-                });
-            } else {
-                requested.forEach(id => state.groupASelection.add(id));
+    if (typeof lapsA === 'object' && !Array.isArray(lapsA) && lapsA !== null && lapsB === undefined) {
+        const config = lapsA;
+        Object.keys(config).forEach(group => {
+            if (!state.groups.includes(group)) {
+                state.groups.push(group);
+                state.groupSelections[group] = new Set();
+                state.groupVisibilityMap[group] = true;
+                state.groupVisibilityStats[group] = true;
+                state.groupEnabled[group] = true;
             }
-        }
+            const selection = state.groupSelections[group] || (state.groupSelections[group] = new Set());
+            selection.clear();
+            const val = config[group];
+            if (val && val !== 'none') {
+                const arr = Array.isArray(val) ? val : String(val).split(',');
+                const requested = new Set(arr.map(s => String(s).trim()).filter(Boolean));
+                if (state.allSessionsData && state.allSessionsData.length > 0) {
+                    state.allSessionsData.forEach((session, sIdx) => {
+                        if (!session.laps) return;
+                        session.laps.forEach(lap => {
+                            const lapId = `${session.session_id}-${lap.lap_num}`;
+                            if (matchesRequestedLap(requested, lapId, session, lap, sIdx)) {
+                                selection.add(lapId);
+                            }
+                        });
+                    });
+                } else {
+                    requested.forEach(id => selection.add(id));
+                }
+            }
+        });
         changed = true;
-    }
+    } else {
+        if (lapsA !== undefined) {
+            state.groupSelections.A = state.groupSelections.A || new Set();
+            state.groupSelections.A.clear();
+            if (lapsA && lapsA !== 'none') {
+                const arr = Array.isArray(lapsA) ? lapsA : String(lapsA).split(',');
+                const requested = new Set(arr.map(s => String(s).trim()).filter(Boolean));
+                if (state.allSessionsData && state.allSessionsData.length > 0) {
+                    state.allSessionsData.forEach((session, sIdx) => {
+                        if (!session.laps) return;
+                        session.laps.forEach(lap => {
+                            const lapId = `${session.session_id}-${lap.lap_num}`;
+                            if (matchesRequestedLap(requested, lapId, session, lap, sIdx)) {
+                                state.groupSelections.A.add(lapId);
+                            }
+                        });
+                    });
+                } else {
+                    requested.forEach(id => state.groupSelections.A.add(id));
+                }
+            }
+            changed = true;
+        }
 
-    if (lapsB !== undefined) {
-        state.groupBSelection.clear();
-        if (lapsB && lapsB !== 'none') {
-            const arr = Array.isArray(lapsB) ? lapsB : String(lapsB).split(',');
-            const requested = new Set(arr.map(s => String(s).trim()).filter(Boolean));
-            if (state.allSessionsData && state.allSessionsData.length > 0) {
-                state.allSessionsData.forEach((session, sIdx) => {
-                    if (!session.laps) return;
-                    session.laps.forEach(lap => {
-                        const lapId = `${session.session_id}-${lap.lap_num}`;
-                        if (matchesRequestedLap(requested, lapId, session, lap, sIdx)) {
-                            state.groupBSelection.add(lapId);
-                        }
+        if (lapsB !== undefined) {
+            state.groupSelections.B = state.groupSelections.B || new Set();
+            state.groupSelections.B.clear();
+            if (lapsB && lapsB !== 'none') {
+                const arr = Array.isArray(lapsB) ? lapsB : String(lapsB).split(',');
+                const requested = new Set(arr.map(s => String(s).trim()).filter(Boolean));
+                if (state.allSessionsData && state.allSessionsData.length > 0) {
+                    state.allSessionsData.forEach((session, sIdx) => {
+                        if (!session.laps) return;
+                        session.laps.forEach(lap => {
+                            const lapId = `${session.session_id}-${lap.lap_num}`;
+                            if (matchesRequestedLap(requested, lapId, session, lap, sIdx)) {
+                                state.groupSelections.B.add(lapId);
+                            }
+                        });
                     });
-                });
-            } else {
-                requested.forEach(id => state.groupBSelection.add(id));
+                } else {
+                    requested.forEach(id => state.groupSelections.B.add(id));
+                }
             }
+            changed = true;
         }
-        changed = true;
     }
 
     if (changed) {
@@ -1892,6 +2267,11 @@ if (typeof window !== 'undefined') {
     window.setTelemetryRange = setTelemetryRange;
     window.focusMapOnRange = focusMapOnRange;
     window.getDistanceRangeBounds = getDistanceRangeBounds;
+    window.toggleGroupVisibility = toggleGroupVisibility;
+    window.toggleGroupManagementPopup = toggleGroupManagementPopup;
+    window.addGroup = addGroup;
+    window.deleteGroup = deleteGroup;
+    window.toggleGroupEnabled = toggleGroupEnabled;
 }
 
 

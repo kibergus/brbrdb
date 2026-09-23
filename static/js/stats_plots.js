@@ -192,12 +192,11 @@ export function generateMinimapSvg(trackData, options) {
   var centerX_m = (minX + maxX) / 2;
   var centerY_m = (minY + maxY) / 2;
 
-  var padding = options.padding !== undefined ? options.padding : 36;
+  var padding = options.padding !== undefined ? options.padding : 28;
   var viewBoxW = options.width || 320;
+  var viewBoxH = options.height || (options.width ? options.width : 320);
   var availableW = Math.max(viewBoxW - 2 * padding, 10);
-  var targetAspect = widthM / (heightM || 1);
-  var availableH = Math.max(availableW / (targetAspect || 1), 80);
-  var viewBoxH = options.height || Math.round(availableH + 2 * padding);
+  var availableH = Math.max(viewBoxH - 2 * padding, 10);
 
   var scale = Math.max(widthM / availableW, heightM / availableH, 0.00001);
 
@@ -302,8 +301,8 @@ export function generateMinimapSvg(trackData, options) {
 
     var isHighlighted = (i === highlightTurnIdx);
     var color = isHighlighted ? highlightColor : (turnDiffs ? getTurnDiffColor(turnDiffs[i], redThreshold) : baseColor);
-    var defaultBaseLineWidth = turnDiffs ? 12.0 : 10.0;
-    var defaultHighlightLineWidth = 15.0;
+    var defaultBaseLineWidth = turnDiffs ? 5.0 : 4.5;
+    var defaultHighlightLineWidth = 6.5;
     var lineWidth = isHighlighted
       ? (options.highlight_line_width || (options.line_width ? options.line_width * 1.3 : defaultHighlightLineWidth))
       : (options.line_width || defaultBaseLineWidth);
@@ -316,11 +315,11 @@ export function generateMinimapSvg(trackData, options) {
       var uOpacity = isHighlighted ? '0.35' : '0.9';
       var uWidth = options.underlay_width !== undefined
         ? (isHighlighted ? Math.round(options.underlay_width * 1.4) : options.underlay_width)
-        : (isHighlighted ? '30' : '22');
+        : (isHighlighted ? '15' : '11');
       underlaysSvg += '<path d="' + dStr + '" stroke="' + uColor + '" stroke-width="' + uWidth + '" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="' + uOpacity + '" />';
 
       if (isHighlighted) {
-        var glowWidth = options.glow_width !== undefined ? options.glow_width : 44;
+        var glowWidth = options.glow_width !== undefined ? options.glow_width : 22;
         highlightGlowSvg += '<path d="' + dStr + '" stroke="' + highlightColor + '" stroke-width="' + glowWidth + '" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.15" filter="url(#glow)" />';
       }
     }
@@ -332,8 +331,8 @@ export function generateMinimapSvg(trackData, options) {
 
     // 3. Boundary Ticks
     if (showTicks) {
-      var tickSpan = options.tick_span !== undefined ? options.tick_span : 14;
-      var tickWidth = options.tick_width !== undefined ? options.tick_width : 4;
+      var tickSpan = options.tick_span !== undefined ? options.tick_span : 6;
+      var tickWidth = options.tick_width !== undefined ? options.tick_width : 2;
       [turnStart, turnEnd].forEach(function(bDist) {
         var pt = getPointAtDist(bDist);
         var pA = getPointAtDist(bDist - 0.5);
@@ -366,19 +365,19 @@ export function generateMinimapSvg(trackData, options) {
 
       var offsetDist = options.label_offset !== undefined
         ? (isHighlighted ? options.label_offset * 1.2 : options.label_offset)
-        : (isHighlighted ? 42 : 36);
+        : (isHighlighted ? 22 : 18);
       var lblX = (apexPt.svgX + ux * offsetDist).toFixed(1);
       var lblY = (apexPt.svgY + uy * offsetDist).toFixed(1);
       var turnName = turn.name || ('T' + (i + 1));
       var textColor = isHighlighted ? highlightColor : (turnDiffs ? color : '#e2e8f0');
-      var defaultBaseFontSize = 33;
-      var defaultHighlightFontSize = 39;
+      var defaultBaseFontSize = 14;
+      var defaultHighlightFontSize = 16;
       var fontSize = isHighlighted
         ? (options.highlight_font_size || (options.font_size ? Math.round(options.font_size * 1.2) : defaultHighlightFontSize))
         : (options.font_size || defaultBaseFontSize);
       var fontWeight = isHighlighted ? '900' : '800';
 
-      labelsSvg += '<text x="' + lblX + '" y="' + lblY + '" fill="' + textColor + '" font-size="' + fontSize + '" font-weight="' + fontWeight + '" text-anchor="middle" dominant-baseline="central" style="paint-order: stroke fill; stroke: #000000; stroke-width: 6px; stroke-linejoin: round; text-shadow: 0 0 8px #000000, 0 0 14px #000000;">' + turnName + '</text>';
+      labelsSvg += '<text x="' + lblX + '" y="' + lblY + '" fill="' + textColor + '" font-size="' + fontSize + '" font-weight="' + fontWeight + '" text-anchor="middle" dominant-baseline="central" style="paint-order: stroke fill; stroke: #000000; stroke-width: 3.5px; stroke-linejoin: round; text-shadow: 0 0 6px #000000, 0 0 10px #000000;">' + turnName + '</text>';
     }
   });
 

@@ -722,14 +722,105 @@ body {
 .lap-selection-menu {
     position: absolute;
     z-index: 10000;
-    background: rgba(30, 41, 59, 0.98);
+    background: rgba(15, 23, 42, 0.98);
     backdrop-filter: blur(12px);
     border: 1px solid var(--border-color);
     border-radius: 8px;
     box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
     padding: 6px 0;
     min-width: 145px;
+    max-height: 85vh;
+    overflow-y: auto;
     font-family: inherit;
+}
+
+.lap-selection-menu.multi-session {
+    min-width: 290px;
+    padding: 8px;
+}
+
+.lap-selection-menu .menu-section {
+    padding: 6px 4px;
+}
+
+.lap-selection-menu .menu-section + .menu-section {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    margin-top: 4px;
+    padding-top: 8px;
+}
+
+.lap-selection-menu .menu-section-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+    padding: 0 4px;
+}
+
+.lap-selection-menu .session-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.lap-selection-menu .menu-btn-row {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.lap-selection-menu .menu-btn-row button {
+    background: #1e293b;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.lap-selection-menu .menu-btn-row button:hover {
+    color: var(--text-primary);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.lap-selection-menu.group-a .menu-btn-row button:hover {
+    background: rgba(251, 146, 60, 0.2);
+    border-color: #fb923c;
+    color: #fb923c;
+}
+
+.lap-selection-menu.group-b .menu-btn-row button:hover {
+    background: rgba(56, 189, 248, 0.2);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.lap-selection-menu .menu-btn-row button.btn-clear {
+    color: #94a3b8;
+    background: rgba(15, 23, 42, 0.6);
+}
+
+.lap-selection-menu .menu-btn-row button.btn-clear:hover {
+    color: #f87171;
+    border-color: #f87171;
+    background: rgba(239, 68, 68, 0.15);
+}
+
+.lap-selection-menu .menu-hint {
+    font-size: 0.65rem;
+    color: var(--text-muted, #64748b);
+    padding: 6px 4px 2px 4px;
+    text-align: right;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    margin-top: 4px;
 }
 
 .lap-selection-menu .menu-item {
@@ -896,5 +987,162 @@ body {
 
 .report-reset-btn:active svg {
     transform: rotate(-180deg);
+}
+
+/* Group Management & Visibility Controls */
+.group-visibility-btn {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: opacity 0.15s, background-color 0.15s;
+    user-select: none;
+}
+
+.group-visibility-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.group-settings-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s, background 0.15s, transform 0.2s;
+}
+
+.group-settings-btn:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.group-settings-btn:active {
+    transform: rotate(45deg);
+}
+
+.group-management-popup {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    width: 135px;
+    background: #0f172a;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    backdrop-filter: blur(8px);
+}
+
+.group-management-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.group-management-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.group-management-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 3px 6px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 6px;
+    font-size: 0.78rem;
+    transition: background 0.15s;
+}
+
+.group-management-row:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.group-row-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.group-badge-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.group-row-name {
+    font-weight: 700;
+    font-size: 0.8rem;
+}
+
+.group-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.group-row-delete-btn {
+    background: transparent;
+    border: none;
+    color: #ef4444;
+    cursor: pointer;
+    padding: 3px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.7;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+.group-row-delete-btn:hover {
+    opacity: 1;
+    background: rgba(239, 68, 68, 0.15);
+}
+
+.group-add-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px dashed rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    width: 100%;
+}
+
+.group-add-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: var(--accent);
+    color: var(--accent);
 }
 

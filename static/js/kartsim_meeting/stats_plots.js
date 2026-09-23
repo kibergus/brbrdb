@@ -25,6 +25,7 @@ import {
   computeGroupBTurnDiffs,
   generateMinimapSvg
 } from '../stats_plots.js';
+import { getGroupColor } from './palette.js';
 
 export { getRedThreshold, getTurnDiffColor, computeGroupBTurnDiffs, renderTurnGapsPlot };
 
@@ -103,39 +104,27 @@ function attachTurnClickHandlers(gd) {
 export function renderStatsPlots() {
   const selectedLaps = [];
 
-  // Collect selected laps from Group A if visible
-  if (state.groupAVisible) {
-    state.groupASelection.forEach(lapId => {
-      const lap = state.lapDataLookup[lapId];
-      if (lap) {
-        const sessionId = lap.session_id || lapId.slice(0, lapId.lastIndexOf('-'));
-        const session = state.allSessionsData.find(s => s.session_id == sessionId);
-        selectedLaps.push({
-          ...lap,
-          group: 'A',
-          session_name: session ? session.session_name : (lap.session_name || ''),
-          lapId: lapId
-        });
-      }
-    });
-  }
+  const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
 
-  // Collect selected laps from Group B if visible
-  if (state.groupBVisible) {
-    state.groupBSelection.forEach(lapId => {
-      const lap = state.lapDataLookup[lapId];
-      if (lap) {
-        const sessionId = lap.session_id || lapId.slice(0, lapId.lastIndexOf('-'));
-        const session = state.allSessionsData.find(s => s.session_id == sessionId);
-        selectedLaps.push({
-          ...lap,
-          group: 'B',
-          session_name: session ? session.session_name : (lap.session_name || ''),
-          lapId: lapId
-        });
-      }
-    });
-  }
+  activeGroups.forEach(group => {
+    const isVis = state.isGroupVisible ? state.isGroupVisible(group, 'stats') : true;
+    if (isVis) {
+      const sel = (state.groupSelections && state.groupSelections[group]) || [];
+      sel.forEach(lapId => {
+        const lap = state.lapDataLookup ? state.lapDataLookup[lapId] : null;
+        if (lap) {
+          const sessionId = lap.session_id || lapId.slice(0, lapId.lastIndexOf('-'));
+          const session = (state.allSessionsData || []).find(s => s.session_id == sessionId);
+          selectedLaps.push({
+            ...lap,
+            group: group,
+            session_name: session ? session.session_name : (lap.session_name || ''),
+            lapId: lapId
+          });
+        }
+      });
+    }
+  });
 
   const container = document.getElementById('stats-plots-container');
   const noData = document.getElementById('stats-no-data');
@@ -239,7 +228,12 @@ function renderLapTimesPlot(laps) {
 
   const data = [];
   let curveIdx = 0;
-  ['A', 'B'].forEach(group => {
+  const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+  const groupsInLaps = Array.from(new Set(laps.map(l => l.group))).filter(Boolean);
+  const orderedGroups = activeGroups.filter(g => groupsInLaps.includes(g));
+  const groupsToRender = orderedGroups.length > 0 ? orderedGroups : (groupsInLaps.length > 0 ? groupsInLaps.sort() : ['A', 'B']);
+
+  groupsToRender.forEach(group => {
     const groupLaps = laps.filter(l => l.group === group && l.is_valid !== false);
     if (groupLaps.length === 0) return;
 
@@ -258,7 +252,7 @@ function renderLapTimesPlot(laps) {
 
     if (times.length === 0) return;
 
-    const color = group === 'A' ? state.baseColor : state.highlightColor;
+    const color = getGroupColor(group);
 
     validGroupLaps.forEach((lap, pointIdx) => {
       const lapId = lap.lapId;
@@ -301,7 +295,7 @@ function renderLapTimesPlot(laps) {
       gridcolor: 'rgba(255,255,255,0.1)',
       showticklabels: true,
       categoryorder: 'array',
-      categoryarray: ['A', 'B'],
+      categoryarray: activeGroups,
       fixedrange: true
     },
     yaxis: {
@@ -349,6 +343,11 @@ function renderTurnGapsPlot(laps) {
   const MAX_GAP = 2.0;
   const OUTLIER_Y = 2.06;
 
+  const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+  const groupsInLaps = Array.from(new Set(laps.map(l => l.group))).filter(Boolean);
+  const orderedGroups = activeGroups.filter(g => groupsInLaps.includes(g));
+  const groupsList = orderedGroups.length > 0 ? orderedGroups : (groupsInLaps.length > 0 ? groupsInLaps.sort() : ['A', 'B']);
+
   const turnLabels = new Array(turns.length);
   turns.forEach((_, turnIdx) => {
     const fastest = turnFastestTimes[turnIdx];
@@ -359,27 +358,21 @@ function renderTurnGapsPlot(laps) {
       return;
     }
 
-    const lapsA = laps.filter(l => l.group === 'A' && l.is_valid !== false);
-    const gapsA = lapsA
-      .map(l => (l.turn_times && l.turn_times[turnIdx] > 0.5) ? l.turn_times[turnIdx] - fastest : null)
-      .filter(g => g !== null && g >= 0 && g <= MAX_GAP);
-    const avgGapA = gapsA.length > 0 ? (gapsA.reduce((a, b) => a + b, 0) / gapsA.length) : null;
-
-    const lapsB = laps.filter(l => l.group === 'B' && l.is_valid !== false);
-    const gapsB = lapsB
-      .map(l => (l.turn_times && l.turn_times[turnIdx] > 0.5) ? l.turn_times[turnIdx] - fastest : null)
-      .filter(g => g !== null && g >= 0 && g <= MAX_GAP);
-    const avgGapB = gapsB.length > 0 ? (gapsB.reduce((a, b) => a + b, 0) / gapsB.length) : null;
-
-    const strA = avgGapA !== null ? `<span style="color: #fb923c">${avgGapA.toFixed(2)} s</span>` : '— s';
-    const strB = avgGapB !== null ? `<span style="color: #38bdf8">${avgGapB.toFixed(2)} s</span>` : '— s';
+    const groupStrings = groupsList.map(g => {
+      const gLaps = laps.filter(l => l.group === g && l.is_valid !== false);
+      const gaps = gLaps
+        .map(l => (l.turn_times && l.turn_times[turnIdx] > 0.5) ? l.turn_times[turnIdx] - fastest : null)
+        .filter(val => val !== null && val >= 0 && val <= MAX_GAP);
+      const avgGap = gaps.length > 0 ? (gaps.reduce((a, b) => a + b, 0) / gaps.length) : null;
+      return avgGap !== null ? `<span style="color: ${getGroupColor(g)}">${avgGap.toFixed(2)} s</span>` : '— s';
+    });
 
     const isHighlighted = (currentHighlightTurnName && (name === currentHighlightTurnName || name.split(' & ')[0].trim() === currentHighlightTurnName.split(' & ')[0].trim()));
     const nameStr = isHighlighted
       ? `<b><span style="color: ${groupBColor}">${name}</span></b>`
       : `<span style="color: ${groupBColor}; font-weight: 600;">${name}</span>`;
 
-    turnLabels[turnIdx] = `${nameStr}<br>${strA}<br>${strB}`;
+    turnLabels[turnIdx] = [nameStr, ...groupStrings].join('<br>');
   });
 
   const data = [];
@@ -387,7 +380,7 @@ function renderTurnGapsPlot(laps) {
   let maxObservedGap = 0;
   let hasOutliers = false;
 
-  ['A', 'B'].forEach(group => {
+  groupsList.forEach(group => {
     const groupLaps = laps.filter(l => l.group === group && l.is_valid !== false);
     if (groupLaps.length === 0) return;
 
@@ -399,7 +392,7 @@ function renderTurnGapsPlot(laps) {
     const outlierY = [];
     const outlierText = [];
 
-    const color = group === 'A' ? state.baseColor : state.highlightColor;
+    const color = getGroupColor(group);
 
     turns.forEach((_, turnIdx) => {
       const fastest = turnFastestTimes[turnIdx];
@@ -514,7 +507,7 @@ function renderTurnGapsPlot(laps) {
     paper_bgcolor: 'rgba(0,0,0,0)',
     plot_bgcolor: 'rgba(0,0,0,0)',
     font: { color: '#e2e8f0', family: 'Inter, sans-serif' },
-    margin: { l: 60, r: 40, t: 38, b: 95 },
+    margin: { l: 60, r: 40, t: 38, b: Math.max(95, 45 + (groupsList.length * 18)) },
     yaxis: {
       title: 'Gap from Fastest (s)',
       range: [yMin, yRangeTop],
@@ -558,16 +551,21 @@ function renderApexSpeedsPlot(laps) {
   const turns = state.trackData.turns;
   const turnNames = turns.map((t, i) => t.name || `Turn ${i + 1}`);
 
+  const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+  const groupsInLaps = Array.from(new Set(laps.map(l => l.group))).filter(Boolean);
+  const orderedGroups = activeGroups.filter(g => groupsInLaps.includes(g));
+  const groupsList = orderedGroups.length > 0 ? orderedGroups : (groupsInLaps.length > 0 ? groupsInLaps.sort() : ['A', 'B']);
+
   const data = [];
   let curveIdx = 0;
-  ['A', 'B'].forEach(group => {
+  groupsList.forEach(group => {
     const groupLaps = laps.filter(l => l.group === group && l.is_valid !== false);
     if (groupLaps.length === 0) return;
 
     const xData = [];
     const yData = [];
     const textData = [];
-    const color = group === 'A' ? state.baseColor : state.highlightColor;
+    const color = getGroupColor(group);
 
     let ptIdx = 0;
     turns.forEach((turn, turnIdx) => {

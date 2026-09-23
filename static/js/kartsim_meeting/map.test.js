@@ -523,6 +523,64 @@ describe('loadTrackPoints default color mode', () => {
         global.document = oldDocument;
     });
 
+    it('initializes Group A with fastest 5 laps and Group B with fastest 75% laps by default', async () => {
+        const oldWindow = global.window;
+        const oldDocument = global.document;
+
+        global.document = {
+            getElementById: vi.fn(() => createMockElement()),
+            querySelectorAll: vi.fn(() => [])
+        };
+
+        global.window = {
+            location: { origin: 'http://localhost', search: '' },
+            KART_CONFIG: { getTrackPointsUrl: 'http://localhost/api/telemetry' }
+        };
+
+        const laps = [];
+        for (let i = 1; i <= 10; i++) {
+            laps.push({ lap_num: i, lap_time: `4${i < 10 ? '0.' + i : '1.0'}`, start_idx: 0, end_idx: 1 });
+        }
+
+        global.fetch = vi.fn().mockImplementation((url) => {
+            const urlStr = String(url);
+            if (urlStr.includes('/api/telemetry/channel')) {
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    arrayBuffer: () => Promise.resolve(new ArrayBuffer(16))
+                });
+            }
+            if (urlStr.includes('/api/telemetry') || urlStr.includes('getTrackPointsUrl')) {
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    json: () => Promise.resolve([
+                        {
+                            session_id: 's1',
+                            columns: ['Time', 'Latitude', 'Longitude', 'Speed'],
+                            laps: laps
+                        }
+                    ])
+                });
+            }
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ center_line: [], turns: [] })
+            });
+        });
+
+        await loadTrackPoints();
+
+        expect(state.groupSelections.A.size).toBe(5);
+        // 75% of 10 is ceil(7.5) = 8
+        expect(state.groupSelections.B.size).toBe(8);
+
+        global.window = oldWindow;
+        global.document = oldDocument;
+    });
+
     describe('matchesRequestedLap with index notation', () => {
         const session0 = { session_id: 'club100/cadet/2026-09-12/Lydd/09_48_cadet_group_b' };
         const session1 = { session_id: 'club100_south/cadet_lw/2026-09-12/Lydd/11_02_practice' };
@@ -556,6 +614,25 @@ describe('loadTrackPoints default color mode', () => {
         it('maintains backward compatibility with full lapId', () => {
             const requested = new Set(['id0-4']);
             expect(matchesRequestedLap(requested, 'id0-4', session0, lap0_4)).toBe(true);
+        });
+
+        it('does not falsely match lap 0 or lap 1 when index notation like "0_13" or "1_11" is requested', () => {
+            const lap0_0 = { lap_num: 0 };
+            const lap0_13 = { lap_num: 13 };
+            const lap1_1 = { lap_num: 1 };
+            const lap1_11 = { lap_num: 11 };
+
+            const requestedA = new Set(['0_13']);
+            expect(matchesRequestedLap(requestedA, 'id0-13', session0, lap0_13, 0)).toBe(true);
+            expect(matchesRequestedLap(requestedA, 'id0-0', session0, lap0_0, 0)).toBe(false);
+            expect(matchesRequestedLap(requestedA, 'id1-0', session1, lap0_0, 1)).toBe(false);
+            expect(matchesRequestedLap(requestedA, 'id1-13', session1, lap0_13, 1)).toBe(false);
+
+            const requestedB = new Set(['1_11']);
+            expect(matchesRequestedLap(requestedB, 'id1-11', session1, lap1_11, 1)).toBe(true);
+            expect(matchesRequestedLap(requestedB, 'id1-1', session1, lap1_1, 1)).toBe(false);
+            expect(matchesRequestedLap(requestedB, 'id0-1', session0, lap1_1, 0)).toBe(false);
+            expect(matchesRequestedLap(requestedB, 'id0-11', session0, lap1_11, 0)).toBe(false);
         });
     });
 });

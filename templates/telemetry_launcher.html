@@ -1,0 +1,205 @@
+{% extends "layout.html" %}
+
+{% block title %}Telemetry Viewer - BrBrDb{% endblock %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a>
+<span class="breadcrumb-separator">/</span>
+<span>Telemetry</span>
+{% endblock %}
+
+{% block content %}
+<div style="max-width: 760px; margin: 2rem auto; padding: 0 1rem;">
+    <div class="card" style="padding: 2rem; border-radius: 12px; background: var(--card-bg, #1e293b); border: 1px solid var(--border-color, #334155); box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);">
+        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+            <div style="width: 38px; height: 38px; border-radius: 8px; background: linear-gradient(135deg, #0284c7, #38bdf8); display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 2px 8px rgba(56, 189, 248, 0.3);">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                </svg>
+            </div>
+            <div>
+                <h1 style="margin: 0; font-size: 1.5rem; font-weight: 700; color: var(--text-primary, #f8fafc); letter-spacing: -0.02em;">Telemetry Session Viewer</h1>
+                <p style="margin: 0.15rem 0 0 0; font-size: 0.875rem; color: var(--text-secondary, #94a3b8);">Paste links to sessions to open their telemetry and compare laps.</p>
+            </div>
+        </div>
+
+        <div id="client-error-box" {% if not error %}style="display: none; margin-top: 1.25rem; padding: 0.85rem 1rem; border-radius: 8px; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; font-size: 0.9rem; line-height: 1.45;"{% else %}style="margin-top: 1.25rem; padding: 0.85rem 1rem; border-radius: 8px; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.4); color: #fca5a5; font-size: 0.9rem; line-height: 1.45;"{% endif %}>
+            <div style="display: flex; align-items: flex-start; gap: 0.5rem;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+                <span id="error-message-text">{{ error or '' }}</span>
+            </div>
+        </div>
+
+        <form id="telemetry-form" action="{{ url_for('location.telemetry_launcher') }}" method="POST" style="margin-top: 1.5rem;">
+            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.4rem;">
+                <label for="session-links" style="font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary, #94a3b8);">
+                    Session Links (one per line)
+                </label>
+                <button type="button" id="btn-example" style="background: none; border: none; color: var(--accent, #38bdf8); font-size: 0.8rem; cursor: pointer; padding: 0; text-decoration: underline;">
+                    Insert example link
+                </button>
+            </div>
+
+            <textarea 
+                id="session-links" 
+                name="session_links" 
+                rows="5" 
+                placeholder="https://brbrdb.brbrkitten.com/session/club100_south/cadet_lw/2026-09-12/Lydd/15_12_race_13_cadet_lightweight_south_c_final"
+                style="width: 100%; padding: 0.75rem 1rem; border-radius: 8px; background: #0f172a; border: 1px solid var(--border-color, #334155); color: var(--text-primary, #f8fafc); font-family: monospace, ui-monospace, SFMono-Regular, Consolas; font-size: 0.85rem; line-height: 1.5; resize: vertical; box-sizing: border-box; outline: none; transition: border-color 0.2s;"
+                onfocus="this.style.borderColor='var(--accent, #38bdf8)'"
+                onblur="this.style.borderColor='var(--border-color, #334155)'"
+            >{{ input_text or '' }}</textarea>
+
+            <div id="session-preview" style="display: none; margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 8px; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--border-color, #334155);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                    <span style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: var(--accent, #38bdf8); letter-spacing: 0.05em;">
+                        Detected Sessions (<span id="detected-count">0</span>)
+                    </span>
+                    <span id="detected-track-badge" style="font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; background: rgba(56, 189, 248, 0.15); color: var(--accent, #38bdf8); font-weight: 600;"></span>
+                </div>
+                <div id="detected-sessions-list" style="display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.8rem; color: var(--text-primary, #f8fafc);">
+                </div>
+            </div>
+
+            <div style="margin-top: 1.5rem; display: flex; gap: 0.75rem; justify-content: flex-end;">
+                <button 
+                    type="submit" 
+                    id="submit-btn" 
+                    style="padding: 0.65rem 1.4rem; border-radius: 8px; background: linear-gradient(135deg, #0284c7, #0ea5e9); color: #ffffff; border: none; font-size: 0.95rem; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 0.5rem; box-shadow: 0 4px 12px rgba(14, 165, 239, 0.25); transition: transform 0.15s ease, box-shadow 0.15s ease;"
+                    onmouseover="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 6px 16px rgba(14, 165, 239, 0.35)';"
+                    onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 12px rgba(14, 165, 239, 0.25)';"
+                >
+                    Open Telemetry
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                        <polyline points="12 5 19 12 12 19"></polyline>
+                    </svg>
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+(function() {
+    const textarea = document.getElementById('session-links');
+    const previewBox = document.getElementById('session-preview');
+    const countSpan = document.getElementById('detected-count');
+    const trackBadge = document.getElementById('detected-track-badge');
+    const sessionsList = document.getElementById('detected-sessions-list');
+    const errorBox = document.getElementById('client-error-box');
+    const errorText = document.getElementById('error-message-text');
+    const form = document.getElementById('telemetry-form');
+    const exampleBtn = document.getElementById('btn-example');
+
+    const SESSION_REGEX = /\/session\/([^/\s?#]+)\/([^/\s?#]+)\/([^/\s?#]+)\/([^/\s?#]+)\/([^/\s?#]+)/g;
+
+    function parseLinks(text) {
+        const results = [];
+        if (!text) return results;
+        let match;
+        const regex = new RegExp(SESSION_REGEX);
+        while ((match = regex.exec(text)) !== null) {
+            results.push({
+                league: decodeURIComponent(match[1]),
+                className: decodeURIComponent(match[2]),
+                date: decodeURIComponent(match[3]),
+                track: decodeURIComponent(match[4]),
+                sessionId: decodeURIComponent(match[5])
+            });
+        }
+        return results;
+    }
+
+    function showError(msg) {
+        errorText.textContent = msg;
+        errorBox.style.display = 'block';
+    }
+
+    function hideError() {
+        errorBox.style.display = 'none';
+        errorText.textContent = '';
+    }
+
+    function updatePreview() {
+        const text = textarea.value.trim();
+        const sessions = parseLinks(text);
+
+        if (sessions.length === 0) {
+            previewBox.style.display = 'none';
+            return;
+        }
+
+        const tracks = Array.from(new Set(sessions.map(s => s.track)));
+        const meetings = Array.from(new Set(sessions.map(s => `${s.league}/${s.className}/${s.date}`)));
+
+        if (tracks.length > 1) {
+            showError(`Sessions belong to different tracks (${tracks.join(', ')}). Telemetry comparison requires all sessions to be on the same track.`);
+            previewBox.style.display = 'none';
+            return;
+        }
+
+        hideError();
+        previewBox.style.display = 'block';
+        countSpan.textContent = sessions.length;
+        trackBadge.textContent = tracks[0];
+
+        sessionsList.innerHTML = '';
+        sessions.forEach(s => {
+            const item = document.createElement('div');
+            item.style.display = 'flex';
+            item.style.alignItems = 'center';
+            item.style.gap = '0.4rem';
+            const label = meetings.length > 1 ? `${s.date} ${s.className}: ${s.sessionId}` : s.sessionId;
+            item.innerHTML = `<span style="color: var(--accent, #38bdf8);">•</span> <span style="font-family: monospace; word-break: break-all;">${label}</span>`;
+            sessionsList.appendChild(item);
+        });
+    }
+
+    textarea.addEventListener('input', updatePreview);
+    updatePreview();
+
+    exampleBtn.addEventListener('click', function() {
+        textarea.value = window.location.origin + '/session/club100_south/cadet_lw/2026-09-12/Lydd/15_12_race_13_cadet_lightweight_south_c_final';
+        updatePreview();
+    });
+
+    form.addEventListener('submit', function(e) {
+        const text = textarea.value.trim();
+        const sessions = parseLinks(text);
+
+        if (sessions.length === 0) {
+            e.preventDefault();
+            showError('Please enter at least one valid session link.');
+            return;
+        }
+
+        const tracks = Array.from(new Set(sessions.map(s => s.track)));
+        if (tracks.length > 1) {
+            e.preventDefault();
+            showError(`Cannot open telemetry: sessions belong to different tracks (${tracks.join(', ')}).`);
+            return;
+        }
+
+        // Direct client-side navigation for fast response
+        e.preventDefault();
+        const meetings = Array.from(new Set(sessions.map(s => `${s.league}/${s.className}/${s.date}`)));
+        if (meetings.length === 1) {
+            const first = sessions[0];
+            const sessionIds = Array.from(new Set(sessions.map(s => s.sessionId))).join(',');
+            const targetUrl = `/telemetry/${encodeURIComponent(first.league)}/${encodeURIComponent(first.className)}/${encodeURIComponent(first.date)}/${encodeURIComponent(first.track)}?session_id=${encodeURIComponent(sessionIds)}`;
+            window.location.href = targetUrl;
+        } else {
+            const track = tracks[0];
+            const uniqueParams = Array.from(new Set(sessions.map(s => `${s.league}/${s.className}/${s.date}/${s.track}/${s.sessionId}`)));
+            const query = uniqueParams.map(p => `session=${encodeURIComponent(p)}`).join('&');
+            window.location.href = `/telemetry/${encodeURIComponent(track)}?${query}`;
+        }
+    });
+})();
+</script>
+{% endblock %}

@@ -664,6 +664,10 @@ def test_should_smooth_channel() -> None:
     assert location_handlers._should_smooth_channel("GForceVert") is True
     assert location_handlers._should_smooth_channel("Slide Pct FL") is True
     assert location_handlers._should_smooth_channel("Lat Force FL") is True
+    assert location_handlers._should_smooth_channel("Lat Force Front") is True
+    assert location_handlers._should_smooth_channel("Lat Force Rear") is True
+    assert location_handlers._should_smooth_channel("Long Force Front") is True
+    assert location_handlers._should_smooth_channel("Long Force Rear") is True
     assert location_handlers._should_smooth_channel("Tyre Load FL") is True
     assert location_handlers._should_smooth_channel("Steering Angle") is False
     assert location_handlers._should_smooth_channel("Speed") is False
@@ -876,6 +880,114 @@ def test_telemetry_view_with_report_param() -> None:
         assert call_kwargs['is_report_mode'] is True
         assert call_kwargs['report_title'] == "Turn 4 Hairpin"
         assert call_kwargs['report_html'] == mock_body
+
+
+def test_telemetry_track_view_with_report_param() -> None:
+    app = Flask(__name__, template_folder='../templates')
+    app.register_blueprint(location_handlers.location_blueprint)
+    client = app.test_client()
+
+    mock_meta = {
+        "title": "Turn 3 Mystery Solved",
+        "track": "Lydd",
+        "state": {"xlim": [292.0, 458.0]}
+    }
+    mock_state = {"xlim": [292.0, 458.0]}
+    mock_body = "<p>Mystery Solved Content</p>"
+    s1 = MagicMock()
+    s1.session_id = 'race_1'
+    s1.session_name = 'Race 1'
+    s1.session_start_datetime = '2026-09-12T12:00:00'
+    s2 = MagicMock()
+    s2.session_id = 'race_2'
+    s2.session_name = 'Race 2'
+    s2.session_start_datetime = '2026-09-12T14:00:00'
+
+    def mock_find_sessions(leagues: str, classes: str, date: str, track: str) -> list[MagicMock]:
+        if leagues == 'club100_south':
+            return [s1]
+        return [s2]
+
+    with patch('location_handlers.report_parser.load_report', return_value=(mock_meta, mock_state, mock_body)), \
+         patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': True}), \
+         patch('location_handlers.db.find_sessions', side_effect=mock_find_sessions), \
+         patch('location_handlers.db.list_meetings', return_value=[]), \
+         patch('location_handlers.auth.can_see_telemetry', return_value=True), \
+         patch('location_handlers.render_template', return_value="RENDERED_TRACK_REPORT") as mock_render:
+
+        url = (
+            '/telemetry/Lydd?report=lydd_turn3_mystery_solved&'
+            'session=club100_south/cadet_lw/2026-09-12/Lydd/race_1&'
+            'session=club100/cadet/2026-09-12/Lydd/race_2'
+        )
+        resp = client.get(url)
+        assert resp.status_code == 200
+        assert resp.data.decode('utf-8') == "RENDERED_TRACK_REPORT"
+        mock_render.assert_called_once()
+        call_kwargs = mock_render.call_args[1]
+        assert call_kwargs['is_report_mode'] is True
+        assert call_kwargs['report_title'] == "Turn 3 Mystery Solved"
+        assert call_kwargs['report_html'] == mock_body
+        assert call_kwargs['report_state'] == mock_state
+        assert call_kwargs['report_name'] == "lydd_turn3_mystery_solved"
+
+
+def test_telemetry_report_view_multi_session() -> None:
+    app = Flask(__name__, template_folder='../templates')
+    app.register_blueprint(location_handlers.location_blueprint)
+    client = app.test_client()
+
+    mock_meta = {
+        "title": "Turn 3 Mystery Solved",
+        "date": "2026-09-12",
+        "track": "Lydd",
+        "session_id": "09_48_cadet_group_b,11_02_cadet_lightweight_south_group_2_practice"
+    }
+    mock_state = {"lapsA": ["09_48_cadet_group_b-13", "11_02_cadet_lightweight_south_group_2_practice-11"]}
+    mock_body = "<p>Mystery Solved Content</p>"
+
+    s1 = MagicMock()
+    s1.league = 'club100'
+    s1.class_name = ['cadet']
+    s1.date = '2026-09-12'
+    s1.track_name = 'Lydd'
+    s1.session_id = '09_48_cadet_group_b'
+    s1.session_name = '09:48 Cadet Group B'
+    s1.session_start_datetime = '2026-09-12 09:48'
+
+    s2 = MagicMock()
+    s2.league = 'club100_south'
+    s2.class_name = ['cadet_lw']
+    s2.date = '2026-09-12'
+    s2.track_name = 'Lydd'
+    s2.session_id = '11_02_cadet_lightweight_south_group_2_practice'
+    s2.session_name = '11:02 Cadet Lightweight Practice'
+    s2.session_start_datetime = '2026-09-12 11:02'
+
+    def mock_find_sessions(**kwargs: Any) -> list[MagicMock]:
+        if 'session_id' in kwargs and kwargs['session_id']:
+            return [s1, s2]
+        if kwargs.get('leagues') == 'club100':
+            return [s1]
+        return [s2]
+
+    with patch('location_handlers.report_parser.load_report', return_value=(mock_meta, mock_state, mock_body)), \
+         patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': True}), \
+         patch('location_handlers.db.find_sessions', side_effect=mock_find_sessions), \
+         patch('location_handlers.auth.can_see_telemetry', return_value=True), \
+         patch('location_handlers.render_template', return_value="RENDERED_REPORT_VIEW") as mock_render:
+
+        resp = client.get('/telemetry/report/lydd_turn3_mystery_solved')
+        assert resp.status_code == 200
+        assert resp.data.decode('utf-8') == "RENDERED_REPORT_VIEW"
+        mock_render.assert_called_once()
+        call_kwargs = mock_render.call_args[1]
+        assert call_kwargs['is_report_mode'] is True
+        assert call_kwargs['report_title'] == "Turn 3 Mystery Solved"
+        assert call_kwargs['report_html'] == mock_body
+        assert call_kwargs['report_state'] == mock_state
+        assert call_kwargs['report_name'] == "lydd_turn3_mystery_solved"
+        assert len(call_kwargs['telemetry_sessions']) == 2
 
 
 def test_telemetry_report_content_view() -> None:
@@ -1344,3 +1456,24 @@ def test_get_telemetry_channel_and_track_points_gyroscope(tmp_path: Path) -> Non
         deltas = np.frombuffer(resp_roll.data[16:], dtype=np.int16)
         reconstructed_roll = [mean_val + deltas[0] * scale, mean_val + (deltas[0] + deltas[1]) * scale]
         assert np.allclose(reconstructed_roll, [0.8, 0.85], atol=1e-3)
+
+
+def test_parse_telemetry_csv_filters_outlier_coordinates(tmp_path: Path) -> None:
+    csv_content = """Format,RaceBox CSV
+Configuration,Test Driver
+
+Record,Time,Latitude,Longitude,Speed,Lap
+1,2026-05-23T10:13:00.000Z,83.779642,73.235724,0.0,1
+2,2026-05-23T10:13:01.000Z,54.551000,-3.442000,10.0,1
+3,2026-05-23T10:13:02.000Z,54.551050,-3.442050,11.0,1
+"""
+    f = tmp_path / "outliers.csv"
+    f.write_text(csv_content)
+
+    laps, columns, driver = location_handlers.parse_telemetry_csv(str(f))
+    assert driver == "Test Driver"
+    assert len(laps) == 1
+    # Only records 2 and 3 should be included (start_idx 0, end_idx 1)
+    assert laps[0]['start_idx'] == 0
+    assert laps[0]['end_idx'] == 1
+    assert len(laps[0]['times']) == 2

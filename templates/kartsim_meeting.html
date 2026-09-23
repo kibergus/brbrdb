@@ -44,34 +44,24 @@
         <div id="sidebar-map-controls" class="sidebar-section" style="display: none;">
             <div class="sidebar-section-title"
                 style="display: flex; justify-content: space-between; align-items: center;">
-                <span>Telemetry</span>
-                <div
-                    style="display: flex; gap: 0.6rem; align-items: center; text-transform: none; letter-spacing: normal;">
-                    <div id="btn-vis-a" onclick="toggleGroupVisibility('A')"
-                        style="cursor: pointer; display: flex; align-items: center; gap: 4px; color: #fb923c;"
-                        title="Toggle Group A Visibility">
-                        <span style="font-size: 0.7rem; font-weight: 800;">A</span>
-                        <svg class="vis-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                            <circle cx="12" cy="12" r="3" />
+                <div id="group-visibility-container" class="group-visibility-container"
+                    style="display: flex; gap: 0.6rem; align-items: center; text-transform: none; letter-spacing: normal; flex-wrap: wrap;">
+                    <!-- Dynamically rendered by JS (A, B, C...) -->
+                </div>
+                <div style="position: relative; display: flex; align-items: center;">
+                    <button type="button" id="btn-group-settings" class="group-settings-btn" title="Manage Groups" onclick="toggleGroupManagementPopup(event)">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
                         </svg>
-                    </div>
-                    <div id="btn-vis-b" onclick="toggleGroupVisibility('B')"
-                        style="cursor: pointer; display: flex; align-items: center; gap: 4px; color: var(--accent);"
-                        title="Toggle Group B Visibility">
-                        <span style="font-size: 0.7rem; font-weight: 800;">B</span>
-                        <svg class="vis-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
-                            stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                            <circle cx="12" cy="12" r="3" />
-                        </svg>
+                    </button>
+                    <div id="group-management-popup" class="group-management-popup" style="display: none;">
+                        <!-- Dynamically rendered by JS -->
                     </div>
                 </div>
             </div>
             <div class="sidebar-section-controls">
                 {% if telemetry_sessions and telemetry_sessions|length > 0 %}
-                {% set session_colors = ['#3b82f6', '#10b981', '#a855f7', '#f59e0b', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1', '#14b8a6'] %}
+                {% set session_colors = ['#fb923c', '#38bdf8', '#4ade80', '#c084fc', '#f472b6', '#facc15', '#2dd4bf', '#a3e635', '#818cf8', '#fb7185'] %}
                 {% set is_selected_session = selected_session_id and selected_session_id != 'all' %}
                 {% set current_btn_color = 'var(--text-primary)' %}
                 {% if is_selected_session %}
@@ -125,13 +115,8 @@
                 {% endif %}
                 <div
                     style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; padding: 0 1rem;">
-                    <div style="display: flex; align-items: center; gap: 0.4rem;">
-                        <input type="checkbox" id="chk-all-a">
-                        <input type="checkbox" id="chk-all-b">
-                        <label
-                            style="font-size: 0.75rem; color: var(--text-secondary); cursor: pointer; font-weight: 600; text-transform: uppercase; margin-left: 0.2rem;">All
-                            <span style="color: #fb923c;">A</span> / <span
-                                style="color: var(--accent);">B</span></label>
+                    <div id="select-all-groups-container" class="select-all-groups-container" style="display: flex; align-items: center; gap: 0.4rem;">
+                        <!-- Dynamically rendered by JS (chk-all-a, chk-all-b, All A / B...) -->
                     </div>
                     <div style="display: flex; gap: 0.25rem; align-items: center;">
                         <button class="sort-btn" id="sort-num" onclick="setSort('num')"

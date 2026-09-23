@@ -386,6 +386,26 @@ def safe_float(val: Any, default: float = 0.0) -> float:
         return default
 
 
+def parse_optional_float(val: Any) -> float | None:
+    """Parse float returning None if value is missing, empty, or NaN."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        if np.isnan(val):
+            return None
+        return float(val)
+    val_str = str(val).strip()
+    if val_str == '' or val_str.lower() in ('nan', 'none', 'null'):
+        return None
+    try:
+        f = float(val_str)
+        if math.isnan(f):
+            return None
+        return f
+    except Exception:
+        return None
+
+
 def parse_coordinate(val: Any) -> float:
     """Parse coordinate, returning np.nan if uninitialized (None, empty, NaN, or 0.0)."""
     if val is None:
@@ -404,6 +424,59 @@ def parse_coordinate(val: Any) -> float:
         return f
     except (ValueError, TypeError):
         return np.nan
+
+
+def get_track_coordinate_reference(
+    track_data: dict | None,
+    lats: list[float] | np.ndarray,
+    lons: list[float] | np.ndarray
+) -> tuple[float | None, float | None, float]:
+    """Get reference (latitude, longitude, max_distance_meters) for geographic sanity checks.
+
+    Uses track centerline or origin if available, otherwise computes median coordinates
+    of valid data points.
+    """
+    if track_data:
+        centerline = track_data.get('center_line')
+        if centerline and isinstance(centerline, list):
+            cl_lat = [p['lat'] for p in centerline if isinstance(p, dict) and 'lat' in p]
+            cl_lon = [p['lon'] for p in centerline if isinstance(p, dict) and 'lon' in p]
+            if cl_lat and cl_lon:
+                return float(np.mean(cl_lat)), float(np.mean(cl_lon)), 5000.0
+        origin = track_data.get('origin')
+        if origin and isinstance(origin, dict) and 'lat' in origin and 'lon' in origin:
+            return float(origin['lat']), float(origin['lon']), 5000.0
+
+    valid_coords = [
+        (float(lat), float(lon)) for lat, lon in zip(lats, lons)
+        if not np.isnan(lat) and not np.isnan(lon) and not (lat == 0.0 and lon == 0.0)
+        and -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
+    ]
+    if not valid_coords:
+        return None, None, 0.0
+
+    v_lats = [c[0] for c in valid_coords]
+    v_lons = [c[1] for c in valid_coords]
+    return float(np.median(v_lats)), float(np.median(v_lons)), 10000.0
+
+
+def is_coordinate_within_bounds(
+    lat: float,
+    lon: float,
+    ref_lat: float | None,
+    ref_lon: float | None,
+    max_dist_m: float = 5000.0
+) -> bool:
+    """Check if coordinate is within geographic bounds and reasonable distance of track/median."""
+    if np.isnan(lat) or np.isnan(lon) or (lat == 0.0 and lon == 0.0):
+        return False
+    if lat < -90.0 or lat > 90.0 or lon < -180.0 or lon > 180.0:
+        return False
+    if ref_lat is None or ref_lon is None:
+        return True
+    dlat = (lat - ref_lat) * 111_000.0
+    dlon = (lon - ref_lon) * 111_000.0 * math.cos(math.radians(ref_lat))
+    return (dlat * dlat + dlon * dlon) <= (max_dist_m * max_dist_m)
 
 
 def infer_conditions_from_avg_track_wetness(records: list[dict]) -> str | None:
@@ -450,6 +523,7 @@ def compute_gyro_rear_slip_angle(
     anchor the heading to GPS course and estimate gyro zero-rate bias.
     Translates the velocity vector from the camera location to the rear axle using
     distance_to_rear_axle and the yaw rate.
+    Points with missing/NaN gyro data are not assigned a slip angle (yielding NaN).
     """
     N = len(records)
     if N == 0:
@@ -467,14 +541,20 @@ def compute_gyro_rear_slip_angle(
             if 0 < delta <= 1.0:
                 dts[i] = delta
 
-    yaw_rates = np.array([safe_float(r.get('Yaw Rate'), 0.0) for r in records])
+    yaw_opts = [parse_optional_float(r.get('Yaw Rate')) for r in records]
+    is_valid_yaw = np.array([y is not None for y in yaw_opts], dtype=bool)
+
+    if not np.any(is_valid_yaw):
+        return course.copy(), np.full(N, np.nan)
+
+    yaw_rates = np.array([(y if y is not None else 0.0) for y in yaw_opts], dtype=float)
     glat = np.array([safe_float(r.get('GForceLat'), 0.0) for r in records])
 
     heading = np.zeros(N)
-    slip_rear = np.zeros(N)
+    slip_rear = np.full(N, np.nan)
 
-    # Find initial anchor point where kart is moving
-    moving_idxs = np.where(speeds_ms > 3.0)[0]
+    # Find initial anchor point where kart is moving and gyro is valid
+    moving_idxs = np.where((speeds_ms > 3.0) & is_valid_yaw)[0]
     start_idx = int(moving_idxs[0]) if len(moving_idxs) > 0 else 0
     init_course = course[start_idx] if len(course) > start_idx else 0.0
     heading[:start_idx + 1] = init_course
@@ -482,12 +562,38 @@ def compute_gyro_rear_slip_angle(
     bias = 0.0
     bias_samples: list[float] = []
 
+    def _calc_slip(cog: float, head: float, v: float, yr: float, b: float) -> float:
+        if v < 2.0:
+            return 0.0
+        beta_cam_deg = (cog - head + 180.0) % 360.0 - 180.0
+        beta_cam_rad = math.radians(beta_cam_deg)
+        vx_cam = v * math.cos(beta_cam_rad)
+        vy_cam = v * math.sin(beta_cam_rad)
+        omega_rad = math.radians(-(yr - b))
+        vy_rear = vy_cam - omega_rad * distance_to_rear_axle
+        vx_rear = max(vx_cam, 0.5)
+        return math.degrees(math.atan2(vy_rear, vx_rear))
+
+    for k in range(0, start_idx + 1):
+        if is_valid_yaw[k]:
+            slip_rear[k] = _calc_slip(course[k], heading[k], speeds_ms[k], yaw_rates[k], bias)
+
     for i in range(start_idx + 1, N):
-        dt = dts[i]
-        v = speeds_ms[i]
-        yr = yaw_rates[i]
         cog = course[i]
+        v = speeds_ms[i]
+
+        if not is_valid_yaw[i]:
+            # Missing gyro data: cannot integrate heading or calculate slip angle
+            heading[i] = cog
+            slip_rear[i] = np.nan
+            continue
+
+        dt = dts[i]
+        yr = yaw_rates[i]
         lat_g = glat[i]
+
+        if not is_valid_yaw[i - 1]:
+            heading[i - 1] = course[i - 1]
 
         # Integrate heading: in compass coordinates (CW), dpsi/dt = -(yaw_rate - bias)
         dpsi = -(yr - bias) * dt
@@ -505,22 +611,137 @@ def compute_gyro_rear_slip_angle(
         else:
             heading[i] = psi_pred
 
-        if v >= 2.0:
-            beta_cam_deg = (cog - heading[i] + 180.0) % 360.0 - 180.0
-            beta_cam_rad = math.radians(beta_cam_deg)
-            vx_cam = v * math.cos(beta_cam_rad)
-            vy_cam = v * math.sin(beta_cam_rad)
-
-            # Omega_z clockwise in rad/s:
-            omega_rad = math.radians(-(yr - bias))
-            vy_rear = vy_cam - omega_rad * distance_to_rear_axle
-            vx_rear = max(vx_cam, 0.5)
-
-            slip_rear[i] = math.degrees(math.atan2(vy_rear, vx_rear))
-        else:
-            slip_rear[i] = 0.0
+        slip_rear[i] = _calc_slip(cog, heading[i], v, yr, bias)
 
     return heading, slip_rear
+
+
+def compute_gyro_forces(
+    records: list[dict],
+    speeds_ms: np.ndarray,
+    distance_to_rear_axle: float | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Computes front and rear lateral and longitudinal specific forces (in g)
+    from gyro yaw rate, accelerometers (GForceLat, GForceLon), and speed.
+
+    Governing vehicle dynamics (single-track / planar model):
+      f_yf = (b / L) * a_y + (k_z^2 / (L * g)) * d_omega_z
+      f_yr = (a / L) * a_y - (k_z^2 / (L * g)) * d_omega_z
+      f_xf = -f_yf * sin(delta)
+      f_xr = a_x + f_yf * sin(delta)
+
+    Returns:
+      (f_yf, f_yr, f_xf, f_xr) arrays in g, with NaNs where data is invalid/missing.
+    """
+    N = len(records)
+    if N == 0:
+        return np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0)
+
+    # Standard kart geometry (CIK-FIA senior chassis defaults)
+    L = 1.04  # Wheelbase in meters
+    g = 9.80665
+
+    if distance_to_rear_axle is not None and 0.1 < distance_to_rear_axle < L:
+        b = float(distance_to_rear_axle)
+    else:
+        b = 0.42 * L  # Default ~0.437 m
+    a = L - b
+    W_f = b / L
+    W_r = a / L
+    k_z = 0.48 * L  # Radius of gyration in yaw ~0.50 m
+    moment_coeff = (k_z ** 2) / (L * g)
+
+    # Extract time deltas between points
+    dts = np.full(N, 0.1)
+    timestamps = [to_naive_datetime(r.get('Time')) for r in records]
+    for i in range(1, N):
+        t_prev = timestamps[i - 1]
+        t_curr = timestamps[i]
+        if t_prev is not None and t_curr is not None:
+            delta = (t_curr - t_prev).total_seconds()
+            if 0 < delta <= 1.0:
+                dts[i] = delta
+
+    yaw_opts = [parse_optional_float(r.get('Yaw Rate')) for r in records]
+    is_valid_yaw = np.array([y is not None for y in yaw_opts], dtype=bool)
+
+    if not np.any(is_valid_yaw):
+        nan_arr = np.full(N, np.nan)
+        return nan_arr.copy(), nan_arr.copy(), nan_arr.copy(), nan_arr.copy()
+
+    yaw_rates_deg = np.array([(y if y is not None else 0.0) for y in yaw_opts], dtype=float)
+    yaw_rates_rad = np.radians(yaw_rates_deg)
+
+    glat_opts = [parse_optional_float(r.get('GForceLat')) for r in records]
+    glon_opts = [parse_optional_float(r.get('GForceLon')) for r in records]
+
+    # Compute raw yaw angular acceleration (rad/s^2)
+    d_omega_z = np.zeros(N)
+    for i in range(1, N):
+        if is_valid_yaw[i] and is_valid_yaw[i - 1]:
+            d_omega_z[i] = (yaw_rates_rad[i] - yaw_rates_rad[i - 1]) / dts[i]
+    if N > 1 and is_valid_yaw[0] and is_valid_yaw[1]:
+        d_omega_z[0] = d_omega_z[1]
+
+    # Smooth d_omega_z with a 5-point moving window over valid points to filter vibration
+    smoothed_d_omega = np.zeros(N)
+    for i in range(N):
+        if not is_valid_yaw[i]:
+            smoothed_d_omega[i] = np.nan
+            continue
+        window_vals = [
+            d_omega_z[j]
+            for j in range(max(0, i - 2), min(N, i + 3))
+            if is_valid_yaw[j]
+        ]
+        smoothed_d_omega[i] = float(np.mean(window_vals)) if window_vals else 0.0
+
+    f_yf = np.full(N, np.nan)
+    f_yr = np.full(N, np.nan)
+    f_xf = np.full(N, np.nan)
+    f_xr = np.full(N, np.nan)
+
+    for i in range(N):
+        if not is_valid_yaw[i]:
+            continue
+
+        lat_g = glat_opts[i]
+        if lat_g is None:
+            # Estimate centripetal acceleration a_y = v * omega_z / g if accelerometer missing
+            lat_g = (speeds_ms[i] * yaw_rates_rad[i]) / g
+
+        lon_g = glon_opts[i]
+        if lon_g is None:
+            lon_g = 0.0
+
+        dw = smoothed_d_omega[i]
+        moment_term = moment_coeff * dw
+
+        fy_front = W_f * lat_g + moment_term
+        fy_rear = W_r * lat_g - moment_term
+
+        # Steering angle: use sensor if available, else kinematic approximation delta ≈ L * omega_z / v
+        steer_opt = parse_optional_float(records[i].get('Steering Angle'))
+        if steer_opt is not None:
+            delta_rad = math.radians(steer_opt)
+        else:
+            v = speeds_ms[i]
+            if v > 2.0:
+                delta_rad = (L * yaw_rates_rad[i]) / v
+                delta_rad = max(-0.5, min(0.5, delta_rad))  # Clamp to ~±28.6 degrees
+            else:
+                delta_rad = 0.0
+
+        sin_delta = math.sin(delta_rad)
+        fx_front = -fy_front * sin_delta
+        fx_rear = lon_g + fy_front * sin_delta
+
+        f_yf[i] = fy_front
+        f_yr[i] = fy_rear
+        f_xf[i] = fx_front
+        f_xr[i] = fx_rear
+
+    return f_yf, f_yr, f_xf, f_xr
 
 
 def process_telemetry_derivative_data(
@@ -571,6 +792,15 @@ def process_telemetry_derivative_data(
         else:
             lat_list.append(lat_val)
             lon_list.append(lon_val)
+
+    # Filter out geographic outliers far outside track limits
+    ref_lat, ref_lon, max_dist_m = get_track_coordinate_reference(track_data, lat_list, lon_list)
+    if ref_lat is not None and ref_lon is not None:
+        for i in range(len(lat_list)):
+            if not np.isnan(lat_list[i]) and not np.isnan(lon_list[i]):
+                if not is_coordinate_within_bounds(lat_list[i], lon_list[i], ref_lat, ref_lon, max_dist_m):
+                    lat_list[i] = np.nan
+                    lon_list[i] = np.nan
 
     lat_arr = np.array(lat_list)
     lon_arr = np.array(lon_list)
@@ -694,12 +924,15 @@ def process_telemetry_derivative_data(
     telemetry_rows = []
     has_quat = any('Ori Quat X' in r or 'q_x' in r or 'Ori Quat W' in r for r in records)
     has_toe = any('Toe FL' in r or 'toe_fl' in r for r in records)
-    has_raw_slip_rear = any(
-        r.get('Slip Angle Rear') is not None and str(r.get('Slip Angle Rear')).strip() != ''
-        for r in records
+
+    valid_raw_slip_count = sum(
+        1 for r in records
+        if r.get('Slip Angle Rear') is not None and str(r.get('Slip Angle Rear')).strip() != ''
     )
+    has_raw_slip_rear = (valid_raw_slip_count > len(records) * 0.5) if records else False
+
     has_gyro = any(
-        r.get('Yaw Rate') is not None and str(r.get('Yaw Rate')).strip() != ''
+        parse_optional_float(r.get('Yaw Rate')) is not None
         for r in records
     )
     can_compute_gyro_slip = (
@@ -714,7 +947,38 @@ def process_telemetry_derivative_data(
             records, course, speeds_ms, session_info.distance_to_rear_axle
         )
     else:
-        gyro_heading_arr, gyro_slip_rear_arr = np.zeros(len(records)), np.zeros(len(records))
+        gyro_heading_arr, gyro_slip_rear_arr = np.zeros(len(records)), np.full(len(records), np.nan)
+
+    # Physics-engine per-wheel forces (from KartSim) have non-zero lateral forces.
+    # In real kart telemetry (e.g. GoPro), RaceTools CSV headers often contain
+    # dummy placeholder columns with 0.00 values.
+    has_per_wheel_forces = any(
+        abs(safe_float(r.get('Lat Force FL'), 0.0)) > 1e-4
+        or abs(safe_float(r.get('Lat Force FR'), 0.0)) > 1e-4
+        for r in records
+    )
+    valid_raw_forces_count = sum(
+        1 for r in records
+        if r.get('Lat Force Front') is not None and str(r.get('Lat Force Front')).strip() != ''
+    )
+    has_raw_per_axle_forces = (valid_raw_forces_count > len(records) * 0.5) if records else False
+    has_raw_forces = has_per_wheel_forces or has_raw_per_axle_forces
+
+    can_compute_gyro_forces = (
+        not has_quat
+        and not has_raw_forces
+        and has_gyro
+    )
+
+    if can_compute_gyro_forces:
+        gyro_lat_f_arr, gyro_lat_r_arr, gyro_lon_f_arr, gyro_lon_r_arr = compute_gyro_forces(
+            records, speeds_ms, session_info.distance_to_rear_axle
+        )
+    else:
+        gyro_lat_f_arr = np.full(len(records), np.nan)
+        gyro_lat_r_arr = np.full(len(records), np.nan)
+        gyro_lon_f_arr = np.full(len(records), np.nan)
+        gyro_lon_r_arr = np.full(len(records), np.nan)
 
     sim_channels = [
         'RPS FL', 'RPS FR', 'RPS RL', 'RPS RR',
@@ -723,6 +987,7 @@ def process_telemetry_derivative_data(
         'Tyre Load FL', 'Tyre Load FR', 'Tyre Load RL', 'Tyre Load RR',
         'Lat Force FL', 'Lat Force FR', 'Lat Force RL', 'Lat Force RR',
         'Long Force FL', 'Long Force FR', 'Long Force RL', 'Long Force RR',
+        'Lat Force Front', 'Lat Force Rear', 'Long Force Front', 'Long Force Rear',
         'Slide Pct FL', 'Slide Pct FR', 'Slide Pct RL', 'Slide Pct RR'
     ]
 
@@ -778,13 +1043,16 @@ def process_telemetry_derivative_data(
             row['Steering Angle'] = f"{safe_float(r.get('Steering Angle'), 0.0):.1f}"
 
         if 'Yaw Rate' in r:
-            row['Yaw Rate'] = f"{safe_float(r.get('Yaw Rate'), 0.0):.3f}"
+            y_val = parse_optional_float(r.get('Yaw Rate'))
+            row['Yaw Rate'] = f"{y_val:.3f}" if y_val is not None else ''
 
         if 'Pitch Rate' in r:
-            row['Pitch Rate'] = f"{safe_float(r.get('Pitch Rate'), 0.0):.3f}"
+            p_val = parse_optional_float(r.get('Pitch Rate'))
+            row['Pitch Rate'] = f"{p_val:.3f}" if p_val is not None else ''
 
         if 'Roll Rate' in r:
-            row['Roll Rate'] = f"{safe_float(r.get('Roll Rate'), 0.0):.3f}"
+            r_val = parse_optional_float(r.get('Roll Rate'))
+            row['Roll Rate'] = f"{r_val:.3f}" if r_val is not None else ''
 
         # Orientation / Heading / Slip angles
         if has_quat:
@@ -818,7 +1086,10 @@ def process_telemetry_derivative_data(
         elif can_compute_gyro_slip:
             row['Kart Heading'] = f'{gyro_heading_arr[i]:.2f}'
             row['Yaw'] = f'{gyro_heading_arr[i]:.2f}'
-            row['Slip Angle Rear'] = f'{gyro_slip_rear_arr[i]:.2f}'
+            if not np.isnan(gyro_slip_rear_arr[i]):
+                row['Slip Angle Rear'] = f'{gyro_slip_rear_arr[i]:.2f}'
+            else:
+                row['Slip Angle Rear'] = ''
         else:
             if 'Kart Heading' in r:
                 row['Kart Heading'] = f"{safe_float(r.get('Kart Heading'), 0.0):.2f}"
@@ -827,8 +1098,26 @@ def process_telemetry_derivative_data(
             if 'Slip Angle Rear' in r and r.get('Slip Angle Rear') not in (None, ''):
                 row['Slip Angle Rear'] = f"{safe_float(r.get('Slip Angle Rear'), 0.0):.2f}"
 
+        # Front & Rear specific forces derived from IMU / Gyro
+        if can_compute_gyro_forces:
+            if not np.isnan(gyro_lat_f_arr[i]):
+                row['Lat Force Front'] = f'{gyro_lat_f_arr[i]:.3f}'
+                row['Lat Force Rear'] = f'{gyro_lat_r_arr[i]:.3f}'
+                row['Long Force Front'] = f'{gyro_lon_f_arr[i]:.3f}'
+                row['Long Force Rear'] = f'{gyro_lon_r_arr[i]:.3f}'
+            else:
+                row['Lat Force Front'] = ''
+                row['Lat Force Rear'] = ''
+                row['Long Force Front'] = ''
+                row['Long Force Rear'] = ''
+
         # Optional simulation physics channels
         for ch in sim_channels:
+            if (
+                ch in ('Lat Force Front', 'Lat Force Rear', 'Long Force Front', 'Long Force Rear')
+                and can_compute_gyro_forces
+            ):
+                continue
             if ch in r:
                 row[ch] = f"{safe_float(r.get(ch), 0.0):.2f}"
 
@@ -1110,7 +1399,16 @@ def stream_upload() -> Any:
                                     # Dynamically parse the kept data lines using the existing file's header
                                     if data_lines:
                                         reader_existing = csv.DictReader([existing_header_line] + data_lines)
-                                        kept_pre_existing_records = [dict(row) for row in reader_existing]
+                                        derived_cols_to_strip = {
+                                            'Lap', 'Lap Distance', 'Kart Heading', 'Yaw',
+                                            'Slip Angle Rear', 'Slip Angle Front',
+                                            'Lat Force Front', 'Lat Force Rear',
+                                            'Long Force Front', 'Long Force Rear'
+                                        }
+                                        kept_pre_existing_records = [
+                                            {k: v for k, v in row.items() if k not in derived_cols_to_strip}
+                                            for row in reader_existing
+                                        ]
 
                             all_raw_records = kept_pre_existing_records + new_records
                         else:

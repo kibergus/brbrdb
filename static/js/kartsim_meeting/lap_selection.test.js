@@ -14,9 +14,8 @@
  * limitations under the License.
  * ==============================================================================
  */
-
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds, setSort, selectTurnAndSwitchToMap, getSessionColor, updateSessionSelectorColors, renderLapList, toggleSessionDropdown, selectSessionFromDropdown, SESSION_PALETTE, getSessionOrderIndex, compareLaps, getSortedLaps } from './lap_selection.js';
+import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds, setSort, selectTurnAndSwitchToMap, getSessionColor, updateSessionSelectorColors, renderLapList, toggleSessionDropdown, selectSessionFromDropdown, SESSION_PALETTE, getSessionOrderIndex, compareLaps, getSortedLaps, selectLapsByCriteria, showSelectionMenu, addGroup, deleteGroup, toggleGroupEnabled } from './lap_selection.js';
 import { setTrajectoryColorMode } from './map.js';
 import { state } from './state.js';
 import * as plotsSync from './plots_sync.js';
@@ -120,6 +119,7 @@ describe('lap_selection.js showTab UI changes', () => {
         toggleGroupVisibility('B');
 
         expect(setMapSpy).toHaveBeenCalled();
+        expect(plotsSync.updateTelemetryPlots).toHaveBeenCalled();
     });
 });
 
@@ -916,6 +916,245 @@ describe('lap_selection.js showRightPanelTab and Report Mode', () => {
                 'sess_practice-1'  // 55.000
             ]);
         });
+    });
+
+    describe('selectLapsByCriteria and showSelectionMenu', () => {
+        beforeEach(() => {
+            state.allSessionsData = [
+                {
+                    session_id: 'sess_practice',
+                    session_name: 'Practice Session',
+                    session_start_datetime: '2026-09-12 11:18:00',
+                    laps: [
+                        { lap_num: 1, lap_time: '0:55.000', is_valid: true },
+                        { lap_num: 2, lap_time: '0:52.000', is_valid: true },
+                        { lap_num: 3, lap_time: '0:53.000', is_valid: true }
+                    ]
+                },
+                {
+                    session_id: 'sess_race',
+                    session_name: 'Race Session',
+                    session_start_datetime: '2026-09-12 14:00:00',
+                    laps: [
+                        { lap_num: 1, lap_time: '0:50.000', is_valid: true },
+                        { lap_num: 2, lap_time: '0:51.000', is_valid: true },
+                        { lap_num: 3, lap_time: '0:54.000', is_valid: true }
+                    ]
+                }
+            ];
+            state.groupASelection = new Set();
+            state.groupBSelection = new Set();
+            state.sortMode = 'time';
+            state.lapPolylines = {
+                'sess_practice-1': [],
+                'sess_practice-2': [],
+                'sess_practice-3': [],
+                'sess_race-1': [],
+                'sess_race-2': [],
+                'sess_race-3': []
+            };
+            state.lapDataLookup = {};
+            state.allSessionsData.forEach(s => {
+                s.laps.forEach(l => {
+                    const id = `${s.session_id}-${l.lap_num}`;
+                    state.lapDataLookup[id] = { ...l, sessionId: s.session_id, lapId: id };
+                });
+            });
+        });
+
+        it('selects top laps across all sessions when targetSessionId is null', () => {
+            selectLapsByCriteria('A', 'count', 3, null);
+            // Fastest overall: sess_race-1 (50.0), sess_race-2 (51.0), sess_practice-2 (52.0)
+            expect(Array.from(state.groupASelection)).toEqual([
+                'sess_race-1',
+                'sess_race-2',
+                'sess_practice-2'
+            ]);
+        });
+
+        it('selects fast laps from one session as group A and from another session as group B', () => {
+            // Select top 2 of sess_practice for Group A
+            selectLapsByCriteria('A', 'count', 2, 'sess_practice');
+            // Fastest in practice: sess_practice-2 (52.0), sess_practice-3 (53.0)
+            expect(Array.from(state.groupASelection)).toEqual([
+                'sess_practice-2',
+                'sess_practice-3'
+            ]);
+
+            // Select top 2 of sess_race for Group B
+            selectLapsByCriteria('B', 'count', 2, 'sess_race');
+            // Fastest in race: sess_race-1 (50.0), sess_race-2 (51.0)
+            expect(Array.from(state.groupBSelection)).toEqual([
+                'sess_race-1',
+                'sess_race-2'
+            ]);
+
+            // Ensure group A was untouched when group B was selected
+            expect(Array.from(state.groupASelection)).toEqual([
+                'sess_practice-2',
+                'sess_practice-3'
+            ]);
+        });
+
+        it('supports additive selection with additive=true', () => {
+            selectLapsByCriteria('A', 'count', 1, 'sess_practice');
+            expect(Array.from(state.groupASelection)).toEqual(['sess_practice-2']);
+
+            // Add top 1 from race
+            selectLapsByCriteria('A', 'count', 1, 'sess_race', true);
+            expect(Array.from(state.groupASelection).sort()).toEqual([
+                'sess_practice-2',
+                'sess_race-1'
+            ].sort());
+        });
+
+        it('clears only targeted session laps when type=clear with targetSessionId', () => {
+            state.groupASelection = new Set(['sess_practice-1', 'sess_practice-2', 'sess_race-1']);
+            selectLapsByCriteria('A', 'clear', 0, 'sess_practice');
+
+            // Only sess_race-1 remains
+            expect(Array.from(state.groupASelection)).toEqual(['sess_race-1']);
+        });
+
+        it('renders multi-session sections in showSelectionMenu when multiple sessions exist', () => {
+            let createdMenu = null;
+            const makeMockElement = (tag) => {
+                const children = [];
+                let _innerHTML = '';
+                let _textContent = '';
+                const el = {
+                    tagName: tag.toUpperCase(),
+                    id: '',
+                    className: '',
+                    classList: {
+                        add: vi.fn(c => { el.className += ' ' + c; }),
+                        contains: vi.fn(c => el.className.includes(c))
+                    },
+                    get innerHTML() {
+                        return _innerHTML || children.map(c => c.innerHTML).join('');
+                    },
+                    set innerHTML(val) {
+                        _innerHTML = val;
+                    },
+                    get textContent() {
+                        return _textContent || children.map(c => c.textContent || c.innerHTML).join(' ');
+                    },
+                    set textContent(val) {
+                        _textContent = val;
+                    },
+                    style: {},
+                    appendChild: vi.fn(child => { children.push(child); }),
+                    querySelectorAll: vi.fn(selector => {
+                        const results = [];
+                        const walk = (node) => {
+                            if (node !== el) {
+                                const classes = (node.className || '').split(' ');
+                                if (selector === '.menu-section' && classes.includes('menu-section')) results.push(node);
+                                if (selector === '.menu-btn-row button' && node.tagName === 'BUTTON') results.push(node);
+                            }
+                            (node._children || []).forEach(walk);
+                        };
+                        walk(el);
+                        return results;
+                    }),
+                    remove: vi.fn(() => { if (createdMenu === el) createdMenu = null; }),
+                    _children: children
+                };
+                return el;
+            };
+
+            const mockBody = {
+                appendChild: vi.fn(el => { createdMenu = el; })
+            };
+
+            vi.stubGlobal('document', {
+                body: mockBody,
+                getElementById: vi.fn(id => (createdMenu && createdMenu.id === id) ? createdMenu : null),
+                createElement: vi.fn(tag => makeMockElement(tag)),
+                querySelectorAll: vi.fn(() => []),
+                addEventListener: vi.fn(),
+                removeEventListener: vi.fn()
+            });
+
+            const mockEvent = {
+                target: {
+                    getBoundingClientRect: () => ({ left: 100, bottom: 50, top: 40, right: 120 })
+                },
+                preventDefault: vi.fn()
+            };
+
+            showSelectionMenu(mockEvent, 'A');
+
+            expect(createdMenu).toBeTruthy();
+            expect(createdMenu.classList.contains('multi-session')).toBe(true);
+
+            // Check section headers
+            const sections = createdMenu.querySelectorAll('.menu-section');
+            expect(sections.length).toBe(3); // All Sessions + 2 sessions
+
+            expect(sections[0].innerHTML).toContain('All Sessions');
+            expect(sections[1].innerHTML).toContain('Practice Session');
+            expect(sections[2].innerHTML).toContain('Race Session');
+
+            // Check buttons on Practice session section
+            const practiceButtons = sections[1].querySelectorAll('.menu-btn-row button');
+            const buttonLabels = practiceButtons.map(b => b.textContent);
+            expect(buttonLabels).toEqual(['Top 1', 'Top 3', '50%', '75%', 'All', 'Clear']);
+
+            // Click 50% on Practice session button (3 laps -> ceil(3 * 0.5) = 2 laps)
+            const pct50Btn = practiceButtons.find(b => b.textContent === '50%');
+            expect(pct50Btn).toBeTruthy();
+
+            pct50Btn.onclick({ shiftKey: false });
+            // Fastest 2 in practice: sess_practice-2 (52.0), sess_practice-3 (53.0)
+            expect(Array.from(state.groupASelection)).toEqual(['sess_practice-2', 'sess_practice-3']);
+            expect(createdMenu).toBeNull(); // Menu closed
+        });
+    });
+});
+
+describe('group management: addGroup, deleteGroup, toggleGroupEnabled', () => {
+    beforeEach(() => {
+        state.groups = ['A', 'B'];
+        state.groupSelections = { A: new Set(), B: new Set() };
+        state.groupVisibilityMap = { A: true, B: false };
+        state.groupVisibilityStats = { A: true, B: true };
+        state.groupEnabled = { A: true, B: true };
+        state.lapPolylines = {};
+
+        vi.stubGlobal('document', {
+            getElementById: vi.fn().mockReturnValue(null),
+            querySelector: vi.fn().mockReturnValue(null),
+            querySelectorAll: vi.fn().mockReturnValue([])
+        });
+    });
+
+    it('adds group C and initializes its state', () => {
+        addGroup();
+        expect(state.groups).toContain('C');
+        expect(state.groupSelections['C']).toBeDefined();
+        expect(state.groupEnabled['C']).toBe(true);
+    });
+
+    it('cannot delete group A', () => {
+        deleteGroup('A');
+        expect(state.groups).toContain('A');
+    });
+
+    it('deletes group B and cleans up its state', () => {
+        deleteGroup('B');
+        expect(state.groups).not.toContain('B');
+        expect(state.groupSelections['B']).toBeUndefined();
+    });
+
+    it('toggles group enabled status', () => {
+        toggleGroupEnabled('B', false);
+        expect(state.groupEnabled['B']).toBe(false);
+        expect(state.getActiveGroups()).not.toContain('B');
+
+        toggleGroupEnabled('B', true);
+        expect(state.groupEnabled['B']).toBe(true);
+        expect(state.getActiveGroups()).toContain('B');
     });
 });
 
