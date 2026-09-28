@@ -82,3 +82,21 @@ def test_training_data_api_success() -> None:
             assert weekly[0]['week'] == '2026-06-15'
             assert weekly[0]['total'] == 5100.0
             assert weekly[0]['drivers'] == {'Hero A': 2700.0, 'Hero B': 2400.0}
+
+
+def test_training_data_api_all_classes() -> None:
+    app = Flask(__name__)
+    app.register_blueprint(plots_blueprint)
+    client = app.test_client()
+
+    df = pd.DataFrame([
+        {'Date': '2026-06-18', 'Name': 'Hero A', 'LapTimeSeconds': 1000.0},
+    ])
+
+    with patch('plot_handlers.get_hero_names', return_value=['Hero A']):
+        with patch('plot_handlers.db.load', return_value=df) as mock_load:
+            response = client.get('/api/training_data/kartsim?year=2026')
+            assert response.status_code == 200
+            data: Any = response.get_json()
+            assert len(data['daily']) == 1
+            mock_load.assert_called_once_with(leagues='kartsim', classes=None, year='2026', driver_names=('Hero A',))

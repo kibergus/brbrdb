@@ -639,6 +639,96 @@ def test_kartsim_league_view_no_hero() -> None:
         assert 'Driver Selection Required' in html
 
 
+def test_kartsim_league_view_shows_cards_directly() -> None:
+    client = app.app.test_client()
+    mock_df = pd.DataFrame([{
+        'League': 'kartsim',
+        'Class': 'iame_waterswift_restricted_cadet_uk',
+        'Date': '2026-08-29',
+        'TrackName': 'Clay Pigeon',
+        'Name': 'Test Driver',
+        'SessionID': '14_59_practice'
+    }, {
+        'League': 'kartsim',
+        'Class': 'x30_junior',
+        'Date': '2026-08-30',
+        'TrackName': 'Whilton Mill',
+        'Name': 'Test Driver',
+        'SessionID': '15_00_practice'
+    }])
+    mock_session = MagicMock()
+    mock_session.track_conditions = 'Dry'
+
+    mock_meetings = [
+        ('iame_waterswift_restricted_cadet_uk', '2026-08-29', 'Clay Pigeon'),
+        ('x30_junior', '2026-08-30', 'Whilton Mill'),
+    ]
+    with patch('plot_handlers.get_hero_names', return_value=['Test Driver']), \
+         patch('app.db.load', return_value=mock_df), \
+         patch('app.db.list_meetings', return_value=mock_meetings), \
+         patch('app.db.find_sessions', return_value=[mock_session]):
+        resp = client.get('/league/kartsim')
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+
+        # Tab selector
+        assert 'By Date' in html
+        assert 'By Track' in html
+        assert 'Activity' in html
+
+        # Class filter dropdown
+        assert 'id="class-filter"' in html
+        assert 'value="all"' in html
+        assert 'IAME Waterswift Restricted Cadet UK' in html
+        assert 'X30 Junior' in html
+
+        # Class written on the card
+        assert 'Clay Pigeon' in html
+        assert 'Whilton Mill' in html
+        assert 'IAME Waterswift Restricted Cadet UK' in html
+        assert 'X30 Junior' in html
+
+
+def test_kartsim_league_view_by_track_groups_by_class() -> None:
+    client = app.app.test_client()
+    mock_df = pd.DataFrame([{
+        'League': 'kartsim',
+        'Class': 'iame_waterswift_restricted_cadet_uk',
+        'Date': '2026-08-29',
+        'TrackName': 'Clay Pigeon',
+        'Name': 'Test Driver',
+        'SessionID': '14_59_practice'
+    }, {
+        'League': 'kartsim',
+        'Class': 'x30_junior',
+        'Date': '2026-08-30',
+        'TrackName': 'Whilton Mill',
+        'Name': 'Test Driver',
+        'SessionID': '15_00_practice'
+    }])
+    mock_session = MagicMock()
+    mock_session.track_conditions = 'Dry'
+
+    mock_meetings = [
+        ('iame_waterswift_restricted_cadet_uk', '2026-08-29', 'Clay Pigeon'),
+        ('x30_junior', '2026-08-30', 'Whilton Mill'),
+    ]
+    with patch('plot_handlers.get_hero_names', return_value=['Test Driver']), \
+         patch('app.db.load', return_value=mock_df), \
+         patch('app.db.list_meetings', return_value=mock_meetings), \
+         patch('app.db.find_sessions', return_value=[mock_session]):
+        resp = client.get('/league/kartsim?view=by_track')
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+
+        # By track should group cards by class
+        assert 'kartsim-track-class-group' in html
+        assert 'kartsim-track-class-title' in html
+        assert 'Clay Pigeon' in html
+        assert 'Whilton Mill' in html
+        assert '1 session' in html
+
+
 def test_kartsim_track_sessions_view_no_hero() -> None:
     client = app.app.test_client()
     with patch('plot_handlers.get_hero_names', return_value=[]):

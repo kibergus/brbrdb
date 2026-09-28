@@ -559,8 +559,7 @@ def get_gallery_url() -> str:
 
 @app.context_processor
 def utility_processor() -> dict[str, Any]:
-    hero_pilot = request.cookies.get('hero_pilot', '')
-    hero_pilots = [p.strip().strip('\"\'') for p in hero_pilot.split(',') if p.strip()]
+    hero_pilots = plot_handlers.get_hero_names()
     return dict(
         get_league_name=aliases.get_league_name,
         get_league_color=aliases.get_league_color,
@@ -740,19 +739,133 @@ def last_meeting_redirect(league: str) -> werkzeug_wrappers.Response | str:
     ))
 
 
+def render_kartsim_league(league: str, class_name: str | None = None) -> str:
+    hero_names = plot_handlers.get_hero_names()
+    if not hero_names:
+        return render_template('suggest_hero.html')
+
+    class_param = request.args.get('class') or request.args.get('class_name') or class_name
+    if class_param in ('', 'all', 'All', 'None', None):
+        selected_class = None
+    else:
+        selected_class = class_param
+
+    # We filter years by checking which years have sessions for the hero driver
+    classes_to_load = selected_class if selected_class else None
+    df_hero_all = db.load(leagues=league, classes=classes_to_load, driver_names=tuple(hero_names))
+    if df_hero_all.empty:
+        return render_template('suggest_hero.html')
+
+    years = sorted(set(row['Date'].split('-')[0] for _, row in df_hero_all.iterrows()), reverse=True)
+
+    if selected_class:
+        df_hero_full = db.load(leagues=league, driver_names=tuple(hero_names))
+        available_classes = sorted(list(set(row['Class'] for _, row in df_hero_full.iterrows() if row.get('Class'))))
+    else:
+        available_classes = sorted(list(set(row['Class'] for _, row in df_hero_all.iterrows() if row.get('Class'))))
+
+    if not available_classes:
+        all_kartsim_meetings = db.list_meetings(league, driver_names=hero_names)
+        available_classes = sorted(list(set(m[0] for m in all_kartsim_meetings if m[0])))
+
+    selected_year = request.args.get('year')
+    if not selected_year and years:
+        selected_year = years[0]
+
+    view_mode = request.args.get('view', 'by_date')
+
+    # Load hero sessions for selected year
+    df_hero_year = db.load(leagues=league, year=selected_year, driver_names=tuple(hero_names))
+    if not df_hero_year.empty:
+        hero_meeting_keys = set(
+            (row.get('Class'), row.get('Date'), row.get('TrackName'))
+            for _, row in df_hero_year.iterrows() if row.get('Class')
+        )
+        hero_date_track_keys = set((row.get('Date'), row.get('TrackName')) for _, row in df_hero_year.iterrows())
+    else:
+        hero_meeting_keys = set()
+        hero_date_track_keys = set()
+
+    all_year_meetings = db.list_meetings(league, year=selected_year, driver_names=hero_names)
+    if hero_meeting_keys or hero_date_track_keys:
+        meetings = [
+            m for m in all_year_meetings
+            if (m[0], m[1], m[2]) in hero_meeting_keys or (m[1], m[2]) in hero_date_track_keys
+        ]
+    else:
+        meetings = all_year_meetings
+
+    meeting_conditions: dict[tuple[str, str, str], str] = {}
+    for c, d, t in meetings:
+        sessions = db.find_sessions(leagues=league, classes=c, date=d, track=t)
+        conds = set()
+        for s in sessions:
+            if getattr(s, 'track_conditions', None):
+                conds.add(s.track_conditions)
+        cond_str = ','.join(sorted(conds)) if conds else 'Unknown'
+        meeting_conditions[(d, t, c)] = cond_str
+
+    filtered_meetings = [m for m in meetings if m[0] == selected_class] if selected_class else meetings
+
+    kartsim_meetings = sorted(
+        [(m[1], m[2], m[0]) for m in filtered_meetings],
+        key=lambda x: (x[0], x[1], x[2]),
+        reverse=True
+    )
+
+    track_classes = [selected_class] if selected_class else available_classes
+    kartsim_track_groups: dict[str, list[tuple[str, str, int]]] = {}
+    for c in track_classes:
+        c_meetings = [m for m in meetings if m[0] == c]
+        if not c_meetings:
+            continue
+        track_to_dates: dict[str, set[str]] = {}
+        track_to_conds: dict[str, set[str]] = {}
+        for _, d, t in c_meetings:
+            if t not in track_to_dates:
+                track_to_dates[t] = set()
+                track_to_conds[t] = set()
+            track_to_dates[t].add(d)
+            cond_str = meeting_conditions.get((d, t, c), '')
+            if cond_str and cond_str != 'Unknown':
+                for cond in cond_str.split(','):
+                    track_to_conds[t].add(cond)
+        sorted_tracks = []
+        for t in sorted(track_to_dates.keys()):
+            c_list = sorted(track_to_conds[t])
+            cond_str = ','.join(c_list) if c_list else 'Unknown'
+            sorted_tracks.append((t, cond_str, len(track_to_dates[t])))
+        if sorted_tracks:
+            kartsim_track_groups[c] = sorted_tracks
+
+    return render_template(
+        'league.html',
+        league=league,
+        class_name=selected_class or (available_classes[0] if available_classes else 'cadet'),
+        selected_class=selected_class,
+        available_classes=available_classes,
+        years=years,
+        selected_year=selected_year,
+        view_mode=view_mode,
+        is_kartsim=True,
+        HERO_NAMES=hero_names,
+        kartsim_meetings=kartsim_meetings,
+        kartsim_track_groups=kartsim_track_groups,
+        meeting_conditions=meeting_conditions,
+        meeting_keys=[],
+        meetings={},
+        track_groups={},
+        sorted_track_keys=[],
+        championship=None
+    )
+
+
 @app.route('/league/<league>')
 def league_view(league: str) -> str:
     if league == 'kartsim':
-        hero_names = plot_handlers.get_hero_names()
-        if not hero_names:
-            return render_template('suggest_hero.html')
-        meetings = db.list_meetings(league, driver_names=hero_names)
-        if not meetings:
-            return render_template('suggest_hero.html')
-    else:
-        meetings = db.list_meetings(league)
+        return render_kartsim_league(league)
 
-    # meetings is a list of (class_name, date, track_name)
+    meetings = db.list_meetings(league)
     classes = sorted(list(set(m[0] for m in meetings)))
     return render_template('league_classes.html', league=league, classes=classes)
 
@@ -760,16 +873,9 @@ def league_view(league: str) -> str:
 @app.route('/league/<league>/<class_name>')
 def class_view(league: str, class_name: str) -> str:
     if league == 'kartsim':
-        hero_names = plot_handlers.get_hero_names()
-        if not hero_names:
-            return render_template('suggest_hero.html')
-        # We filter years by checking which years have sessions for the hero driver
-        df_hero_all = db.load(leagues=league, classes=class_name, driver_names=tuple(hero_names))
-        if df_hero_all.empty:
-            return render_template('suggest_hero.html')
-        years = sorted(set(row['Date'].split('-')[0] for _, row in df_hero_all.iterrows()), reverse=True)
-    else:
-        years = db.list_years(league, class_name)
+        return render_kartsim_league(league, class_name=class_name)
+
+    years = db.list_years(league, class_name)
 
     # Get selected year from query param, default to latest year
     selected_year = request.args.get('year')
@@ -778,12 +884,6 @@ def class_view(league: str, class_name: str) -> str:
 
     # Use RaceDB's year filter to get meetings for selected year
     class_meetings = db.list_meetings(league, year=selected_year, class_name=class_name)
-
-    if league == 'kartsim':
-        df_hero = db.load(leagues=league, classes=class_name, year=selected_year, driver_names=tuple(hero_names))
-        # Use meeting keys (date, track) to filter the meeting list
-        hero_meeting_keys = set((row['Date'], row['TrackName']) for _, row in df_hero.iterrows())
-        class_meetings = [m for m in class_meetings if (m[1], m[2]) in hero_meeting_keys]
 
     # View mode: 'by_date' (default) or 'by_track' or 'activity'
     is_kartsim = (league == 'kartsim')

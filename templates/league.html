@@ -1,44 +1,78 @@
 {% extends "layout.html" %}
 
-{% block title %}{{ get_league_name(league) }} {{ get_class_info(class_name).name }} - BrBrDb{% endblock %}
+{% block title %}{% if is_kartsim %}{{ get_league_name(league) }}{% if selected_class and selected_class != 'all' %} {{ get_class_info(selected_class).name }}{% endif %} - BrBrDb{% else %}{{ get_league_name(league) }} {{ get_class_info(class_name).name }} - BrBrDb{% endif %}{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/league.css') }}">
+{% endblock %}
 
 {% block container_class %}{% endblock %}
 
 {% block breadcrumb %}
 <a href="{{ url_for('league_list') }}">Leagues</a> /
+{% if is_kartsim %}
+    {% if selected_class and selected_class != 'all' %}
+    <a href="{{ url_for('league_view', league=league) }}">{{ get_league_name(league) }}</a> /
+    {{ get_class_info(selected_class).name }}
+    {% else %}
+    {{ get_league_name(league) }}
+    {% endif %}
+{% else %}
 <a href="{{ url_for('league_view', league=league) }}">{{ get_league_name(league) }}</a> /
 {{get_class_info(class_name).name}}
+{% endif %}
 {% endblock %}
 
 {% block content %}
 <div class="container">
+{% set class_param = '&class=' ~ selected_class if (selected_class and selected_class != 'all') else '' %}
+
 {% if years|length > 0 %}
 <div class="pagination">
     {% for year in years %}
+    {% if is_kartsim %}
+    <a href="{{ url_for('league_view', league=league, year=year, view=view_mode) }}{{ class_param }}"
+        class="pagination-item {% if year == selected_year %}active{% endif %}">
+        {{ year }}
+    </a>
+    {% else %}
     <a href="{{ url_for('class_view', league=league, class_name=class_name, year=year, view=view_mode) }}"
         class="pagination-item {% if year == selected_year %}active{% endif %}">
         {{ year }}
     </a>
+    {% endif %}
     {% endfor %}
 </div>
 {% endif %}
 
 {% if is_kartsim %}
-<div class="pagination" style="margin-bottom: 1.5rem;">
-    <a href="{{ url_for('class_view', league=league, class_name=class_name, year=selected_year, view='by_date') }}"
-        class="pagination-item {% if view_mode == 'by_date' %}active{% endif %}">
-        By Date
-    </a>
-    <a href="{{ url_for('class_view', league=league, class_name=class_name, year=selected_year, view='by_track') }}"
-        class="pagination-item {% if view_mode == 'by_track' %}active{% endif %}">
-        By Track
-    </a>
-    {% if HERO_NAMES %}
-    <a href="{{ url_for('class_view', league=league, class_name=class_name, year=selected_year, view='activity') }}"
-        class="pagination-item {% if view_mode == 'activity' %}active{% endif %}">
-        Activity
-    </a>
-    {% endif %}
+<div class="tabs-and-filter-bar">
+    <div class="pagination" style="margin-bottom: 0;">
+        <a href="{{ url_for('league_view', league=league, year=selected_year, view='by_date') }}{{ class_param }}"
+            class="pagination-item {% if view_mode == 'by_date' %}active{% endif %}">
+            By Date
+        </a>
+        <a href="{{ url_for('league_view', league=league, year=selected_year, view='by_track') }}{{ class_param }}"
+            class="pagination-item {% if view_mode == 'by_track' %}active{% endif %}">
+            By Track
+        </a>
+        {% if HERO_NAMES %}
+        <a href="{{ url_for('league_view', league=league, year=selected_year, view='activity') }}{{ class_param }}"
+            class="pagination-item {% if view_mode == 'activity' %}active{% endif %}">
+            Activity
+        </a>
+        {% endif %}
+    </div>
+
+    <div class="class-filter-container">
+        <label for="class-filter" class="class-filter-label">Class:</label>
+        <select id="class-filter" class="track-select" onchange="onClassFilterChange(this.value)">
+            <option value="all" {% if not selected_class or selected_class == 'all' %}selected{% endif %}>All</option>
+            {% for c in available_classes %}
+            <option value="{{ c }}" {% if selected_class == c %}selected{% endif %}>{{ get_class_info(c).name }}</option>
+            {% endfor %}
+        </select>
+    </div>
 </div>
 {% endif %}
 
@@ -65,10 +99,14 @@
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const league = "{{ league }}";
-    const className = "{{ class_name }}";
     const year = "{{ selected_year }}";
     
-    fetch("{{ url_for('plots.training_data_api', league=league, class_name=class_name) }}?year=" + year)
+    let apiUrl = "{{ url_for('plots.training_data_api', league=league) }}?year=" + year;
+    {% if selected_class and selected_class != 'all' %}
+    apiUrl = "{{ url_for('plots.training_data_api', league=league, class_name=selected_class) }}?year=" + year;
+    {% endif %}
+    
+    fetch(apiUrl)
         .then(response => response.json())
         .then(data => {
             // Determine active drivers across both daily and weekly datasets
@@ -261,6 +299,40 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 {% if view_mode == 'by_track' %}
+{% if is_kartsim %}
+    {% for c_name, track_list in kartsim_track_groups.items() %}
+    <div class="kartsim-track-class-group" data-class="{{ c_name }}">
+        <h2 class="kartsim-track-class-title">
+            {{ get_class_info(c_name).name }}
+        </h2>
+        <div class="grid">
+            {% for track, track_conditions, num_sessions in track_list %}
+            <div class="card" style="position: relative;">
+                <a href="{{ url_for('track_sessions_view', league=league, class_name=c_name, track=track, year=selected_year) }}"
+                    class="stretched-link" style="text-decoration: none;">
+                    <h3 style="color: var(--accent); margin-bottom: 0.5rem;">{{ track }}</h3>
+                </a>
+                <div class="d-flex flex-wrap gap-2" style="position: relative; z-index: 2;">
+                    {% set conditions_list = track_conditions.split(',') %}
+                    {% for cond in conditions_list %}
+                    <a href="{{ url_for('track_sessions_view', league=league, class_name=c_name, track=track, track_conditions=cond, year=selected_year) }}"
+                        class="badge badge-blue" style="text-decoration: none;">{{ cond }}</a>
+                    {% endfor %}
+                </div>
+                <p style="color: var(--text-secondary); font-size: 0.875rem; margin-top: 0.5rem; margin-bottom: 0;">
+                    {{ num_sessions }} session{{ 's' if num_sessions != 1 else '' }}
+                </p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+    {% if kartsim_track_groups|length == 0 %}
+    <div class="card" style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+        <p style="margin: 0;">No tracks found for this selection.</p>
+    </div>
+    {% endif %}
+{% else %}
 <div class="grid">
     {% for track, track_conditions in sorted_track_keys %}
     <div class="card" style="position: relative;">
@@ -281,46 +353,83 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
     {% endfor %}
 </div>
+{% endif %}
 {% elif view_mode == 'activity' %}
     {# Handled above #}
+{% else %}
+{% if is_kartsim %}
+<div class="grid">
+    {% for date, track, c_name in kartsim_meetings %}
+    <div class="card" style="position: relative;" data-class="{{ c_name }}">
+        <a href="{{ url_for('location.telemetry_view', league=league, class_name=c_name, date=date, track=track) }}"
+            class="stretched-link" style="text-decoration: none;">
+            <h3 style="color: var(--accent); margin-bottom: 0.5rem;">
+                {{ date }} <span style="color: var(--text-primary); font-weight: 600;">{{ track }}</span>
+            </h3>
+        </a>
+        <p class="{{ get_class_info(c_name).class_type or '' }}" style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0; margin-bottom: 0.75rem;">
+            {{ get_class_info(c_name).name }}
+        </p>
+        {% set cond_str = meeting_conditions.get((date, track, c_name), 'Unknown') %}
+        <div class="d-flex flex-wrap gap-2" style="position: relative; z-index: 2;">
+            {% set conditions_list = cond_str.split(',') %}
+            {% for cond in conditions_list %}
+            <a href="{{ url_for('location.telemetry_view', league=league, class_name=c_name, date=date, track=track, track_conditions=cond) }}"
+                class="badge badge-blue" style="text-decoration: none;">{{ cond }}</a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% if kartsim_meetings|length == 0 %}
+<div class="card" style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+    <p style="margin: 0;">No sessions found for this selection.</p>
+</div>
+{% endif %}
 {% else %}
 <div class="grid">
     {% for date, track in meeting_keys %}
     <div class="card" style="position: relative;">
-        {% if league == 'kartsim' %}
-        <a href="{{ url_for('location.telemetry_view', league=league, class_name=class_name, date=date, track=track) }}"
-            class="stretched-link" style="text-decoration: none;">
-        {% else %}
         <a href="{{ url_for('meeting_view', league=league, class_name=class_name, date=date, track=track) }}"
             class="stretched-link" style="text-decoration: none;">
-        {% endif %}
-            <h3 style="color: var(--accent); margin-bottom: 0.5rem;">{{ date }}</h3>
+            <h3 style="color: var(--accent); margin-bottom: 0.5rem;">
+                {{ date }} <span style="color: var(--text-primary); font-weight: 600;">{{ track }}</span>
+            </h3>
         </a>
-        <p style="font-weight:600; font-size: 1.125rem; margin-top: 0; margin-bottom: 0.5rem;">{{ track }}</p>
         {% set cond_str = meeting_conditions.get((date, track), 'Unknown') %}
         <div class="d-flex flex-wrap gap-2" style="position: relative; z-index: 2;">
             {% set conditions_list = cond_str.split(',') %}
             {% for cond in conditions_list %}
-            {% if league == 'kartsim' %}
-            <a href="{{ url_for('location.telemetry_view', league=league, class_name=class_name, date=date, track=track, track_conditions=cond) }}"
-                class="badge badge-blue" style="text-decoration: none;">{{ cond }}</a>
-            {% else %}
             <a href="{{ url_for('track_sessions_view', league=league, class_name=class_name, track=track, track_conditions=cond, year=selected_year) }}"
                 class="badge badge-blue" style="text-decoration: none;">{{ cond }}</a>
-            {% endif %}
             {% endfor %}
         </div>
     </div>
     {% endfor %}
 </div>
 {% endif %}
+{% endif %}
 
 </div>
+
+{% if is_kartsim %}
+<script>
+function onClassFilterChange(classVal) {
+    const url = new URL(window.location.href);
+    url.pathname = "{{ url_for('league_view', league=league) }}";
+    if (classVal && classVal !== 'all') {
+        url.searchParams.set('class', classVal);
+    } else {
+        url.searchParams.delete('class');
+    }
+    url.searchParams.delete('class_name');
+    window.location.href = url.toString();
+}
+</script>
+{% endif %}
+
 {% if championship %}
 <div class="container-fluid">
-{% block head %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/league.css') }}">
-{% endblock %}
 
 <div class="card" style="margin-top: 3rem; margin-bottom: 2rem; border-top: 4px solid var(--accent); overflow: hidden;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">

@@ -531,8 +531,9 @@ def driver_percentile_plot(name: str) -> Response:
     return make_plot_response(png_bytes)
 
 
+@plots_blueprint.route('/api/training_data/<league>')
 @plots_blueprint.route('/api/training_data/<league>/<class_name>')
-def training_data_api(league: str, class_name: str) -> Response | tuple[Response, int]:
+def training_data_api(league: str, class_name: str | None = None) -> Response | tuple[Response, int]:
     """Return training time data as JSON for hero drivers."""
     acl = auth.get_current_acl()
     if not auth.can_see_league(acl, league):
@@ -542,7 +543,8 @@ def training_data_api(league: str, class_name: str) -> Response | tuple[Response
     if not hero_names:
         return jsonify({'error': 'No hero drivers selected'}), 400
 
-    df = db.load(leagues=league, classes=class_name, year=selected_year, driver_names=hero_names)
+    classes_param = None if (not class_name or class_name.lower() == 'all') else class_name
+    df = db.load(leagues=league, classes=classes_param, year=selected_year, driver_names=hero_names)
     if df.empty:
         return jsonify({'daily': [], 'weekly': []})
 
