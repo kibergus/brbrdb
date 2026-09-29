@@ -632,6 +632,7 @@ let isFetchingTrackPoints = false;
 export function loadTrackPoints(overrideSessionId) {
     if (isFetchingTrackPoints) return Promise.resolve();
     isFetchingTrackPoints = true;
+    state.isLoadingTelemetry = true;
 
     clearLapPolylines();
 
@@ -639,6 +640,13 @@ export function loadTrackPoints(overrideSessionId) {
     if (lapList) {
         lapList.innerHTML = '<div style="padding: 1rem; text-align: center; opacity: 0.5;">Loading laps...</div>';
     }
+
+    const statsLoading = document.getElementById('stats-loading');
+    const statsNoData = document.getElementById('stats-no-data');
+    const statsContainer = document.getElementById('stats-plots-container');
+    if (statsLoading) statsLoading.style.display = 'flex';
+    if (statsNoData) statsNoData.style.display = 'none';
+    if (statsContainer) statsContainer.style.display = 'none';
 
     const urlParams = new URLSearchParams(window.location.search);
     const sid = overrideSessionId || state.selectedSessionId || urlParams.get('session_id') || (window.KART_CONFIG && window.KART_CONFIG.sessionId);
@@ -872,6 +880,7 @@ export function loadTrackPoints(overrideSessionId) {
             }
             state.mapInitialized = true;
             isFetchingTrackPoints = false;
+            state.isLoadingTelemetry = false;
 
             import('./lap_selection.js').then(ui => {
                 if (ui.renderGroupVisibilityControls) ui.renderGroupVisibilityControls();
@@ -914,8 +923,10 @@ export function loadTrackPoints(overrideSessionId) {
         })
         .catch(err => {
             isFetchingTrackPoints = false;
+            state.isLoadingTelemetry = false;
             console.error('Error loading track points:', err);
             if (lapList) lapList.innerHTML = '<div style="padding: 1rem; color: var(--warning);">Error loading telemetry</div>';
+            import('./stats_plots.js').then(stats => stats.renderStatsPlots());
         });
 }
 

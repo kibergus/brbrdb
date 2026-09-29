@@ -91,6 +91,45 @@ export function triggerPlotsResize() {
     }
 }
 
+export function toggleMobileSidebar(open) {
+    if (typeof document === 'undefined') return;
+    const shouldOpen = open !== undefined ? Boolean(open) : !document.body.classList.contains('mobile-sidebar-open');
+    if (shouldOpen) {
+        document.body.classList.add('mobile-sidebar-open');
+    } else {
+        document.body.classList.remove('mobile-sidebar-open');
+        setTimeout(() => {
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new Event('resize'));
+                if (state.map && window.google && window.google.maps) {
+                    google.maps.event.trigger(state.map, 'resize');
+                }
+            }
+        }, 50);
+    }
+}
+
+export function toggleMobileRightPanel() {
+    if (typeof document === 'undefined') return;
+    const isOpen = document.body.classList.toggle('mobile-panel-open');
+    if (isOpen) {
+        // Ensure the right panel content is rendered
+        showRightPanelTab(state.activeRightTab || 'cornering');
+        // Show the side panel element (CSS handles the overlay positioning)
+        const sidePanel = document.querySelector('.map-side-panel');
+        if (sidePanel) sidePanel.style.display = 'flex';
+    } else {
+        const sidePanel = document.querySelector('.map-side-panel');
+        if (sidePanel) sidePanel.style.display = 'none';
+        // Re-trigger map resize now the panel is gone
+        setTimeout(() => {
+            if (state.map && window.google && window.google.maps) {
+                google.maps.event.trigger(state.map, 'resize');
+            }
+        }, 50);
+    }
+}
+
 export function toggleSidePanel() {
     const sidePanel = document.querySelector('.map-side-panel');
     if (!sidePanel) return;
@@ -574,7 +613,14 @@ export function showTab(tabId) {
         if (isStatsOrMap) {
             state.activeTab = tabId;
 
-            // Automatically hide/show the right sidebar (.map-side-panel)
+            const isTouchDevice = navigator.maxTouchPoints > 0;
+
+            // On mobile, auto-close the left sidebar so user lands directly on the chosen tab.
+            if (isTouchDevice) {
+                toggleMobileSidebar(false);
+            }
+
+            // Side panel: show/hide exactly like desktop (map tab shows it, stats tab hides it).
             const sidePanel = document.querySelector('.map-side-panel');
             if (sidePanel) {
                 sidePanel.style.display = (tabId === 'stats') ? 'none' : 'flex';
@@ -622,6 +668,12 @@ export function showTab(tabId) {
                 } else if (tabId === 'map') {
                     if (state.map && typeof window !== 'undefined' && window.google && window.google.maps) {
                         google.maps.event.trigger(state.map, 'resize');
+                        // On mobile, CSS flex layout may need a frame to settle — trigger again after a delay
+                        setTimeout(() => {
+                            if (state.map && window.google && window.google.maps) {
+                                google.maps.event.trigger(state.map, 'resize');
+                            }
+                        }, 150);
                     }
                     if (state.sortMode === 'turn') {
                         focusMapOnTurn(state.currentTurnIdx);

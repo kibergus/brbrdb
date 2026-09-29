@@ -15,7 +15,7 @@
  * ==============================================================================
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds, setSort, selectTurnAndSwitchToMap, getSessionColor, updateSessionSelectorColors, renderLapList, toggleSessionDropdown, selectSessionFromDropdown, SESSION_PALETTE, getSessionOrderIndex, compareLaps, getSortedLaps, selectLapsByCriteria, showSelectionMenu, addGroup, deleteGroup, toggleGroupEnabled } from './lap_selection.js';
+import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds, setSort, selectTurnAndSwitchToMap, getSessionColor, updateSessionSelectorColors, renderLapList, toggleSessionDropdown, selectSessionFromDropdown, SESSION_PALETTE, getSessionOrderIndex, compareLaps, getSortedLaps, selectLapsByCriteria, showSelectionMenu, addGroup, deleteGroup, toggleGroupEnabled, toggleMobileSidebar } from './lap_selection.js';
 import { setTrajectoryColorMode } from './map.js';
 import { state } from './state.js';
 import * as plotsSync from './plots_sync.js';
@@ -405,6 +405,31 @@ describe('lap_selection.js side panel collapse and resize', () => {
         expect(mockSidePanel.style.width).toBe('450px');
         expect(state.sidePanelWidth).toBe(450);
         expect(mockSidePanel.classList.contains('collapsed')).toBe(true);
+    });
+
+    it('toggles mobile sidebar open and closed correctly', () => {
+        const classSet = new Set();
+        const mockBody = {
+            classList: {
+                add: (cls) => classSet.add(cls),
+                remove: (cls) => classSet.delete(cls),
+                contains: (cls) => classSet.has(cls)
+            }
+        };
+        vi.stubGlobal('document', { body: mockBody });
+
+        toggleMobileSidebar(true);
+        expect(classSet.has('mobile-sidebar-open')).toBe(true);
+
+        toggleMobileSidebar(false);
+        expect(classSet.has('mobile-sidebar-open')).toBe(false);
+
+        // Toggle without explicit boolean
+        toggleMobileSidebar();
+        expect(classSet.has('mobile-sidebar-open')).toBe(true);
+
+        toggleMobileSidebar();
+        expect(classSet.has('mobile-sidebar-open')).toBe(false);
     });
 });
 

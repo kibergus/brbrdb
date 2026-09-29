@@ -18,6 +18,7 @@
 import { getGroupColor } from './palette.js';
 
 export const state = {
+    isLoadingTelemetry: true,
     map: null,
     mapInitialized: false,
     defaultMapZoom: null,

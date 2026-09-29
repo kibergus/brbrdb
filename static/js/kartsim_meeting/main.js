@@ -19,7 +19,7 @@
  * Main entry point for the kartsim meeting page.
  */
 import { state } from './state.js';
-import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, toggleGroupManagementPopup, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, initReportInteractions, onSessionChange, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, updateSessionSelectorColors, toggleSessionDropdown, selectSessionFromDropdown } from './lap_selection.js';
+import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, toggleGroupManagementPopup, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, initReportInteractions, onSessionChange, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, updateSessionSelectorColors, toggleSessionDropdown, selectSessionFromDropdown, toggleMobileSidebar, toggleMobileRightPanel } from './lap_selection.js';
 import { setMapType, setTrajectoryColorMode, toggleTrajDropdown, updateDistanceMarker } from './map.js';
 import { stepDistance } from './telemetry.js';
 import { initExpandablePlots } from './plots_sync.js';
@@ -48,6 +48,8 @@ window.toggleSpeedPlot = toggleSpeedPlot;
 window.toggleSidePanel = toggleSidePanel;
 window.collapseSidePanel = collapseSidePanel;
 window.expandSidePanel = expandSidePanel;
+window.toggleMobileSidebar = toggleMobileSidebar;
+window.toggleMobileRightPanel = toggleMobileRightPanel;
 
 document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('click', (e) => {
@@ -226,6 +228,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     window.addEventListener('resize', () => {
+        if (window.innerWidth > 768 && document.body.classList.contains('mobile-sidebar-open')) {
+            toggleMobileSidebar(false);
+        }
         const ids = ['stats-plot-lap-times', 'stats-plot-turn-gaps', 'stats-plot-apex-speeds', 'telemetry-chart', 'acceleration-chart', 'slip_angle-chart'];
         ids.forEach(id => {
             const gd = document.getElementById(id);
@@ -237,6 +242,11 @@ document.addEventListener('DOMContentLoaded', () => {
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+
+    if (e.key === 'Escape' && document.body.classList.contains('mobile-sidebar-open')) {
+        toggleMobileSidebar(false);
+        return;
+    }
 
     if (e.key === ' ') {
         e.preventDefault();

@@ -128,7 +128,18 @@ export function renderStatsPlots() {
 
   const container = document.getElementById('stats-plots-container');
   const noData = document.getElementById('stats-no-data');
+  const loading = document.getElementById('stats-loading');
   const idealDisplay = document.getElementById('ideal-time-display');
+
+  if (state.isLoadingTelemetry) {
+    if (container) container.style.display = 'none';
+    if (noData) noData.style.display = 'none';
+    if (loading) loading.style.display = 'flex';
+    if (idealDisplay) idealDisplay.style.display = 'none';
+    return;
+  }
+
+  if (loading) loading.style.display = 'none';
 
   if (selectedLaps.length === 0) {
     if (container) container.style.display = 'none';

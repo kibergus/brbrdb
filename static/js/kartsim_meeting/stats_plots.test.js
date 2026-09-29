@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { getTurnDiffColor, getRedThreshold, computeGroupBTurnDiffs, renderStatsMinimap, renderTurnGapsPlot } from './stats_plots.js';
+import { getTurnDiffColor, getRedThreshold, computeGroupBTurnDiffs, renderStatsMinimap, renderTurnGapsPlot, renderStatsPlots } from './stats_plots.js';
 import { state } from './state.js';
 
 // Mock Plotly to prevent canvas/layout errors in tests
@@ -219,6 +219,47 @@ describe('stats_plots.js', () => {
             expect(data.some(d => d.type === 'scatter')).toBe(true);
             expect(layout.yaxis.range[1]).toBeCloseTo(2.12, 1);
             expect(layout.yaxis.tickvals).toEqual([0, 0.5, 1.0, 1.5, 2.0]);
+        });
+    });
+
+    describe('renderStatsPlots loading vs no-data states', () => {
+        let mockContainer;
+        let mockNoData;
+        let mockLoading;
+
+        beforeEach(() => {
+            mockContainer = { id: 'stats-plots-container', style: { display: '' } };
+            mockNoData = { id: 'stats-no-data', style: { display: '' } };
+            mockLoading = { id: 'stats-loading', style: { display: '' } };
+
+            global.document = {
+                getElementById: vi.fn((id) => {
+                    if (id === 'stats-plots-container') return mockContainer;
+                    if (id === 'stats-no-data') return mockNoData;
+                    if (id === 'stats-loading') return mockLoading;
+                    return null;
+                }),
+                querySelectorAll: vi.fn().mockReturnValue([])
+            };
+            state.getActiveGroups = () => ['A', 'B'];
+            state.groupSelections = { A: new Set(), B: new Set() };
+            state.lapDataLookup = {};
+        });
+
+        it('shows stats-loading when state.isLoadingTelemetry is true', () => {
+            state.isLoadingTelemetry = true;
+            renderStatsPlots();
+            expect(mockLoading.style.display).toBe('flex');
+            expect(mockNoData.style.display).toBe('none');
+            expect(mockContainer.style.display).toBe('none');
+        });
+
+        it('shows stats-no-data when telemetry is not loading and no laps selected', () => {
+            state.isLoadingTelemetry = false;
+            renderStatsPlots();
+            expect(mockLoading.style.display).toBe('none');
+            expect(mockNoData.style.display).toBe('block');
+            expect(mockContainer.style.display).toBe('none');
         });
     });
 });

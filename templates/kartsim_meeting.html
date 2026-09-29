@@ -10,17 +10,53 @@
 {% endblock %}
 
 {% block breadcrumb %}
-<a href="{{ url_for('league_list') }}">Leagues</a> /
-{% if league and class_name %}
-<a href="{{ url_for('league_view', league=league) }}">{{ get_league_name(league) }}</a> /
-<a href="{{ url_for('class_view', league=league, class_name=class_name) }}">
-    {{get_class_info(class_name).name}}
-</a> /
-{% endif %}
-{% if date %}{{ date }} - {% endif %}{{ track }}{% if track_conditions %} ({{ track_conditions }}){% endif %}{% if is_report_mode and report_title %} / <span style="color: var(--accent);">Report: {{ report_title }}</span>{% endif %}
+<span class="breadcrumb-desktop-crumbs">
+    <a href="{{ url_for('league_list') }}">Leagues</a> /
+    {% if league and class_name %}
+    <a href="{{ url_for('league_view', league=league) }}">{{ get_league_name(league) }}</a> /
+    <a href="{{ url_for('class_view', league=league, class_name=class_name) }}">
+        {{get_class_info(class_name).name}}
+    </a> /
+    {% endif %}
+</span>
+<span class="breadcrumb-meeting-title">
+    {% if date %}{{ date }} - {% endif %}{{ track }}{% if track_conditions %} ({{ track_conditions }}){% endif %}{% if is_report_mode and report_title %} / <span style="color: var(--accent);">Report: {{ report_title }}</span>{% endif %}
+</span>
+{% endblock %}
+
+{% block body_class %}telemetry-page{% endblock %}
+
+{% block nav_settings %}
+<a href="{{ url_for('settings', next=request.path) }}"
+    class="nav-settings-link desktop-only-settings {% if request.endpoint == 'settings' %}active{% endif %}" title="Settings">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </svg>
+</a>
+<button type="button" class="mobile-sidebar-close-btn" id="mobileSidebarCloseBtn" onclick="toggleMobileSidebar(false)" aria-label="Close menu" title="Close menu">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="18" y1="6" x2="6" y2="18"></line>
+        <line x1="6" y1="6" x2="18" y2="18"></line>
+    </svg>
+</button>
 {% endblock %}
 
 {% block content %}
+<button type="button" class="mobile-hamburger-btn" id="mobileHamburgerBtn" onclick="toggleMobileSidebar(true)" aria-label="Open sidebar menu" title="Open sidebar menu">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="12" x2="21" y2="12"></line>
+        <line x1="3" y1="6" x2="21" y2="6"></line>
+        <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+</button>
+<button type="button" class="mobile-panel-btn" id="mobilePanelBtn" onclick="toggleMobileRightPanel()" aria-label="Toggle analysis panel" title="Toggle analysis panel">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2"/>
+        <line x1="9" y1="3" x2="9" y2="21"/>
+        <polyline points="14 8 18 12 14 16"/>
+    </svg>
+</button>
 <div class="sidebar-layout">
     <div class="sidebar">
         <div class="sidebar-tab-selector">
@@ -228,7 +264,7 @@
                     </div>
 
                     <div id="stats-subtab-overview" class="stats-subtab-pane active">
-                        <div id="stats-plots-container" style="display: flex; flex-direction: column;">
+                        <div id="stats-plots-container" style="display: none; flex-direction: column;">
                             <div class="plot-card"
                                 style="display: flex; gap: 2rem; align-items: flex-start; min-height: 400px; padding: 0;">
                                 <div id="stats-summary-left" style="flex: 0 0 220px; padding-top: 0.5rem;">
@@ -257,6 +293,11 @@
                                     Shows the minimum speed (V-min) carried through each corner for the selected laps.
                                 </p>
                             </div>
+                        </div>
+
+                        <div id="stats-loading" style="padding: 4rem; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.25rem;">
+                            <div class="spinner" style="width: 40px; height: 40px; border-width: 3px;"></div>
+                            <div style="color: var(--text-secondary); font-size: 1.05rem; font-weight: 500;">Loading telemetry data...</div>
                         </div>
 
                         <div id="stats-no-data" style="display: none; padding: 4rem; text-align: center; opacity: 0.5;">
