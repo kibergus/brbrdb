@@ -286,6 +286,16 @@ def _detect_is_outlap(first_lap: dict, second_lap: dict) -> bool:
     return starts_away or is_short
 
 
+def _canonical_track_name(track: str | None) -> str:
+    """Return the canonical track name for `track`, resolving aliases if necessary."""
+    if not track:
+        return ''
+    track_info = db.get_track(track)
+    if track_info and track_info.get('track_name'):
+        return str(track_info['track_name'])
+    return track.strip()
+
+
 def _render_telemetry_meeting(
     league: str,
     class_name: str,
@@ -304,6 +314,7 @@ def _render_telemetry_meeting(
     if not auth.can_see_telemetry(acl, league=league):
         abort(403, description='Access to telemetry data is restricted')
 
+    track = _canonical_track_name(track)
     sessions = db.find_sessions(
         leagues=league, classes=class_name, date=date, track=track,
         track_conditions=track_conditions
@@ -652,6 +663,18 @@ def telemetry_view(league: str, class_name: str, date: str, track: str) -> str |
     session_params = request.args.getlist('session')
     if session_params:
         return telemetry_track_view(track)
+
+    canonical_track = _canonical_track_name(track)
+    if canonical_track and canonical_track != track:
+        query_params: dict[str, Any] = dict(request.args.items())
+        return redirect(url_for(
+            'location.telemetry_view',
+            league=league,
+            class_name=class_name,
+            date=date,
+            track=canonical_track,
+            **query_params
+        ))
 
     session_id = request.args.get('session_id')
     report_param = request.args.get('report')
@@ -1238,6 +1261,7 @@ def get_track_points() -> Response | tuple[Response, int]:
     if not league or not class_name or not date or not track:
         return jsonify({'error': 'Missing parameters'}), 400
 
+    track = _canonical_track_name(track)
     sessions = db.find_sessions(
         leagues=league, classes=class_name, date=date, track=track,
         track_conditions=track_conditions

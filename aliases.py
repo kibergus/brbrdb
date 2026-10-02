@@ -238,31 +238,3 @@ def resolve_car_name(raw_name: str) -> str:
     original value (lowercased and stripped) if no alias is defined."""
     key = raw_name.strip().lower()
     return CAR_NAME_ALIASES.get(key, raw_name.strip())
-
-
-# Maps raw track/venue names as they may appear in imports/uploads to the
-# canonical track name used in directory layout and DB lookups.
-TRACK_NAME_ALIASES: dict[str, str] = {
-    'rissington': 'Rissington',
-    'south wales karting centre': 'Llandow',
-    'larkhall pro': 'Larkhall',
-    'kimbolton circuit 1': 'Kimbolton',
-}
-
-
-def resolve_track_name(raw_name: str | None) -> str:
-    """Returns the canonical track name for *raw_name*, falling back to the
-    original value (stripped) if no alias is defined."""
-    if not raw_name:
-        return ''
-
-    # 1. Strip whitespace
-    name = raw_name.strip()
-    # 2. Remove year at the end (e.g. " 2026")
-    name = re.sub(r'\s+20\d{2}$', '', name)
-    # 3. Drop " Kart Club" and " Karting" at the end
-    name = re.sub(r'\s+(?:Kart\s+Club|Karting)$', '', name, flags=re.IGNORECASE)
-
-    # 4. Check aliases
-    key = name.lower()
-    return TRACK_NAME_ALIASES.get(key, name)

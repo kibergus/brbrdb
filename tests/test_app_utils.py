@@ -450,24 +450,6 @@ def test_resolve_car_name() -> None:
     assert aliases.get_class_info('experience_junior_slw').class_type == 'junior'
 
 
-def test_resolve_track_name() -> None:
-    assert aliases.resolve_track_name('Dunkeswell 2026') == 'Dunkeswell'
-    assert aliases.resolve_track_name('Bayford Meadows 2026') == 'Bayford Meadows'
-    assert aliases.resolve_track_name('Fulbeck Kart Club 2026') == 'Fulbeck'
-    assert aliases.resolve_track_name('Lydd Karting 2026') == 'Lydd'
-    assert aliases.resolve_track_name('South Wales Karting Centre 2026') == 'Llandow'
-    assert aliases.resolve_track_name('Larkhall Pro 2026') == 'Larkhall'
-    assert aliases.resolve_track_name('Kimbolton Circuit 1 2026') == 'Kimbolton'
-
-    # Generic cases (different years)
-    assert aliases.resolve_track_name('Dunkeswell 2023') == 'Dunkeswell'
-    assert aliases.resolve_track_name('Fulbeck Kart Club 2024') == 'Fulbeck'
-
-    # Without year
-    assert aliases.resolve_track_name('Rissington Kart Club') == 'Rissington'
-    assert aliases.resolve_track_name('Larkhall Pro') == 'Larkhall'
-
-
 def test_augment_championship_data_drop_rounds() -> None:
     with patch('app.db') as mock_db:
         # Mock list_meetings to indicate that R1, R2, R3 have occurred (past rounds)
@@ -767,3 +749,20 @@ def test_league_helpers() -> None:
     assert 'fat_de' in group_map['fat_other']
     assert 'club100' in group_map
     assert 'other' in group_map
+
+
+def test_kartsim_last_meeting_redirect_canonical_track() -> None:
+    client = app.app.test_client()
+    mock_session = MagicMock()
+    mock_session.session_start_datetime = '2026-09-27 17:42'
+    mock_session.class_name = ['cadet']
+    mock_session.date = '2026-09-27'
+    mock_session.track_name = 'Whilton Mill International'
+
+    with patch('plot_handlers.get_hero_names', return_value=['Hero']), \
+         patch('app.db.find_sessions', return_value=[mock_session]), \
+         patch('app.db.get_track', return_value={'track_name': 'Whilton Mill'}), \
+         patch('auth.load_keys', return_value={'*': {'see_leagues': ['*'], 'see_telemetry': True}}):
+        resp = client.get('/league/kartsim/last')
+        assert resp.status_code == 302
+        assert resp.headers['Location'] == '/telemetry/kartsim/cadet/2026-09-27/Whilton%20Mill'

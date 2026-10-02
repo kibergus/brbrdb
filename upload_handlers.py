@@ -1237,7 +1237,6 @@ def stream_upload() -> Any:
 
     # Resolve any car/class name aliases
     metadata.class_name = aliases.resolve_car_name(metadata.class_name)
-    metadata.track_name = aliases.resolve_track_name(metadata.track_name)
     track_data = db.get_track(metadata.track_name)
     if track_data and track_data.get('track_name'):
         metadata.track_name = track_data['track_name']
@@ -1501,7 +1500,6 @@ def files_upload() -> Any:
     meta['class_name'] = class_name
 
     # Resolve any track name aliases
-    track_name = aliases.resolve_track_name(track_name)
     track_data = db.get_track(track_name)
     if track_data and track_data.get('track_name'):
         track_name = track_data['track_name']

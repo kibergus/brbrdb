@@ -690,14 +690,16 @@ def last_meeting_redirect(league: str) -> werkzeug_wrappers.Response | str:
         # Find the last session by start datetime
         last_session = max(sessions, key=lambda s: s.session_start_datetime)
 
-        # Redirect to the meeting page
+        # Redirect to the meeting page using canonical track name
         selected_class = last_session.class_name[0] if last_session.class_name else 'cadet'
+        track_info = db.get_track(last_session.track_name)
+        canonical_track = track_info.get('track_name') if track_info else last_session.track_name
         return redirect(url_for(
             'location.telemetry_view',
             league='kartsim',
             class_name=selected_class,
             date=last_session.date,
-            track=last_session.track_name
+            track=canonical_track
         ))
 
     # For other leagues

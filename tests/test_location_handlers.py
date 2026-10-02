@@ -1477,3 +1477,60 @@ Record,Time,Latitude,Longitude,Speed,Lap
     assert laps[0]['start_idx'] == 0
     assert laps[0]['end_idx'] == 1
     assert len(laps[0]['times']) == 2
+
+
+def test_telemetry_view_track_alias_redirect() -> None:
+    client = flask_app.app.test_client()
+    mock_session = MagicMock()
+    mock_session.session_id = 'sess1'
+
+    def find_sessions_mock(**kwargs: Any) -> list:
+        if kwargs.get('track') == 'Whilton Mill':
+            return [mock_session]
+        return []
+
+    with patch('location_handlers.auth.can_see_telemetry', return_value=True), \
+         patch('location_handlers.db.get_track', return_value={'track_name': 'Whilton Mill'}), \
+         patch('location_handlers.db.find_sessions', side_effect=find_sessions_mock):
+        resp = client.get('/telemetry/kartsim/cadet/2026-09-27/Whilton%20Mill%20International')
+        assert resp.status_code == 302
+        assert resp.headers['Location'] == '/telemetry/kartsim/cadet/2026-09-27/Whilton%20Mill'
+
+
+def test_get_track_points_track_alias_fallback(tmp_path: Path) -> None:
+    client = flask_app.app.test_client()
+    meeting_dir = tmp_path / "meeting"
+    meeting_dir.mkdir()
+    telem_dir = meeting_dir / "telemetry"
+    telem_dir.mkdir()
+
+    sample_csv = (
+        "Format,RaceBox CSV\nData Source,KartSim\nConfiguration,Alice\n\n"
+        "Record,Time,Latitude,Longitude,Lap Distance,Lap\n1,2026-08-29T14:59:00Z,50.0,-1.0,10.0,1\n"
+    )
+    (telem_dir / "sess1.csv").write_text(sample_csv)
+
+    mock_session = MagicMock()
+    mock_session.session_id = 'sess1'
+    mock_session.meeting_dir = str(meeting_dir)
+
+    def find_sessions_mock(**kwargs: Any) -> list:
+        if kwargs.get('track') == 'Whilton Mill':
+            return [mock_session]
+        return []
+
+    mock_track = {'track_name': 'Whilton Mill', 'sector_end': [], 'turns': []}
+    with patch('location_handlers.auth.can_see_telemetry', return_value=True), \
+         patch('location_handlers.db.get_track', return_value=mock_track), \
+         patch('location_handlers.db.load', return_value=pd.DataFrame()), \
+         patch('location_handlers.plot_handlers.get_hero_names', return_value=[]), \
+         patch('location_handlers.db.find_sessions', side_effect=find_sessions_mock):
+        url = (
+            '/api/telemetry?league=kartsim&class_name=cadet&'
+            'date=2026-09-27&track=Whilton%20Mill%20International'
+        )
+        resp = client.get(url)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data) == 1
+        assert data[0]['session_id'] == 'sess1'
