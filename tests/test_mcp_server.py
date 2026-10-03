@@ -15,6 +15,7 @@
 
 from pathlib import Path
 import json
+import uuid
 import pytest
 from mcp.server.fastmcp import Image
 from mcp_server import server, image_tools
@@ -212,3 +213,111 @@ Time,Latitude,Longitude,Record,Lap,Lap Distance (m),Speed (km/h)
     assert len(data[1]['dist']) == 2
     assert data[1]['dist'] == [0.0, 1040.0]
     assert data[1]['Speed (km/h)'] == [70.0, 72.0]
+
+
+def test_save_report_generates_uuid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
+    content = "<!-- {\"title\": \"Test\"} -->\n<div>Report Body</div>"
+
+    res = server.save_report(content=content)
+    assert res['status'] == 'success'
+    report_id = res['report_id']
+    # Check valid UUID
+    assert str(uuid.UUID(report_id)) == report_id
+    assert res['filename'] == f"{report_id}.html"
+    assert res['url'] == f"https://brbrdb.brbrkitten.com/telemetry/report/{report_id}"
+
+    # File exists
+    saved_file = tmp_path / f"{report_id}.html"
+    assert saved_file.exists()
+    assert saved_file.read_text() == content
+
+
+def test_save_report_non_uuid_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
+    with pytest.raises(ValueError, match="must be a valid UUID"):
+        server.save_report(content="<div>Test</div>", report_id="my_cool_report")
+
+
+def test_read_report_and_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
+    content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n"
+
+    res = server.save_report(content=content)
+    report_id = res['report_id']
+
+    # Full read
+    full = server.read_report(report_id)
+    assert full == content
+
+    # Line slice
+    sliced = server.read_report(report_id, start_line=2, end_line=4)
+    assert sliced == "Line 2\nLine 3\nLine 4\n"
+
+
+def test_edit_report_success_and_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
+    content = "Line 1\nTarget line here\nLine 3\n"
+
+    res = server.save_report(content=content)
+    report_id = res['report_id']
+
+    # Edit target content
+    edit_msg = server.edit_report(
+        report_id=report_id,
+        target_content="Target line here",
+        replacement_content="Replaced line here"
+    )
+    assert "updated successfully" in edit_msg
+
+    updated = server.read_report(report_id)
+    assert "Replaced line here" in updated
+    assert "Target line here" not in updated
+
+    # Non-UUID error
+    with pytest.raises(ValueError, match="must be a valid UUID"):
+        server.edit_report(
+            report_id="bad_name",
+            target_content="foo",
+            replacement_content="bar"
+        )
+
+    # Missing target content error
+    with pytest.raises(ValueError, match="Target content not found"):
+        server.edit_report(
+            report_id=report_id,
+            target_content="nonexistent text",
+            replacement_content="new text"
+        )
+
+
+def test_report_author_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
+
+    # User A creates report
+    monkeypatch.setattr('auth.get_current_author', lambda: ("user-a-key", "User A"))
+    res = server.save_report(content="<div>Author A Report</div>")
+    report_id = res['report_id']
+
+    # User A can edit it
+    server.edit_report(
+        report_id=report_id,
+        target_content="Author A Report",
+        replacement_content="Author A Report (v2)"
+    )
+
+    # User B attempts to edit User A's report
+    monkeypatch.setattr('auth.get_current_author', lambda: ("user-b-key", "User B"))
+    with pytest.raises(PermissionError, match="only the report author can edit"):
+        server.edit_report(
+            report_id=report_id,
+            target_content="Author A Report (v2)",
+            replacement_content="Hijacked"
+        )
+
+    # User B also cannot overwrite it with save_report
+    with pytest.raises(PermissionError, match="only the report author can edit"):
+        server.save_report(
+            content="<div>Overwritten</div>",
+            report_id=report_id
+        )

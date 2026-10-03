@@ -47,7 +47,7 @@ Orchestrator Agent
  ├── 2. Lap Selection (Keep <3 laps: Benchmark Reference Lap vs Target Comparison Lap)
  ├── 3. Corner Sub-Agent Delegation (Delta T inflection, causation chain with calibrated confidence)
  ├── 4. Synthesis (Identify top 1–2 actionable coaching takeaways for youth drivers)
- └── 5. Report Generation (writes data/reports/<filename>.html with JSON header, invisible prompt comment, & commentary triggers)
+ └── 5. Report Publishing & Iteration (save_report, read_report, edit_report MCP tools)
 ```
 
 ---
@@ -246,6 +246,25 @@ Keep plots under 3 channels and write friendly coaching advice for an 11-year-ol
   </div>
 </div>
 ```
+
+---
+
+## Report Publishing & Management via MCP Tools
+
+External analysis agents publish and iterate on reports using the following server-provided MCP tools:
+
+### 1. `save_report(content: str, report_id: str | None = None)`
+- **Creating a new report**: Call `save_report(content="...")` with `report_id=None` (or omitting `report_id`). The server generates a random unguessable UUIDv4, writes `../data/reports/<uuid>.html`, and records your author identity. Returns `{ "status": "success", "report_id": "<uuid>", "filename": "<uuid>.html", "url": "https://brbrdb.brbrkitten.com/telemetry/report/<uuid>" }`.
+- **Overwriting an existing report**: Call `save_report(content="...", report_id="<uuid>")`. `report_id` **must** be a valid UUID and can only be updated by the original author.
+
+> [!IMPORTANT]
+> **Mandatory User Output Rule**: After calling `save_report` to generate or update a report, you **MUST ALWAYS** give the user the full absolute URL: `https://brbrdb.brbrkitten.com/telemetry/report/<uuid>` as a clickable markdown link. Never use a relative path or omit the domain; always include the full `https://brbrdb.brbrkitten.com` URL!
+
+### 2. `read_report(report_id: str, start_line: int | None = None, end_line: int | None = None)`
+- Reads back an existing report by UUID, optionally slicing line ranges (1-indexed) mirroring the `view_file` API.
+
+### 3. `edit_report(report_id: str, target_content: str, replacement_content: str, start_line: int | None = None, end_line: int | None = None, allow_multiple: bool = False)`
+- Surgically replaces sections of text in an existing report by UUID without rewriting the entire file, mirroring `replace_file_content`. Restricted to the report author. Always provide the updated report URL to the user after editing.
 
 ---
 

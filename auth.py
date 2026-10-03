@@ -17,7 +17,7 @@ import os
 import json
 import functools
 from typing import Any
-from flask import request
+from flask import request, has_request_context
 
 _KEYS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'keys.json')
 AUTH_COOKIE = 'auth_key'
@@ -71,7 +71,8 @@ def get_current_acl() -> dict[str, Any]:
             'upload_sessions': {
                 'drivers': ['*'],
                 'leagues': ['*']
-            }
+            },
+            'manage_reports': True
         }
 
     # Fallback to anonymous permissions if configured in keys.json under empty key
@@ -171,3 +172,31 @@ def can_upload_session_for_league(acl: dict[str, Any], league: str) -> bool:
         return False
     leagues = upload_sessions.get('leagues', [])
     return '*' in leagues or league in leagues
+
+
+def can_manage_reports(acl: dict[str, Any]) -> bool:
+    """Check if the ACL allows managing (creating, editing) reports."""
+    return acl.get('manage_reports', False) is True
+
+
+def get_current_author() -> tuple[str, str]:
+    """Return (author_key, author_name) for the current caller."""
+    valid_keys = load_keys()
+    if has_request_context():
+        key = get_current_key()
+        if key and key in valid_keys:
+            return key, valid_keys[key].get('comment', key)
+        if request.remote_addr in _LOCALHOST_ADDRS:
+            for k, val in valid_keys.items():
+                if val.get('comment') == 'Kibergus':
+                    return k, 'Kibergus'
+            return 'localhost', 'Localhost'
+        if '' in valid_keys:
+            return '', valid_keys[''].get('comment', 'Anonymous')
+        return 'anonymous', 'Anonymous'
+
+    # Outside request context (CLI / direct tool call / unit test)
+    for k, val in valid_keys.items():
+        if val.get('comment') == 'Kibergus':
+            return k, 'Kibergus'
+    return 'localhost', 'Localhost'

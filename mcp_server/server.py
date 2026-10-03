@@ -23,7 +23,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Image
 from database import db
-from mcp_server import image_tools, lap_tools, track_tools
+from mcp_server import image_tools, lap_tools, report_tools, track_tools
 
 mcp = FastMCP("brbrdb")
 
@@ -356,6 +356,72 @@ def get_session_consistency_image(
         driver_name=driver_name
     )
     return Image(data=base64.b64decode(b64_image), format="png")
+
+
+@mcp.tool()
+def save_report(content: str, report_id: str | None = None) -> dict[str, Any]:
+    """
+    Saves or creates a telemetry analysis HTML report.
+
+    If `report_id` is empty or None, generates a new random unguessable UUIDv4 for the report.
+    If `report_id` is specified, it MUST be a valid UUID; otherwise an error is raised.
+    Existing reports can only be edited by their original author.
+
+    Parameters:
+    - content: Full HTML report content including metadata frontmatter/comment.
+    - report_id: Optional UUID of the report. Must be a valid UUID if provided.
+
+    Returns dictionary with report_id, filename, and viewer URL.
+    """
+    return report_tools.save_report_impl(content, report_id=report_id)
+
+
+@mcp.tool()
+def read_report(report_id: str, start_line: int | None = None, end_line: int | None = None) -> str:
+    """
+    Reads report content from the reports directory, optionally sliced by line range.
+
+    Parameters:
+    - report_id: Report UUID or name.
+    - start_line: Optional 1-indexed starting line number.
+    - end_line: Optional 1-indexed ending line number.
+
+    Returns the text content of the report.
+    """
+    return report_tools.read_report_impl(report_id, start_line=start_line, end_line=end_line)
+
+
+@mcp.tool()
+def edit_report(
+    report_id: str,
+    target_content: str,
+    replacement_content: str,
+    start_line: int | None = None,
+    end_line: int | None = None,
+    allow_multiple: bool = False
+) -> str:
+    """
+    Performs surgical replacement of target text in an existing report.
+    `report_id` must be a valid UUID. Only the author of the report is permitted to edit it.
+
+    Parameters:
+    - report_id: Report UUID (must be a valid UUID).
+    - target_content: Exact substring to find and replace.
+    - replacement_content: Text to replace target_content with.
+    - start_line: Optional 1-indexed start line boundary.
+    - end_line: Optional 1-indexed end line boundary.
+    - allow_multiple: Whether to allow replacing multiple occurrences (default: False).
+
+    Returns confirmation message.
+    """
+    return report_tools.edit_report_impl(
+        report_id=report_id,
+        target_content=target_content,
+        replacement_content=replacement_content,
+        start_line=start_line,
+        end_line=end_line,
+        allow_multiple=allow_multiple
+    )
 
 
 if __name__ == "__main__":
