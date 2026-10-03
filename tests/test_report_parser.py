@@ -15,6 +15,7 @@
 
 import os
 import tempfile
+import pytest
 import report_parser
 
 
@@ -173,8 +174,6 @@ def test_parse_report_content_in_head_after_doctype() -> None:
 
 
 def test_validate_report_content() -> None:
-    import pytest
-
     # Empty content
     with pytest.raises(ValueError, match="cannot be empty"):
         report_parser.validate_report_content("")
@@ -203,4 +202,3 @@ def test_validate_report_content() -> None:
     )
     meta_multi = report_parser.validate_report_content(valid_multi)
     assert meta_multi['title'] == "Multi"
-

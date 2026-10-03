@@ -267,7 +267,8 @@ def validate_report_content(content: str) -> dict[str, Any]:
             "} -->"
         )
 
-    has_sessions = bool(meta.get('sessions') and isinstance(meta.get('sessions'), list) and len(meta.get('sessions')) > 0)
+    sessions_val = meta.get('sessions')
+    has_sessions = isinstance(sessions_val, list) and len(sessions_val) > 0
     league = meta.get('league')
     class_name = meta.get('class_name') or meta.get('class')
     date = meta.get('date')
@@ -307,4 +308,3 @@ def load_report(report_name: str, reports_dir: str | None = None) -> Tuple[dict[
         raw_content = f.read()
 
     return parse_report_content(raw_content)
-

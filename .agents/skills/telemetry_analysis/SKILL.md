@@ -5,7 +5,14 @@ description: Analyzes karting telemetry data using MCP server tools and corner s
 
 # Telemetry Analysis Skill
 
-This skill provides an autonomous, turn-by-turn workflow for analyzing karting telemetry data. It combines orchestrator data discovery, corner-focused sub-agent investigations, and interactive HTML commentary report generation in `data/reports/`.
+This skill provides an autonomous, turn-by-turn workflow for analyzing karting telemetry data. It combines orchestrator session inspection, corner-focused sub-agent investigations, and interactive HTML commentary report generation published via the `save_report` MCP tool.
+
+> [!IMPORTANT]
+> **Remote Telemetry Data & Reports (No Local Files or Database)**:
+> All telemetry datasets, track metadata, and reports are hosted remotely and accessed **exclusively** via the `telemetry` MCP tools (`list_sessions`, `get_stats`, `save_report`, etc.).
+> - Do NOT search the local workspace or filesystem for telemetry logs, CSVs, or database files.
+> - Do NOT attempt to connect to any external or local database.
+> - Do NOT attempt to read or write report files directly via local filesystem tools; all report publishing, reading, and editing is handled through the MCP tools (`save_report`, `read_report`, `edit_report`).
 
 ---
 
@@ -54,9 +61,9 @@ Orchestrator Agent
 
 ## Step 1: Session & Data Discovery (Orchestrator)
 
-1. **MCP Data Loading with Python Post-Processing**:
+1. **MCP Data Loading & Python Analysis Scripts**:
    - All session lists, track metadata, pace summaries, lap statistics, and telemetry plots **MUST be loaded through MCP server tools** (`list_sessions`, `get_track_info`, `get_pace_summary`, `get_stats`, `get_telemetry_plot`, `get_trajectory_plot`).
-   - Agents **are encouraged to post-process MCP outputs using lightweight Python scripts** (filtering laps, computing delta distributions, or selecting representative target laps).
+   - Agents **are encouraged to write Python scripts to analyze or post-process data returned by the MCP tools** (e.g. filtering laps, computing delta distributions, or selecting representative target laps). Intermediate calculations or analysis scratch files may be saved if helpful, but the input data itself originates from the MCP tools rather than existing workspace files or databases.
 
 2. **Locate Target Sessions & Audit Available Channels**:
    - Call `list_sessions(track=..., date=..., driver_name=...)` to list all sessions for the target date and track.
@@ -129,6 +136,8 @@ All findings, diagnoses, and coaching takeaways MUST be strictly anchored in the
 
 ## Communication Style for Junior Drivers (~11 Years Old)
 
+*(Applies to commentary text written inside the generated HTML report)*
+
 - **Friendly, Encouraging, and Enthusiastic**: Speak like an approachable, positive racing coach chatting with an 11-year-old kart racer. Keep explanations simple, vivid, and fun.
 - **No Corporate Jargon**: Avoid stiff corporate phrases like "Executive Summary" (use *"The Big Picture"*, *"Pace Check"*, or *"How Much Time Can We Find?"*).
 - **Positive Framing**: Frame mistakes as exciting secrets to unlocking faster laps (e.g. *"Unlocking +0.2s by letting the kart roll freely on exit!"*).
@@ -138,9 +147,9 @@ All findings, diagnoses, and coaching takeaways MUST be strictly anchored in the
 
 ---
 
-## Report File Format Specification
+## Report Format Specification
 
-Report files are stored in `data/reports/<report_name>.html` (or `../data/reports/<report_name>.html` from the `analysis/` workspace root).
+Reports are HTML commentary companion snippets published to the viewer service via the `save_report` MCP tool.
 
 ### 1. Structure
 A report file consists of three parts:
@@ -254,11 +263,14 @@ Keep plots under 3 channels and write friendly coaching advice for an 11-year-ol
 External analysis agents publish and iterate on reports using the following server-provided MCP tools:
 
 ### 1. `save_report(content: str, report_id: str | None = None)`
-- **Creating a new report**: Call `save_report(content="...")` with `report_id=None` (or omitting `report_id`). The server generates a random unguessable UUIDv4, writes `../data/reports/<uuid>.html`, and records your author identity. Returns `{ "status": "success", "report_id": "<uuid>", "filename": "<uuid>.html", "url": "https://brbrdb.brbrkitten.com/telemetry/report/<uuid>" }`.
+- **Creating a new report**: Call `save_report(content="...")` with `report_id=None` (or omitting `report_id`). The server generates a random unguessable UUIDv4, persists the report on the server, and records your author identity. Returns `{ "status": "success", "report_id": "<uuid>", "filename": "<uuid>.html", "url": "https://brbrdb.brbrkitten.com/telemetry/report/<uuid>" }`.
 - **Overwriting an existing report**: Call `save_report(content="...", report_id="<uuid>")`. `report_id` **must** be a valid UUID and can only be updated by the original author.
 
 > [!IMPORTANT]
-> **Mandatory User Output Rule**: After calling `save_report` to generate or update a report, you **MUST ALWAYS** give the user the full absolute URL: `https://brbrdb.brbrkitten.com/telemetry/report/<uuid>` as a clickable markdown link. Never use a relative path or omit the domain; always include the full `https://brbrdb.brbrkitten.com` URL!
+> **Mandatory User Output & Link Rule**:
+> - After calling `save_report` to generate or update a report, you **MUST ALWAYS** give the user the full absolute URL: `https://brbrdb.brbrkitten.com/telemetry/report/<uuid>` as a clickable markdown link. Never use a relative path or omit the domain; always include the full `https://brbrdb.brbrkitten.com` URL!
+> - **Do NOT duplicate the report in your chat response**: All detailed breakdowns, evidence items, data tables, and in-depth commentary belong strictly inside the published HTML report. Duplicating the report in chat output distracts the user.
+> - **Keep the chat response minimal**: Limit your final response to the clickable report URL accompanied by at most a concise 1–2 sentence high-level takeaway. All details must remain in the report.
 
 ### 2. `read_report(report_id: str, start_line: int | None = None, end_line: int | None = None)`
 - Reads back an existing report by UUID, optionally slicing line ranges (1-indexed) mirroring the `view_file` API.

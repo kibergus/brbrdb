@@ -641,6 +641,9 @@
                 yConfig.range = [max, min];
                 yConfig.autorange = false;
               }
+            } else if (normCh === 'brake' || normCh === 'throttle') {
+              yConfig.range = [0, 100];
+              yConfig.autorange = false;
             } else if (isDeltaTime(ch) && mm && isFinite(mm.min) && isFinite(mm.max)) {
               var dtMin = Math.min(0, mm.min);
               var dtMax = Math.max(0.05, mm.max);

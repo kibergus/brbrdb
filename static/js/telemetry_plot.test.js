@@ -140,6 +140,17 @@ describe('telemetry_plot.js', () => {
       expect(config.scrollZoom).toBe(true);
       expect(config.displayModeBar).toBe(false);
       expect(config.responsive).toBe(true);
+
+      // 6. Verify yaxis labels include units of measurement and Brake/Throttle are scaled 0-100%
+      expect(layout.yaxis.title.text).toBe('Speed (km/h)');
+      expect(layout.yaxis2.title.text).toBe('Throttle (%)');
+      expect(layout.yaxis2.range).toEqual([0, 100]);
+      expect(layout.yaxis2.autorange).toBe(false);
+      expect(layout.yaxis3.title.text).toBe('Brake (%)');
+      expect(layout.yaxis3.range).toEqual([0, 100]);
+      expect(layout.yaxis3.autorange).toBe(false);
+      expect(layout.yaxis4.title.text).toBe('Steering Angle (deg)');
+      expect(layout.yaxis5.title.text).toBe('Delta Time (s)');
     });
   });
 });

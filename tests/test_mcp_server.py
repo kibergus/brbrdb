@@ -351,4 +351,3 @@ def test_report_author_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPat
             content=f"{VALID_REPORT_HEADER}<div>Overwritten</div>",
             report_id=report_id
         )
-

@@ -104,12 +104,9 @@ def extract_raw_lap_data(
                 return h
         raise ValueError(f"Channel {name!r} not found in telemetry columns: {header}")
 
-    def is_delta_time_ch(ch_name: str) -> bool:
-        return ch_name.lower().replace('_', ' ').strip() == 'delta time'
-
     channel_col_map: dict[str, str] = {}
     for ch in channels:
-        if not is_delta_time_ch(ch):
+        if ch != 'Delta Time':
             channel_col_map[ch] = find_header_col(ch)
 
     if parsed_laps is None:
@@ -146,7 +143,7 @@ def extract_raw_lap_data(
         l_num: {'dist': [], 'time': []} for l_num in laps
     }
     for ch in channels:
-        if not is_delta_time_ch(ch):
+        if ch != 'Delta Time':
             for l_num in laps:
                 raw_lap_data[l_num][ch] = []
 
@@ -167,7 +164,7 @@ def extract_raw_lap_data(
                 raw_lap_data[req_l_num]['time'].append(time_val)
 
                 for ch in channels:
-                    if not is_delta_time_ch(ch):
+                    if ch != 'Delta Time':
                         c_idx = header.index(channel_col_map[ch])
                         val_str = row[c_idx].strip()
                         val = float(val_str) if val_str != '' else np.nan
@@ -193,9 +190,6 @@ def interpolate_lap_channels(
     dists_grid = np.linspace(start_m, end_m, num=500)
     interp_lap_data: dict[int | str, dict[str, np.ndarray]] = {}
 
-    def is_delta_time_ch(ch_name: str) -> bool:
-        return ch_name.lower().replace('_', ' ').strip() == 'delta time'
-
     for l_num in laps:
         l_dist = np.array(raw_lap_data[l_num]['dist'])
         l_time = np.array(raw_lap_data[l_num]['time'])
@@ -210,12 +204,11 @@ def interpolate_lap_channels(
         interp_lap_data[l_num] = {'time': interp_segment_time}
 
         for ch in channels:
-            if not is_delta_time_ch(ch):
+            if ch != 'Delta Time':
                 c_vals = np.array(raw_lap_data[l_num][ch])[sort_order]
                 interp_lap_data[l_num][ch] = np.interp(dists_grid, l_dist, c_vals)
 
-    delta_ch = next((ch for ch in channels if is_delta_time_ch(ch)), None)
-    if delta_ch:
+    if 'Delta Time' in channels:
         ref_lap = laps[0]
         ref_time = interp_lap_data[ref_lap]['time']
         ref_segment_time = ref_time - ref_time[0]
@@ -223,9 +216,18 @@ def interpolate_lap_channels(
         for l_num in laps:
             t = interp_lap_data[l_num]['time']
             l_segment_time = t - t[0]
-            interp_lap_data[l_num][delta_ch] = l_segment_time - ref_segment_time
+            interp_lap_data[l_num]['Delta Time'] = l_segment_time - ref_segment_time
 
     return dists_grid, interp_lap_data
+
+
+CHANNEL_YLABELS = {
+    'Speed': 'Speed (km/h)',
+    'Throttle': 'Throttle (%)',
+    'Brake': 'Brake (%)',
+    'Steering Angle': 'Steering Angle (deg)',
+    'Delta Time': 'Delta Time (s)',
+}
 
 
 def render_stacked_telemetry_plot(
@@ -257,15 +259,18 @@ def render_stacked_telemetry_plot(
                 lap_lbl = f"Lap {l_num}" if (isinstance(l_num, int) or str(l_num).isdigit()) else str(l_num)
             ax.plot(dists_grid, y_vals, color=color, linewidth=2, label=lap_lbl)
 
-        if 'speed' in ch.lower():
+        if ch == 'Speed':
             all_s = [interp_lap_data[lp][ch] for lp in laps if ch in interp_lap_data[lp]]
             if all_s:
                 min_s = float(np.nanmin([np.nanmin(s) for s in all_s]))
                 max_s = float(np.nanmax([np.nanmax(s) for s in all_s]))
                 pad = max(1.0, (max_s - min_s) * 0.1)
                 ax.set_ylim(min_s - pad, max_s + pad)
+        elif ch in ('Throttle', 'Brake'):
+            ax.set_ylim(-2, 105)
+            ax.set_yticks([0, 20, 40, 60, 80, 100])
 
-        ax.set_ylabel(ch, fontsize=10)
+        ax.set_ylabel(CHANNEL_YLABELS.get(ch, ch), fontsize=10)
 
         if idx == 0:
             ax.legend(loc='upper right', frameon=True, facecolor='#18181b', edgecolor='#27272a')
@@ -292,9 +297,10 @@ def render_stacked_telemetry_plot(
 
     axes[-1].set_xlabel("Distance (m)", fontsize=10)
 
+    fig.align_ylabels(axes)
     fig.tight_layout()
     buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight', pad_inches=0.08)
     plt.close(fig)
 
     return base64.b64encode(buf.getvalue()).decode('utf-8')
