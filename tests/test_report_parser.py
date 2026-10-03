@@ -149,3 +149,58 @@ def test_resolve_and_load_report() -> None:
         assert meta['title'] == "Test Report"
         assert meta['track'] == "Rowrah"
         assert "<p>Test content</p>" in body
+
+
+def test_parse_report_content_in_head_after_doctype() -> None:
+    raw = """<!DOCTYPE html>
+<html>
+<head>
+  <!-- {
+    "title": "Turn Analysis",
+    "league": "kartsim",
+    "class_name": "cadet",
+    "date": "2026-10-03",
+    "track": "Whilton Mill",
+    "session_id": "10_17_practice"
+  } -->
+</head>
+<body><p>Content</p></body>
+</html>"""
+    meta, state, body = report_parser.parse_report_content(raw)
+    assert meta['track'] == "Whilton Mill"
+    assert meta['session_id'] == "10_17_practice"
+    assert "<p>Content</p>" in body
+
+
+def test_validate_report_content() -> None:
+    import pytest
+
+    # Empty content
+    with pytest.raises(ValueError, match="cannot be empty"):
+        report_parser.validate_report_content("")
+
+    # No metadata
+    with pytest.raises(ValueError, match="metadata could not be parsed"):
+        report_parser.validate_report_content("<div>No metadata</div>")
+
+    # Missing required fields
+    incomplete = '<!-- {"title": "Only Title"} -->\n<p>Content</p>'
+    with pytest.raises(ValueError, match="missing required field"):
+        report_parser.validate_report_content(incomplete)
+
+    # Valid single-session report
+    valid_single = (
+        '<!-- {"title": "Test", "league": "kartsim", "class_name": "cadet", '
+        '"date": "2026-10-03", "track": "Whilton Mill"} -->\n<p>Content</p>'
+    )
+    meta = report_parser.validate_report_content(valid_single)
+    assert meta['track'] == "Whilton Mill"
+
+    # Valid multi-session report
+    valid_multi = (
+        '<!-- {"title": "Multi", "track": "Lydd", "sessions": ["kartsim/cadet/2026-08-21/Lydd/1"]} -->\n'
+        '<p>Content</p>'
+    )
+    meta_multi = report_parser.validate_report_content(valid_multi)
+    assert meta_multi['title'] == "Multi"
+

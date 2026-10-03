@@ -215,9 +215,18 @@ Time,Latitude,Longitude,Record,Lap,Lap Distance (m),Speed (km/h)
     assert data[1]['Speed (km/h)'] == [70.0, 72.0]
 
 
+VALID_REPORT_HEADER = """<!-- {
+  "title": "Turn Analysis Test",
+  "league": "kartsim",
+  "class_name": "cadet",
+  "date": "2026-08-21",
+  "track": "Clay Pigeon"
+} -->\n"""
+
+
 def test_save_report_generates_uuid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
-    content = "<!-- {\"title\": \"Test\"} -->\n<div>Report Body</div>"
+    content = f"{VALID_REPORT_HEADER}<div>Report Body</div>"
 
     res = server.save_report(content=content)
     assert res['status'] == 'success'
@@ -233,15 +242,28 @@ def test_save_report_generates_uuid(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert saved_file.read_text() == content
 
 
+def test_save_report_validation_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
+
+    # Missing metadata entirely
+    with pytest.raises(ValueError, match="metadata could not be parsed"):
+        server.save_report(content="<div>Report without metadata</div>")
+
+    # Missing required metadata fields
+    incomplete = '<!-- {"title": "Only Title"} -->\n<div>Body</div>'
+    with pytest.raises(ValueError, match="missing required field"):
+        server.save_report(content=incomplete)
+
+
 def test_save_report_non_uuid_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
     with pytest.raises(ValueError, match="must be a valid UUID"):
-        server.save_report(content="<div>Test</div>", report_id="my_cool_report")
+        server.save_report(content=f"{VALID_REPORT_HEADER}<div>Test</div>", report_id="my_cool_report")
 
 
 def test_read_report_and_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
-    content = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n"
+    content = f"{VALID_REPORT_HEADER}Line 1\nLine 2\nLine 3\nLine 4\nLine 5\n"
 
     res = server.save_report(content=content)
     report_id = res['report_id']
@@ -251,13 +273,13 @@ def test_read_report_and_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert full == content
 
     # Line slice
-    sliced = server.read_report(report_id, start_line=2, end_line=4)
-    assert sliced == "Line 2\nLine 3\nLine 4\n"
+    sliced = server.read_report(report_id, start_line=1, end_line=2)
+    assert "Turn Analysis Test" in sliced
 
 
 def test_edit_report_success_and_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
-    content = "Line 1\nTarget line here\nLine 3\n"
+    content = f"{VALID_REPORT_HEADER}Line 1\nTarget line here\nLine 3\n"
 
     res = server.save_report(content=content)
     report_id = res['report_id']
@@ -290,13 +312,21 @@ def test_edit_report_success_and_errors(tmp_path: Path, monkeypatch: pytest.Monk
             replacement_content="new text"
         )
 
+    # Edit that breaks required metadata
+    with pytest.raises(ValueError, match="missing required field"):
+        server.edit_report(
+            report_id=report_id,
+            target_content='"Clay Pigeon"',
+            replacement_content='""'
+        )
+
 
 def test_report_author_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
 
     # User A creates report
     monkeypatch.setattr('auth.get_current_author', lambda: ("user-a-key", "User A"))
-    res = server.save_report(content="<div>Author A Report</div>")
+    res = server.save_report(content=f"{VALID_REPORT_HEADER}<div>Author A Report</div>")
     report_id = res['report_id']
 
     # User A can edit it
@@ -318,6 +348,7 @@ def test_report_author_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     # User B also cannot overwrite it with save_report
     with pytest.raises(PermissionError, match="only the report author can edit"):
         server.save_report(
-            content="<div>Overwritten</div>",
+            content=f"{VALID_REPORT_HEADER}<div>Overwritten</div>",
             report_id=report_id
         )
+

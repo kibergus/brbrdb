@@ -196,7 +196,7 @@ def parse_report_content(raw_content: str) -> Tuple[dict[str, Any], dict[str, An
             except Exception:
                 pass
 
-    # 3. Check for embedded script tag
+    # 4. Check for embedded script tag
     if not metadata:
         script_match = re.search(
             r'<script\s+type=["\']application/json["\']\s+id=["\']telemetry-report-data["\']\s*>(.*?)</script>',
@@ -211,11 +211,87 @@ def parse_report_content(raw_content: str) -> Tuple[dict[str, Any], dict[str, An
             except Exception:
                 pass
 
+    # 5. Check for any HTML comment with JSON (e.g. inside <head> or preceded by <!DOCTYPE html>)
+    if not metadata:
+        comment_search = re.search(r'<!--\s*(?:telemetry_report\s*)?(\{.*?\})\s*-->', raw_content, re.DOTALL)
+        if comment_search:
+            try:
+                parsed = json.loads(comment_search.group(1))
+                if isinstance(parsed, dict):
+                    metadata = parsed
+                    body_html = (
+                        raw_content[:comment_search.start()] +
+                        raw_content[comment_search.end():]
+                    ).strip()
+            except Exception:
+                pass
+
     # Normalize state dict
     state_val = metadata.get('state')
     state = state_val if isinstance(state_val, dict) else {}
 
     return metadata, state, body_html
+
+
+def validate_report_content(content: str) -> dict[str, Any]:
+    """Validate report content before saving or writing.
+
+    Ensures the report contains a valid metadata header with all required fields
+    necessary for rendering inside the Telemetry Viewer.
+
+    Raises:
+        ValueError: If metadata cannot be parsed or required fields are missing.
+    """
+    if not content or not content.strip():
+        raise ValueError("Report content cannot be empty.")
+
+    meta, state, body = parse_report_content(content)
+    if not meta:
+        raise ValueError(
+            "Report metadata could not be parsed. Telemetry reports must include a JSON metadata "
+            "header block at the top (<!-- { ... } -->) specifying meeting parameters and viewer state.\n"
+            "Example header:\n"
+            "<!-- {\n"
+            '  "title": "Turn Analysis Coaching Guide",\n'
+            '  "league": "kartsim",\n'
+            '  "class_name": "iame_waterswift_restricted_cadet_uk",\n'
+            '  "date": "2026-10-03",\n'
+            '  "track": "Whilton Mill",\n'
+            '  "session_id": "10_17_practice",\n'
+            '  "state": {\n'
+            '    "tab": "map",\n'
+            '    "rtab": "report",\n'
+            '    "sort": "turn",\n'
+            '    "turn": 5\n'
+            "  }\n"
+            "} -->"
+        )
+
+    has_sessions = bool(meta.get('sessions') and isinstance(meta.get('sessions'), list) and len(meta.get('sessions')) > 0)
+    league = meta.get('league')
+    class_name = meta.get('class_name') or meta.get('class')
+    date = meta.get('date')
+    track = meta.get('track')
+
+    if not has_sessions:
+        missing = []
+        if not league or not isinstance(league, str) or not league.strip():
+            missing.append("'league'")
+        if not class_name or not isinstance(class_name, str) or not class_name.strip():
+            missing.append("'class_name'")
+        if not date or not isinstance(date, str) or not date.strip():
+            missing.append("'date'")
+        if not track or not isinstance(track, str) or not track.strip():
+            missing.append("'track'")
+
+        if missing:
+            raise ValueError(
+                f"Report metadata is missing required field(s): {', '.join(missing)}. "
+                "Single-session reports must specify 'league', 'class_name', 'date', and 'track' "
+                "(or 'sessions' for multi-session reports) so they can be loaded in the Telemetry Viewer."
+            )
+
+    return meta
 
 
 def load_report(report_name: str, reports_dir: str | None = None) -> Tuple[dict[str, Any], dict[str, Any], str] | None:
@@ -231,3 +307,4 @@ def load_report(report_name: str, reports_dir: str | None = None) -> Tuple[dict[
         raw_content = f.read()
 
     return parse_report_content(raw_content)
+
