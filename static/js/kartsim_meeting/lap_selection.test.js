@@ -1041,6 +1041,38 @@ describe('lap_selection.js showRightPanelTab and Report Mode', () => {
             expect(Array.from(state.groupASelection)).toEqual(['sess_race-1']);
         });
 
+        it('does not update map polylines or expandable plots when selectLapsByCriteria is called in stats tab', () => {
+            const setMapSpy = vi.fn();
+            state.lapPolylines = {
+                'sess_race-1': [{ setMap: setMapSpy }]
+            };
+            state.activeTab = 'stats';
+            plotsSync.updateTelemetryPlots.mockClear();
+            plotsSync.renderExpandablePlots.mockClear();
+
+            selectLapsByCriteria('A', 'count', 1, 'sess_race');
+
+            expect(setMapSpy).not.toHaveBeenCalled();
+            expect(plotsSync.updateTelemetryPlots).not.toHaveBeenCalled();
+            expect(plotsSync.renderExpandablePlots).not.toHaveBeenCalled();
+        });
+
+        it('updates map polylines and expandable plots when selectLapsByCriteria is called in map tab', () => {
+            const setMapSpy = vi.fn();
+            state.lapPolylines = {
+                'sess_race-1': [{ setMap: setMapSpy }]
+            };
+            state.activeTab = 'map';
+            plotsSync.updateTelemetryPlots.mockClear();
+            plotsSync.renderExpandablePlots.mockClear();
+
+            selectLapsByCriteria('A', 'count', 1, 'sess_race');
+
+            expect(setMapSpy).toHaveBeenCalled();
+            expect(plotsSync.updateTelemetryPlots).toHaveBeenCalled();
+            expect(plotsSync.renderExpandablePlots).toHaveBeenCalled();
+        });
+
         it('renders multi-session sections in showSelectionMenu when multiple sessions exist', () => {
             let createdMenu = null;
             const makeMockElement = (tag) => {
@@ -1135,13 +1167,96 @@ describe('lap_selection.js showRightPanelTab and Report Mode', () => {
             expect(Array.from(state.groupASelection)).toEqual(['sess_practice-2', 'sess_practice-3']);
             expect(createdMenu).toBeNull(); // Menu closed
         });
+
+        it('renders multi-session sections in showSelectionMenu even when only one session exists', () => {
+            state.allSessionsData = [state.allSessionsData[0]];
+            let createdMenu = null;
+            const makeMockElement = (tag) => {
+                const children = [];
+                let _innerHTML = '';
+                let _textContent = '';
+                const el = {
+                    tagName: tag.toUpperCase(),
+                    id: '',
+                    className: '',
+                    classList: {
+                        add: vi.fn(c => { el.className += ' ' + c; }),
+                        contains: vi.fn(c => el.className.includes(c))
+                    },
+                    get innerHTML() {
+                        return _innerHTML || children.map(c => c.innerHTML).join('');
+                    },
+                    set innerHTML(val) {
+                        _innerHTML = val;
+                    },
+                    get textContent() {
+                        return _textContent || children.map(c => c.textContent || c.innerHTML).join(' ');
+                    },
+                    set textContent(val) {
+                        _textContent = val;
+                    },
+                    style: {},
+                    appendChild: vi.fn(child => { children.push(child); }),
+                    querySelectorAll: vi.fn(selector => {
+                        const results = [];
+                        const walk = (node) => {
+                            if (node !== el) {
+                                const classes = (node.className || '').split(' ');
+                                if (selector === '.menu-section' && classes.includes('menu-section')) results.push(node);
+                                if (selector === '.menu-btn-row button' && node.tagName === 'BUTTON') results.push(node);
+                            }
+                            (node._children || []).forEach(walk);
+                        };
+                        walk(el);
+                        return results;
+                    }),
+                    remove: vi.fn(() => { if (createdMenu === el) createdMenu = null; }),
+                    _children: children
+                };
+                return el;
+            };
+
+            const mockBody = {
+                appendChild: vi.fn(el => { createdMenu = el; })
+            };
+
+            vi.stubGlobal('document', {
+                body: mockBody,
+                getElementById: vi.fn(id => (createdMenu && createdMenu.id === id) ? createdMenu : null),
+                createElement: vi.fn(tag => makeMockElement(tag)),
+                querySelectorAll: vi.fn(() => []),
+                addEventListener: vi.fn(),
+                removeEventListener: vi.fn()
+            });
+
+            const mockEvent = {
+                target: {
+                    getBoundingClientRect: () => ({ left: 100, bottom: 50, top: 40, right: 120 })
+                },
+                preventDefault: vi.fn()
+            };
+
+            showSelectionMenu(mockEvent, 'A');
+
+            expect(createdMenu).toBeTruthy();
+            expect(createdMenu.classList.contains('multi-session')).toBe(true);
+
+            // Check section headers: All Sessions + 1 session
+            const sections = createdMenu.querySelectorAll('.menu-section');
+            expect(sections.length).toBe(2);
+
+            expect(sections[0].innerHTML).toContain('All Sessions');
+            expect(sections[1].innerHTML).toContain('Practice Session');
+        });
     });
 });
 
 describe('group management: addGroup, deleteGroup, toggleGroupEnabled', () => {
     beforeEach(() => {
+        state.activeTab = 'map';
         state.groups = ['A', 'B'];
-        state.groupSelections = { A: new Set(), B: new Set() };
+        state.groupSelectionsMap = { A: new Set(), B: new Set() };
+        state.groupSelectionsStats = { A: new Set(), B: new Set() };
         state.groupVisibilityMap = { A: true, B: false };
         state.groupVisibilityStats = { A: true, B: true };
         state.groupEnabled = { A: true, B: true };
@@ -1157,6 +1272,8 @@ describe('group management: addGroup, deleteGroup, toggleGroupEnabled', () => {
     it('adds group C and initializes its state', () => {
         addGroup();
         expect(state.groups).toContain('C');
+        expect(state.groupSelectionsMap['C']).toBeDefined();
+        expect(state.groupSelectionsStats['C']).toBeDefined();
         expect(state.groupSelections['C']).toBeDefined();
         expect(state.groupEnabled['C']).toBe(true);
     });
@@ -1169,6 +1286,8 @@ describe('group management: addGroup, deleteGroup, toggleGroupEnabled', () => {
     it('deletes group B and cleans up its state', () => {
         deleteGroup('B');
         expect(state.groups).not.toContain('B');
+        expect(state.groupSelectionsMap['B']).toBeUndefined();
+        expect(state.groupSelectionsStats['B']).toBeUndefined();
         expect(state.groupSelections['B']).toBeUndefined();
     });
 

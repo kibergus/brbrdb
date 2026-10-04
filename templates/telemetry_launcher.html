@@ -19,7 +19,7 @@
             </div>
             <div>
                 <h1 style="margin: 0; font-size: 1.5rem; font-weight: 700; color: var(--text-primary, #f8fafc); letter-spacing: -0.02em;">Telemetry Session Viewer</h1>
-                <p style="margin: 0.15rem 0 0 0; font-size: 0.875rem; color: var(--text-secondary, #94a3b8);">Paste links to sessions to open their telemetry and compare laps.</p>
+                <p style="margin: 0.15rem 0 0 0; font-size: 0.875rem; color: var(--text-secondary, #94a3b8);">Paste links to sessions or meetings to open their telemetry and compare laps.</p>
             </div>
         </div>
 
@@ -37,7 +37,7 @@
         <form id="telemetry-form" action="{{ url_for('location.telemetry_launcher') }}" method="POST" style="margin-top: 1.5rem;">
             <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.4rem;">
                 <label for="session-links" style="font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary, #94a3b8);">
-                    Session Links (one per line)
+                    Session Links or Telemetry Links (one per line)
                 </label>
                 <button type="button" id="btn-example" style="background: none; border: none; color: var(--accent, #38bdf8); font-size: 0.8rem; cursor: pointer; padding: 0; text-decoration: underline;">
                     Insert example link
@@ -48,7 +48,7 @@
                 id="session-links" 
                 name="session_links" 
                 rows="5" 
-                placeholder="https://brbrdb.brbrkitten.com/session/club100_south/cadet_lw/2026-09-12/Lydd/15_12_race_13_cadet_lightweight_south_c_final"
+                placeholder="https://brbrdb.brbrkitten.com/session/club100_south/cadet_lw/2026-09-12/Lydd/15_12_race_13_cadet_lightweight_south_c_final&#10;https://brbrdb.brbrkitten.com/telemetry/kartsim/iame_waterswift_restricted_cadet_uk/2026-10-03/Whilton%20Mill"
                 style="width: 100%; padding: 0.75rem 1rem; border-radius: 8px; background: #0f172a; border: 1px solid var(--border-color, #334155); color: var(--text-primary, #f8fafc); font-family: monospace, ui-monospace, SFMono-Regular, Consolas; font-size: 0.85rem; line-height: 1.5; resize: vertical; box-sizing: border-box; outline: none; transition: border-color 0.2s;"
                 onfocus="this.style.borderColor='var(--accent, #38bdf8)'"
                 onblur="this.style.borderColor='var(--border-color, #334155)'"
@@ -96,21 +96,68 @@
     const form = document.getElementById('telemetry-form');
     const exampleBtn = document.getElementById('btn-example');
 
-    const SESSION_REGEX = /\/session\/([^/\s?#]+)\/([^/\s?#]+)\/([^/\s?#]+)\/([^/\s?#]+)\/([^/\s?#]+)/g;
+    const URL_REGEX = /(?:https?:\/\/[^/\s]+)?\/(session|telemetry)\/([^/\s?#]+)\/([^/\s?#]+)\/([^/\s?#]+)\/([^/\s?#]+)(?:\/([^/\s?#]+))?\/?(?:\?([^\s#]+))?(?:#([^\s]*))?/g;
 
     function parseLinks(text) {
         const results = [];
         if (!text) return results;
         let match;
-        const regex = new RegExp(SESSION_REGEX);
+        const regex = new RegExp(URL_REGEX);
         while ((match = regex.exec(text)) !== null) {
-            results.push({
-                league: decodeURIComponent(match[1]),
-                className: decodeURIComponent(match[2]),
-                date: decodeURIComponent(match[3]),
-                track: decodeURIComponent(match[4]),
-                sessionId: decodeURIComponent(match[5])
-            });
+            const kind = match[1];
+            const p1 = match[2];
+            const p2 = match[3];
+            const p3 = match[4];
+            const p4 = match[5];
+            const p5 = match[6];
+            const qs = match[7];
+            const hash = match[8] ? '#' + match[8] : '';
+
+            if (kind === 'telemetry' && (p1 === 'report' || p1 === 'report_content')) {
+                continue;
+            }
+            if (kind === 'session' && !p5) {
+                continue;
+            }
+
+            const league = decodeURIComponent(p1);
+            const className = decodeURIComponent(p2);
+            const date = decodeURIComponent(p3);
+            const track = decodeURIComponent(p4);
+            const sessionId = p5 ? decodeURIComponent(p5) : null;
+
+            let sidsFromQuery = [];
+            if (qs) {
+                const queryParams = new URLSearchParams(qs);
+                if (!sessionId && queryParams.has('session_id')) {
+                    const raw = queryParams.get('session_id');
+                    sidsFromQuery = raw.split(',').map(s => s.trim()).filter(Boolean);
+                }
+            }
+
+            if (sidsFromQuery.length > 0) {
+                for (const sid of sidsFromQuery) {
+                    results.push({
+                        league: league,
+                        className: className,
+                        date: date,
+                        track: track,
+                        sessionId: sid,
+                        extraQuery: qs,
+                        hash: hash
+                    });
+                }
+            } else {
+                results.push({
+                    league: league,
+                    className: className,
+                    date: date,
+                    track: track,
+                    sessionId: sessionId,
+                    extraQuery: qs,
+                    hash: hash
+                });
+            }
         }
         return results;
     }
@@ -154,7 +201,12 @@
             item.style.display = 'flex';
             item.style.alignItems = 'center';
             item.style.gap = '0.4rem';
-            const label = meetings.length > 1 ? `${s.date} ${s.className}: ${s.sessionId}` : s.sessionId;
+            let label = s.sessionId;
+            if (!label) {
+                label = `${s.className} (${s.date}) - All Sessions`;
+            } else if (meetings.length > 1) {
+                label = `${s.date} ${s.className}: ${s.sessionId}`;
+            }
             item.innerHTML = `<span style="color: var(--accent, #38bdf8);">•</span> <span style="font-family: monospace; word-break: break-all;">${label}</span>`;
             sessionsList.appendChild(item);
         });
@@ -174,7 +226,7 @@
 
         if (sessions.length === 0) {
             e.preventDefault();
-            showError('Please enter at least one valid session link.');
+            showError('Please enter at least one valid session or telemetry link.');
             return;
         }
 
@@ -190,11 +242,35 @@
         const meetings = Array.from(new Set(sessions.map(s => `${s.league}/${s.className}/${s.date}`)));
         if (meetings.length === 1) {
             const first = sessions[0];
-            const sessionIds = Array.from(new Set(sessions.map(s => s.sessionId))).join(',');
-            const targetUrl = `/telemetry/${encodeURIComponent(first.league)}/${encodeURIComponent(first.className)}/${encodeURIComponent(first.date)}/${encodeURIComponent(first.track)}?session_id=${encodeURIComponent(sessionIds)}`;
+            const sessionIds = Array.from(new Set(sessions.map(s => s.sessionId).filter(Boolean))).join(',');
+            let targetUrl = `/telemetry/${encodeURIComponent(first.league)}/${encodeURIComponent(first.className)}/${encodeURIComponent(first.date)}/${encodeURIComponent(first.track)}`;
+            const queryParts = [];
+            if (sessionIds) {
+                queryParts.push(`session_id=${encodeURIComponent(sessionIds)}`);
+            }
+            if (sessions.length === 1 && first.extraQuery) {
+                const extraParams = new URLSearchParams(first.extraQuery);
+                extraParams.delete('session_id');
+                const extraStr = extraParams.toString();
+                if (extraStr) {
+                    queryParts.push(extraStr);
+                }
+            }
+            if (queryParts.length > 0) {
+                targetUrl += `?${queryParts.join('&')}`;
+            }
+            if (sessions.length === 1 && first.hash) {
+                targetUrl += first.hash;
+            }
             window.location.href = targetUrl;
         } else {
             const track = tracks[0];
+            const hasMissingSessionId = sessions.some(s => !s.sessionId);
+            if (hasMissingSessionId) {
+                // If any session doesn't have an explicit sessionId, submit to server so it can resolve DB sessions
+                form.submit();
+                return;
+            }
             const uniqueParams = Array.from(new Set(sessions.map(s => `${s.league}/${s.className}/${s.date}/${s.track}/${s.sessionId}`)));
             const query = uniqueParams.map(p => `session=${encodeURIComponent(p)}`).join('&');
             window.location.href = `/telemetry/${encodeURIComponent(track)}?${query}`;

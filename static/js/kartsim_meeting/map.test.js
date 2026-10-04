@@ -537,9 +537,13 @@ describe('loadTrackPoints default color mode', () => {
             KART_CONFIG: { getTrackPointsUrl: 'http://localhost/api/telemetry' }
         };
 
-        const laps = [];
+        const laps1 = [];
         for (let i = 1; i <= 10; i++) {
-            laps.push({ lap_num: i, lap_time: `4${i < 10 ? '0.' + i : '1.0'}`, start_idx: 0, end_idx: 1 });
+            laps1.push({ lap_num: i, lap_time: `4${i < 10 ? '0.' + i : '1.0'}`, start_idx: 0, end_idx: 1 });
+        }
+        const laps2 = [];
+        for (let i = 1; i <= 10; i++) {
+            laps2.push({ lap_num: i, lap_time: `4${i < 10 ? '1.' + i : '2.0'}`, start_idx: 0, end_idx: 1 });
         }
 
         global.fetch = vi.fn().mockImplementation((url) => {
@@ -559,7 +563,12 @@ describe('loadTrackPoints default color mode', () => {
                         {
                             session_id: 's1',
                             columns: ['Time', 'Latitude', 'Longitude', 'Speed'],
-                            laps: laps
+                            laps: laps1
+                        },
+                        {
+                            session_id: 's2',
+                            columns: ['Time', 'Latitude', 'Longitude', 'Speed'],
+                            laps: laps2
                         }
                     ])
                 });
@@ -573,9 +582,28 @@ describe('loadTrackPoints default color mode', () => {
 
         await loadTrackPoints();
 
-        expect(state.groupSelections.A.size).toBe(5);
+        // Number of groups matches number of sessions
+        expect(state.groups).toEqual(['A', 'B']);
+
+        // Map defaults: Top 3 fastest laps in A, none in B; A visible, B hidden
+        expect(state.groupSelectionsMap.A.size).toBe(3);
+        expect(state.groupSelectionsMap.B.size).toBe(0);
+        expect(state.isGroupVisible('A', 'map')).toBe(true);
+        expect(state.isGroupVisible('B', 'map')).toBe(false);
+
+        // Stats defaults: 75% fastest laps per session in corresponding group; both visible
         // 75% of 10 is ceil(7.5) = 8
-        expect(state.groupSelections.B.size).toBe(8);
+        expect(state.groupSelectionsStats.A.size).toBe(8);
+        expect(state.groupSelectionsStats.B.size).toBe(8);
+        expect(state.isGroupVisible('A', 'stats')).toBe(true);
+        expect(state.isGroupVisible('B', 'stats')).toBe(true);
+
+        // Dynamic getter reflects active tab
+        state.activeTab = 'map';
+        expect(state.groupSelections.A.size).toBe(3);
+        state.activeTab = 'stats';
+        expect(state.groupSelections.A.size).toBe(8);
+        state.activeTab = 'map';
 
         global.window = oldWindow;
         global.document = oldDocument;

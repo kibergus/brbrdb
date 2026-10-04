@@ -85,7 +85,10 @@ export function updateURL() {
 
         // 2. Group Lap Selection & Dynamic Groups
         const groups = state.groups || ['A', 'B'];
-        const isDefaultGroups = groups.length === 2 && groups[0] === 'A' && groups[1] === 'B';
+        const defaultGroups = (state.allSessionsData && state.allSessionsData.length > 0)
+            ? state.allSessionsData.map((_, i) => String.fromCharCode(65 + i))
+            : ['A', 'B'];
+        const isDefaultGroups = groups.length === defaultGroups.length && groups.every((g, idx) => g === defaultGroups[idx]);
         if (!isDefaultGroups) {
             params.set('groups', groups.join(','));
         } else {
@@ -99,24 +102,43 @@ export function updateURL() {
             params.delete('dis');
         }
 
-        // 3. Per-group Lap Selection and Visibility
+        // 3. Per-group Lap Selection and Visibility (Map: laps<G>, vis<G>; Stats: slaps<G>, svis<G>)
+        const mapSelections = state.getGroupSelections ? state.getGroupSelections('map') : (state.groupSelectionsMap || state.groupSelections || {});
+        const statsSelections = state.getGroupSelections ? state.getGroupSelections('stats') : (state.groupSelectionsStats || state.groupSelections || {});
+
         for (let code = 65; code <= 90; code++) { // 'A' to 'Z'
             const g = String.fromCharCode(code);
             if (groups.includes(g)) {
-                const selection = state.groupSelections ? state.groupSelections[g] : null;
-                if (selection) {
-                    if (selection.size > 0) {
-                        const formatted = Array.from(selection).map(formatLapForUrl).sort(compareShortLapKeys);
+                // Map selections and visibility
+                const mapSel = mapSelections ? mapSelections[g] : null;
+                if (mapSel) {
+                    if (mapSel.size > 0) {
+                        const formatted = Array.from(mapSel).map(formatLapForUrl).sort(compareShortLapKeys);
                         params.set('laps' + g, formatted.join(','));
                     } else {
                         params.set('laps' + g, 'none');
                     }
                 }
-                const isVis = state.isGroupVisible ? state.isGroupVisible(g) : (g === 'A' ? state.groupAVisible : state.groupBVisible);
-                params.set('vis' + g, isVis ? '1' : '0');
+                const isVisMap = state.isGroupVisible ? state.isGroupVisible(g, 'map') : (state.groupVisibilityMap ? state.groupVisibilityMap[g] : true);
+                params.set('vis' + g, isVisMap ? '1' : '0');
+
+                // Stats selections and visibility
+                const statsSel = statsSelections ? statsSelections[g] : null;
+                if (statsSel) {
+                    if (statsSel.size > 0) {
+                        const formatted = Array.from(statsSel).map(formatLapForUrl).sort(compareShortLapKeys);
+                        params.set('slaps' + g, formatted.join(','));
+                    } else {
+                        params.set('slaps' + g, 'none');
+                    }
+                }
+                const isVisStats = state.isGroupVisible ? state.isGroupVisible(g, 'stats') : (state.groupVisibilityStats ? state.groupVisibilityStats[g] : true);
+                params.set('svis' + g, isVisStats ? '1' : '0');
             } else {
                 params.delete('laps' + g);
                 params.delete('vis' + g);
+                params.delete('slaps' + g);
+                params.delete('svis' + g);
             }
         }
 

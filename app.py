@@ -798,14 +798,28 @@ def render_kartsim_league(league: str, class_name: str | None = None) -> str:
         meetings = all_year_meetings
 
     meeting_conditions: dict[tuple[str, str, str], str] = {}
+    meeting_sessions: dict[tuple[str, str, str], list[dict[str, str]]] = {}
     for c, d, t in meetings:
         sessions = db.find_sessions(leagues=league, classes=c, date=d, track=t)
         conds = set()
-        for s in sessions:
+        pills: list[dict[str, str]] = []
+        seen_sids: set[str] = set()
+        for s in sorted(sessions, key=lambda x: x.session_start_datetime or ''):
             if getattr(s, 'track_conditions', None):
                 conds.add(s.track_conditions)
+            if not s.session_id or s.session_id in seen_sids:
+                continue
+            seen_sids.add(s.session_id)
+            name = s.session_name or s.session_id
+            start = s.session_start_datetime or ''
+            if ' ' in start:
+                hhmm = start.split(' ')[1]
+                if hhmm not in name:
+                    name = f'{hhmm} {name}'
+            pills.append({'id': s.session_id, 'label': name})
         cond_str = ','.join(sorted(conds)) if conds else 'Unknown'
         meeting_conditions[(d, t, c)] = cond_str
+        meeting_sessions[(d, t, c)] = pills
 
     filtered_meetings = [m for m in meetings if m[0] == selected_class] if selected_class else meetings
 
@@ -854,6 +868,7 @@ def render_kartsim_league(league: str, class_name: str | None = None) -> str:
         kartsim_meetings=kartsim_meetings,
         kartsim_track_groups=kartsim_track_groups,
         meeting_conditions=meeting_conditions,
+        meeting_sessions=meeting_sessions,
         meeting_keys=[],
         meetings={},
         track_groups={},

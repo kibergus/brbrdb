@@ -679,16 +679,20 @@ export function loadTrackPoints(overrideSessionId) {
                 }
             }
 
-            // Check if URL specifies custom groups (e.g. groups=A,B,C)
+            // Set groups to match number of sessions if not specified in URL
             if (params.has('groups')) {
                 const urlGroups = params.get('groups').split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
                 if (urlGroups.length > 0) {
                     state.groups = urlGroups;
                 }
             } else {
-                for (let code = 67; code <= 90; code++) { // 'C' to 'Z'
+                const numSessions = sessionsData.length;
+                state.groups = numSessions > 0
+                    ? sessionsData.map((_, i) => String.fromCharCode(65 + i))
+                    : ['A'];
+                for (let code = 65 + state.groups.length; code <= 90; code++) {
                     const letter = String.fromCharCode(code);
-                    if (params.has('laps' + letter) || Boolean(reportState['laps' + letter])) {
+                    if (params.has('laps' + letter) || params.has('slaps' + letter) || Boolean(reportState['laps' + letter])) {
                         if (!state.groups.includes(letter)) {
                             state.groups.push(letter);
                         }
@@ -698,15 +702,28 @@ export function loadTrackPoints(overrideSessionId) {
 
             // Ensure selections and visibility exist for all groups
             state.groups.forEach(g => {
-                if (!state.groupSelections[g]) state.groupSelections[g] = new Set();
-                state.groupSelections[g].clear();
-                if (state.groupVisibilityMap[g] === undefined) state.groupVisibilityMap[g] = true;
-                if (state.groupVisibilityStats[g] === undefined) state.groupVisibilityStats[g] = true;
-                if (state.groupEnabled[g] === undefined) state.groupEnabled[g] = true;
+                if (!state.groupSelectionsMap[g]) state.groupSelectionsMap[g] = new Set();
+                state.groupSelectionsMap[g].clear();
+                if (!state.groupSelectionsStats[g]) state.groupSelectionsStats[g] = new Set();
+                state.groupSelectionsStats[g].clear();
 
                 if (params.has('vis' + g)) {
-                    state.setGroupVisible(g, params.get('vis' + g) === '1');
+                    state.groupVisibilityMap[g] = (params.get('vis' + g) === '1');
+                } else if (reportState['vis' + g] !== undefined) {
+                    state.groupVisibilityMap[g] = (reportState['vis' + g] === '1' || reportState['vis' + g] === true);
+                } else {
+                    state.groupVisibilityMap[g] = (g === 'A');
                 }
+
+                if (params.has('svis' + g)) {
+                    state.groupVisibilityStats[g] = (params.get('svis' + g) === '1');
+                } else if (reportState['svis' + g] !== undefined) {
+                    state.groupVisibilityStats[g] = (reportState['svis' + g] === '1' || reportState['svis' + g] === true);
+                } else {
+                    state.groupVisibilityStats[g] = true;
+                }
+
+                if (state.groupEnabled[g] === undefined) state.groupEnabled[g] = true;
             });
 
             if (params.has('dis')) {
@@ -718,34 +735,51 @@ export function loadTrackPoints(overrideSessionId) {
                 });
             }
 
-            // Parse custom laps per group
-            const customLapsMap = {};
-            const hasCustomLapsMap = {};
+            // Parse custom laps per group for Map and Stats
+            const customMapLaps = {};
+            const hasCustomMapLaps = {};
+            const customStatsLaps = {};
+            const hasCustomStatsLaps = {};
 
             state.groups.forEach(g => {
-                const paramName = 'laps' + g;
-                const urlVal = params.get(paramName);
-                let hasCustom = params.has(paramName) || Boolean(reportState[paramName]);
-                let customSet = new Set();
+                const paramMap = 'laps' + g;
+                const mapVal = params.get(paramMap);
+                const hasMap = params.has(paramMap) || Boolean(reportState[paramMap]);
+                const mapSet = new Set();
 
-                if (params.has(paramName)) {
-                    if (urlVal && urlVal !== 'none') {
-                        urlVal.split(',').forEach(id => {
+                if (params.has(paramMap)) {
+                    if (mapVal && mapVal !== 'none') {
+                        mapVal.split(',').forEach(id => {
                             const trimmed = id ? id.trim() : '';
-                            if (trimmed && trimmed !== 'none') customSet.add(trimmed);
+                            if (trimmed && trimmed !== 'none') mapSet.add(trimmed);
                         });
                     }
-                } else if (reportState[paramName]) {
-                    const arr = Array.isArray(reportState[paramName])
-                        ? reportState[paramName]
-                        : (reportState[paramName] === 'none' ? [] : String(reportState[paramName]).split(','));
+                } else if (reportState[paramMap]) {
+                    const arr = Array.isArray(reportState[paramMap])
+                        ? reportState[paramMap]
+                        : (reportState[paramMap] === 'none' ? [] : String(reportState[paramMap]).split(','));
                     arr.forEach(id => {
                         const trimmed = id ? String(id).trim() : '';
-                        if (trimmed && trimmed !== 'none') customSet.add(trimmed);
+                        if (trimmed && trimmed !== 'none') mapSet.add(trimmed);
                     });
                 }
-                hasCustomLapsMap[g] = hasCustom;
-                customLapsMap[g] = customSet;
+                hasCustomMapLaps[g] = hasMap;
+                customMapLaps[g] = mapSet;
+
+                const paramStats = 'slaps' + g;
+                const statsVal = params.get(paramStats);
+                const hasStats = params.has(paramStats);
+                const statsSet = new Set();
+                if (hasStats) {
+                    if (statsVal && statsVal !== 'none') {
+                        statsVal.split(',').forEach(id => {
+                            const trimmed = id ? id.trim() : '';
+                            if (trimmed && trimmed !== 'none') statsSet.add(trimmed);
+                        });
+                    }
+                }
+                hasCustomStatsLaps[g] = hasStats;
+                customStatsLaps[g] = statsSet;
             });
 
             let allLaps = [];
@@ -757,14 +791,22 @@ export function loadTrackPoints(overrideSessionId) {
                     if (isNaN(t)) return;
                     allLaps.push({
                         lapId: `${session.session_id}-${lap.lap_num}`,
-                        time: t
+                        time: t,
+                        sessionId: session.session_id
                     });
                 });
             });
             allLaps.sort((a, b) => a.time - b.time);
-            const fastest5Ids = new Set(allLaps.slice(0, 5).map(l => l.lapId));
-            const fastest75Count = Math.ceil(allLaps.length * 0.75);
-            const fastest75Ids = new Set(allLaps.slice(0, fastest75Count).map(l => l.lapId));
+            // Map default: Top 3 fastest laps overall for Group A
+            const fastest3Ids = new Set(allLaps.slice(0, 3).map(l => l.lapId));
+
+            // Stats defaults: Each group has 75% fastest laps in a corresponding session
+            const session75IdsMap = {};
+            sessionsData.forEach((session, sIdx) => {
+                const sLaps = allLaps.filter(l => l.sessionId === session.session_id);
+                const count75 = Math.ceil(sLaps.length * 0.75);
+                session75IdsMap[sIdx] = new Set(sLaps.slice(0, count75).map(l => l.lapId));
+            });
 
             let globalMaxSpeed = 0;
             let globalMinSpeed = Infinity;
@@ -803,16 +845,27 @@ export function loadTrackPoints(overrideSessionId) {
 
                     precalculateLapData(lap);
 
-                    state.groups.forEach(g => {
-                        if (hasCustomLapsMap[g]) {
-                            if (matchesRequestedLap(customLapsMap[g], lapId, session, lap, sIdx)) {
-                                state.groupSelections[g].add(lapId);
+                    state.groups.forEach((g, gIdx) => {
+                        // Map selection
+                        if (hasCustomMapLaps[g]) {
+                            if (matchesRequestedLap(customMapLaps[g], lapId, session, lap, sIdx)) {
+                                state.groupSelectionsMap[g].add(lapId);
                             }
                         } else {
-                            if (g === 'A' && fastest5Ids.has(lapId)) {
-                                state.groupSelections[g].add(lapId);
-                            } else if (g === 'B' && fastest75Ids.has(lapId)) {
-                                state.groupSelections[g].add(lapId);
+                            if (g === 'A' && fastest3Ids.has(lapId)) {
+                                state.groupSelectionsMap[g].add(lapId);
+                            }
+                        }
+
+                        // Stats selection
+                        if (hasCustomStatsLaps[g]) {
+                            if (matchesRequestedLap(customStatsLaps[g], lapId, session, lap, sIdx)) {
+                                state.groupSelectionsStats[g].add(lapId);
+                            }
+                        } else {
+                            const s75 = session75IdsMap[gIdx];
+                            if (s75 && s75.has(lapId)) {
+                                state.groupSelectionsStats[g].add(lapId);
                             }
                         }
                     });
@@ -822,7 +875,7 @@ export function loadTrackPoints(overrideSessionId) {
                     const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
                     const isRefLap = (lapId === refLapId);
                     const segZIndex = (state.trajectoryColorMode === 'delta_t') ? (isRefLap ? 1 : 5) : 1;
-                    const isVisible = state.getActiveGroups().some(g => state.groupSelections[g] && state.groupSelections[g].has(lapId) && state.isGroupVisible(g, 'map'));
+                    const isVisible = state.getActiveGroups().some(g => state.groupSelectionsMap[g] && state.groupSelectionsMap[g].has(lapId) && state.isGroupVisible(g, 'map'));
 
                     for (let i = 0; i < lap.points.length - 1; i++) {
                         const p1 = lap.points[i];

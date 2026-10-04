@@ -24,8 +24,10 @@ describe('url_sync.js updateURL', () => {
 
     beforeEach(() => {
         state.mapInitialized = true;
-        state.groupASelection = new Set();
-        state.groupBSelection = new Set();
+        state.activeTab = 'map';
+        state.groups = ['A', 'B'];
+        state.groupSelectionsMap = { A: new Set(), B: new Set() };
+        state.groupSelectionsStats = { A: new Set(), B: new Set() };
         state.allSessionsData = [];
         state.lapDataLookup = {};
         mockReplaceState = vi.fn();
@@ -45,19 +47,22 @@ describe('url_sync.js updateURL', () => {
         });
     });
 
-    it('sets lapsA=none and lapsB=none when selections are empty sets', () => {
+    it('sets lapsA=none, lapsB=none, slapsA=none, slapsB=none when selections are empty sets', () => {
         updateURL();
 
         expect(mockReplaceState).toHaveBeenCalled();
         const urlCall = mockReplaceState.mock.calls[0][2];
         expect(urlCall).toContain('lapsA=none');
         expect(urlCall).toContain('lapsB=none');
+        expect(urlCall).toContain('slapsA=none');
+        expect(urlCall).toContain('slapsB=none');
     });
 
-    it('sets lapsA and lapsB comma-separated lists when laps are selected without sessions data', () => {
-        state.groupASelection.add('lap-1');
-        state.groupASelection.add('lap-2');
-        state.groupBSelection.add('lap-3');
+    it('sets laps<G> and slaps<G> independently in URL', () => {
+        state.groupSelectionsMap.A.add('lap-1');
+        state.groupSelectionsMap.A.add('lap-2');
+        state.groupSelectionsMap.B.add('lap-3');
+        state.groupSelectionsStats.A.add('lap-stats-1');
 
         updateURL();
 
@@ -65,6 +70,8 @@ describe('url_sync.js updateURL', () => {
         const urlCall = mockReplaceState.mock.calls[0][2];
         expect(urlCall).toContain('lapsA=lap-1%2Clap-2');
         expect(urlCall).toContain('lapsB=lap-3');
+        expect(urlCall).toContain('slapsA=lap-stats-1');
+        expect(urlCall).toContain('slapsB=none');
     });
 
     it('encodes laps using session index and lap number when sessions data is available', () => {
@@ -138,7 +145,8 @@ describe('url_sync.js updateURL', () => {
 
         // Reset state for subsequent tests
         state.groups = ['A', 'B'];
-        delete state.groupSelections['C'];
+        delete state.groupSelectionsMap['C'];
+        delete state.groupSelectionsStats['C'];
         state.groupEnabled['B'] = true;
     });
 });

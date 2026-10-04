@@ -385,8 +385,17 @@ describe('telemetry.js', () => {
                 purge: mockPurge
             };
 
-            state.groupASelection = new Set(['lapA1', 'lapA2']);
-            state.groupBSelection = new Set(['lapB1']);
+            state.activeTab = 'map';
+            state.groupSelectionsMap = {
+                A: new Set(['lapA1', 'lapA2']),
+                B: new Set(['lapB1'])
+            };
+            state.groupSelectionsStats = {
+                A: new Set(),
+                B: new Set()
+            };
+            state.groupASelection = state.groupSelectionsMap.A;
+            state.groupBSelection = state.groupSelectionsMap.B;
             state.lapDataLookup = {
                 lapA1,
                 lapA2,

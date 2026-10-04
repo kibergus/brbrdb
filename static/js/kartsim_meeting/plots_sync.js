@@ -25,6 +25,7 @@ export { getSteeringTicks };
 import { debouncedUpdateURL } from './url_sync.js';
 import { updateAllPolylineColors } from './map.js';
 import { getGroupColor, hexToRgba } from './palette.js';
+import { getSessionColor } from './lap_selection.js';
 
 let lastPlotUpdate = 0;
 
@@ -224,10 +225,11 @@ export function updateAccelerationPlot(targetDist) {
     if (!state.trackData || !state.trackData.lap_length) return;
 
     const activeGroups = state.getActiveGroups ? state.getActiveGroups().filter(g => state.isGroupVisible(g, 'map')) : ['A', 'B'];
+    const mapSelections = state.getGroupSelections ? state.getGroupSelections('map') : state.groupSelections;
     const groupLapsMap = {};
     let allShownLaps = [];
     activeGroups.forEach(g => {
-        const sel = state.groupSelections[g] || [];
+        const sel = (mapSelections && mapSelections[g]) || [];
         const laps = Array.from(sel).map(id => {
             const lap = state.lapDataLookup[id];
             return lap ? { id, ...lap } : null;
@@ -532,10 +534,11 @@ export function updateSlipAnglePlot(targetDist) {
     }
 
     const activeGroups = state.getActiveGroups ? state.getActiveGroups().filter(g => state.isGroupVisible(g, 'map')) : ['A', 'B'];
+    const mapSelections = state.getGroupSelections ? state.getGroupSelections('map') : state.groupSelections;
     const groupLapsMap = {};
     let allShownLaps = [];
     activeGroups.forEach(g => {
-        const sel = state.groupSelections[g] || [];
+        const sel = (mapSelections && mapSelections[g]) || [];
         const laps = Array.from(sel).map(id => {
             const lap = state.lapDataLookup[id];
             return lap ? { id, ...lap } : null;
@@ -1091,10 +1094,11 @@ export function updateTelemetryPlots(targetDist) {
     state.lapToPlotIndices.braking = {};
 
     const activeGroups = state.getActiveGroups ? state.getActiveGroups().filter(g => state.isGroupVisible(g, 'map')) : ['A', 'B'];
+    const mapSelections = state.getGroupSelections ? state.getGroupSelections('map') : state.groupSelections;
 
     const selectedIds = new Set();
     activeGroups.forEach(g => {
-        (state.groupSelections[g] || []).forEach(id => selectedIds.add(id));
+        ((mapSelections && mapSelections[g]) || []).forEach(id => selectedIds.add(id));
     });
 
     const lapTimeMap = {};
@@ -1117,7 +1121,7 @@ export function updateTelemetryPlots(targetDist) {
     let hasAnyData = false;
 
     activeGroups.forEach(g => {
-        const sel = state.groupSelections[g] || [];
+        const sel = (mapSelections && mapSelections[g]) || [];
         const speedVals = [];
         const speedLaps = [];
         const speedTimes = [];
@@ -1351,12 +1355,13 @@ export function renderDeltaPlot() {
         const refLapId = state.fastestGroupALapId || state.fastestSelectedLapId || (refLap && (refLap.lapId || `${refLap.session_id}-${refLap.lap_num}`));
 
         const activeGroups = state.getActiveGroups ? state.getActiveGroups().filter(g => state.isGroupVisible(g, 'map')) : ['A', 'B'];
+        const mapSelections = state.getGroupSelections ? state.getGroupSelections('map') : state.groupSelections;
         const groupLapsMap = {};
         let totalLapsCount = 0;
         let allLapsInDelta = [];
 
         activeGroups.forEach(g => {
-            const sel = state.groupSelections[g] || [];
+            const sel = (mapSelections && mapSelections[g]) || [];
             const laps = Array.from(sel).map(id => {
                 return { lapId: id, ...state.lapDataLookup[id] };
             }).filter(l => l && l.points && l.points.length > 0);
@@ -1464,7 +1469,8 @@ export function renderDeltaPlot() {
                         x: traceData.x, y: traceData.y, mode: 'lines',
                         name: formatDeltaLabel(lap, suffix),
                         line: { color: hexToRgba(color, alpha), width: 2, dash: 'solid' },
-                        hoverinfo: 'none'
+                        hoverinfo: 'none',
+                        meta: { lapNum: lap.lap_num, isOutlap: !!lap.is_outlap, sessionId: lap.sessionId || lap.session_id, lapKey: lap.lapId, valueLabel: 'Δt' }
                     });
                 }
             });
@@ -1518,6 +1524,7 @@ export function renderDeltaPlot() {
             Plotly.react(targetEl, data, layout, config);
             updateDeltaYLim();
         }
+        attachBottomPlotHover(targetEl);
     } catch (e) {
         console.error("Delta Plot Error:", e);
     }
@@ -1536,12 +1543,13 @@ export function renderSpeedPlot() {
         state.bottomPlotIndices['plot-area-speed'] = {};
 
         const activeGroups = state.getActiveGroups ? state.getActiveGroups().filter(g => state.isGroupVisible(g, 'map')) : ['A', 'B'];
+        const mapSelections = state.getGroupSelections ? state.getGroupSelections('map') : state.groupSelections;
         const groupLapsMap = {};
         let totalLapsCount = 0;
         let allLapsInSpeed = [];
 
         activeGroups.forEach(g => {
-            const sel = state.groupSelections[g] || [];
+            const sel = (mapSelections && mapSelections[g]) || [];
             const laps = Array.from(sel).map(id => {
                 return { lapId: id, ...state.lapDataLookup[id] };
             }).filter(l => l && l.points && l.points.length > 0);
@@ -1600,7 +1608,8 @@ export function renderSpeedPlot() {
                         x: x, y: y, mode: 'lines',
                         name: formatSpeedLabel(lap, suffix),
                         line: { color: hexToRgba(color, alpha), width: 2, dash: 'solid' },
-                        hoverinfo: 'none'
+                        hoverinfo: 'none',
+                        meta: { lapNum: lap.lap_num, isOutlap: !!lap.is_outlap, sessionId: lap.sessionId || lap.session_id, lapKey: lap.lapId, valueLabel: 'Speed' }
                     });
                 }
             });
@@ -1651,6 +1660,7 @@ export function renderSpeedPlot() {
             Plotly.react(targetEl, data, layout, config);
             updateSpeedYLim();
         }
+        attachBottomPlotHover(targetEl);
     } catch (e) {
         console.error("Speed Plot Error:", e);
     }
@@ -1755,9 +1765,10 @@ export function renderSingleChannelPlot(activeTab) {
         const data = [];
 
         const activeGroups = state.getActiveGroups ? state.getActiveGroups().filter(g => state.isGroupVisible(g, 'map')) : ['A', 'B'];
+        const mapSelections = state.getGroupSelections ? state.getGroupSelections('map') : state.groupSelections;
         const groupLapsMap = {};
         activeGroups.forEach(g => {
-            const sel = state.groupSelections[g] || [];
+            const sel = (mapSelections && mapSelections[g]) || [];
             groupLapsMap[g] = sortLapsByTime(Array.from(sel).map(id => {
                 const lap = state.lapDataLookup[id];
                 return lap ? { id, ...lap } : null;
@@ -2152,6 +2163,7 @@ export function renderSingleChannelPlot(activeTab) {
                 }
             }
             updateChannelYLim(activeTab, false);
+            attachBottomPlotHover(targetEl);
             if (!targetEl._legendClickBound) {
                 targetEl.on('plotly_legendclick', function (eventData) {
                     const gd = targetEl;
@@ -2232,9 +2244,140 @@ export function addTrace(data, lap, field, color, width, dash = 'solid', customN
         name: customName || `Lap ${lap.lap_num} ${field}`,
         line: { color: color, width: width, dash: dash },
         hoverinfo: 'none', yaxis: yaxis === 'y' ? 'y' : yaxis, showlegend: showlegend,
-        visible: visible
+        visible: visible,
+        meta: {
+            lapNum: lap.lap_num,
+            isOutlap: !!lap.is_outlap,
+            sessionId: lap.sessionId || lap.session_id,
+            lapKey: lapId
+        }
     });
 }
+
+function _interpAt(xs, ys, x) {
+    const n = xs.length;
+    if (n === 0 || x < xs[0] || x > xs[n - 1]) return null;
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (xs[mid] <= x) lo = mid; else hi = mid;
+    }
+    const x0 = xs[lo], x1 = xs[hi];
+    const y0 = Number(ys[lo]), y1 = Number(ys[hi]);
+    if (isNaN(y0) || isNaN(y1)) return null;
+    if (x1 === x0) return y0;
+    return y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+}
+
+const _hoverPlots = new Set();
+
+function _hideHover(gd) {
+    if (!gd._hoverEls) return;
+    gd._hoverEls.line.style.display = 'none';
+    gd._hoverEls.tip.style.display = 'none';
+}
+
+function _renderHover(gd, dist) {
+    const { line, tip } = gd._hoverEls;
+    const fl = gd._fullLayout;
+    if (!fl || !fl.xaxis || !gd.data) return _hideHover(gd);
+    const xa = fl.xaxis, ya = fl.yaxis;
+    const px = xa.d2p(dist);
+    if (!(px >= 0 && px <= xa._length)) return _hideHover(gd);
+
+    // Group values by lap, preserving trace order.
+    const laps = new Map();
+    const hasY2 = !!fl.yaxis2;
+    gd.data.forEach(trace => {
+        if (!trace.meta || trace.visible === 'legendonly' || trace.visible === false) return;
+        const v = _interpAt(trace.x, trace.y, dist);
+        if (v === null) return;
+        const key = `${trace.meta.sessionId || ''}|${trace.meta.lapKey ?? trace.meta.lapNum}`;
+        if (!laps.has(key)) laps.set(key, { meta: trace.meta, rows: [] });
+        let label = trace.meta.valueLabel || (trace.name || '').replace(/ \([A-Z]\)$/, '');
+        if (hasY2) {
+            const axTitle = (trace.yaxis === 'y2' ? fl.yaxis2 : fl.yaxis).title;
+            const t = axTitle && (axTitle.text || axTitle);
+            if (typeof t === 'string' && t) label += ` (${t.split(' ')[0]})`;
+        }
+        laps.get(key).rows.push({ label, v, color: trace.line && trace.line.color });
+    });
+    if (laps.size === 0) return _hideHover(gd);
+
+    const fmt = (v) => Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(2);
+    const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    let html = `<div style="color:#94a3b8;margin-bottom:2px;">${dist.toFixed(1)} m</div>`;
+    laps.forEach(({ meta, rows }) => {
+        const sColor = getSessionColor(meta.sessionId);
+        const name = meta.isOutlap ? 'Outlap' : `Lap ${meta.lapNum}`;
+        html += `<div><span style="color:${sColor};font-weight:600;">${name}</span> ` +
+            rows.map(r => `<span style="color:${r.color || '#e2e8f0'};">${esc(r.label)} ${fmt(r.v)}</span>`).join(' &nbsp;') +
+            '</div>';
+    });
+    tip.innerHTML = html;
+
+    const lineX = xa._offset + px;
+    line.style.left = `${lineX}px`;
+    line.style.top = `${ya._offset}px`;
+    line.style.height = `${ya._length}px`;
+    line.style.display = 'block';
+
+    tip.style.display = 'block';
+    const tw = tip.offsetWidth;
+    const left = (lineX + 12 + tw > gd.clientWidth) ? lineX - 12 - tw : lineX + 12;
+    tip.style.left = `${Math.max(0, left)}px`;
+    tip.style.top = `${ya._offset + 4}px`;
+}
+
+function _broadcastHover(dist) {
+    _hoverPlots.forEach(p => {
+        if (!p.isConnected) { _hoverPlots.delete(p); return; }
+        if (p.offsetParent === null) return;
+        if (dist === null) _hideHover(p); else _renderHover(p, dist);
+    });
+}
+
+/**
+ * Attaches a vertical cursor line and a tooltip with per-lap values to a bottom plot.
+ * Hovering any attached plot shows the cursor and tooltip on all of them.
+ * Lap labels are coloured with the session colour.
+ */
+export function attachBottomPlotHover(gd) {
+    if (!gd || typeof gd.addEventListener !== 'function' || typeof gd.appendChild !== 'function') return;
+    if (gd._bottomHoverBound) {
+        const els = gd._hoverEls;
+        if (els && !els.line.isConnected) { gd.appendChild(els.line); gd.appendChild(els.tip); }
+        return;
+    }
+    gd._bottomHoverBound = true;
+    if (typeof getComputedStyle === 'function' && getComputedStyle(gd).position === 'static') gd.style.position = 'relative';
+
+    const line = document.createElement('div');
+    line.className = 'bottom-plot-hover-line';
+    line.style.cssText = 'position:absolute;width:1px;background:rgba(255,255,255,0.55);pointer-events:none;display:none;z-index:20;';
+    const tip = document.createElement('div');
+    tip.className = 'bottom-plot-hover-tip';
+    tip.style.cssText = 'position:absolute;pointer-events:none;display:none;z-index:21;padding:6px 8px;border-radius:6px;' +
+        'background:rgba(15,23,42,0.92);border:1px solid rgba(255,255,255,0.15);font-size:11px;line-height:1.4;' +
+        'color:#e2e8f0;white-space:nowrap;max-height:90%;overflow:hidden;';
+    gd.appendChild(line);
+    gd.appendChild(tip);
+    gd._hoverEls = { line, tip };
+    _hoverPlots.add(gd);
+
+    gd.addEventListener('mouseleave', () => _broadcastHover(null));
+    gd.addEventListener('mousemove', (ev) => {
+        const fl = gd._fullLayout;
+        if (!fl || !fl.xaxis || !gd.data) return _broadcastHover(null);
+        const xa = fl.xaxis, ya = fl.yaxis;
+        const rect = gd.getBoundingClientRect();
+        const px = ev.clientX - rect.left - xa._offset;
+        const py = ev.clientY - rect.top;
+        if (px < 0 || px > xa._length || py < ya._offset || py > ya._offset + ya._length) return _broadcastHover(null);
+        _broadcastHover(xa.p2d(px));
+    });
+}
+
 
 export function addCommonPlotElements(layout) {
     const xPos = state.currentTargetDist;

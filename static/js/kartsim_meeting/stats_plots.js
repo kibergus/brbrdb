@@ -109,7 +109,8 @@ export function renderStatsPlots() {
   activeGroups.forEach(group => {
     const isVis = state.isGroupVisible ? state.isGroupVisible(group, 'stats') : true;
     if (isVis) {
-      const sel = (state.groupSelections && state.groupSelections[group]) || [];
+      const statsSelections = state.getGroupSelections ? state.getGroupSelections('stats') : state.groupSelections;
+      const sel = (statsSelections && statsSelections[group]) || [];
       sel.forEach(lapId => {
         const lap = state.lapDataLookup ? state.lapDataLookup[lapId] : null;
         if (lap) {
@@ -188,13 +189,39 @@ export function renderStatsPlots() {
 }
 
 /**
+ * Returns the union of laps across all visible groups; a lap present in
+ * several groups is counted once.
+ */
+function uniqueLaps(laps) {
+  const seen = new Set();
+  const result = [];
+  laps.forEach(l => {
+    const key = l.lapId !== undefined ? l.lapId : (l.session_id !== undefined ? `${l.session_id}-${l.lap_num}` : null);
+    if (key !== null) {
+      if (seen.has(key)) return;
+      seen.add(key);
+    }
+    result.push(l);
+  });
+  return result;
+}
+
+/**
+ * Computes per-turn mean-min diffs over the union of all visible groups' laps.
+ */
+function computeVisibleTurnDiffs(laps, numTurns) {
+  const union = uniqueLaps(laps).map(l => ({ ...l, group: 'B' }));
+  return computeGroupBTurnDiffs(union, numTurns);
+}
+
+/**
  * Calculates and renders summary statistics (Best Lap, Theoretical Best).
  */
 function renderSummaryStats(laps) {
   const summaryContainer = document.getElementById('stats-summary-values');
   if (!summaryContainer) return;
 
-  const validLaps = laps.filter(l => l.is_valid !== false);
+  const validLaps = uniqueLaps(laps).filter(l => l.is_valid !== false);
 
   // Best Lap
   const lapTimes = validLaps.map(l => parseLapTime(l.lap_time)).filter(t => t > 0);
@@ -348,7 +375,7 @@ function renderTurnGapsPlot(laps) {
     });
   });
 
-  const groupBDiffs = computeGroupBTurnDiffs(laps, turns.length);
+  const groupBDiffs = computeVisibleTurnDiffs(laps, turns.length);
   const redThreshold = getRedThreshold(Math.max(...groupBDiffs, 0));
 
   const MAX_GAP = 2.0;
@@ -677,7 +704,7 @@ export function renderStatsMinimap(laps) {
   }
 
   const numTurns = state.trackData.turns.length;
-  const groupBDiffs = computeGroupBTurnDiffs(laps, numTurns);
+  const groupBDiffs = computeVisibleTurnDiffs(laps, numTurns);
 
   container.innerHTML = generateMinimapSvg(state.trackData, {
     turn_diffs: groupBDiffs

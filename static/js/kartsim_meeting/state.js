@@ -33,9 +33,33 @@ export const state = {
 
     // Dynamic groups state
     groups: ['A', 'B'],
-    groupSelections: {
+    groupSelectionsMap: {
         A: new Set(),
         B: new Set()
+    },
+    groupSelectionsStats: {
+        A: new Set(),
+        B: new Set()
+    },
+
+    get groupSelections() {
+        return (this.activeTab === 'stats')
+            ? this.groupSelectionsStats
+            : this.groupSelectionsMap;
+    },
+    set groupSelections(val) {
+        if (this.activeTab === 'stats') {
+            this.groupSelectionsStats = val;
+        } else {
+            this.groupSelectionsMap = val;
+        }
+    },
+
+    getGroupSelections(tab) {
+        const targetTab = tab || this.activeTab;
+        return (targetTab === 'stats')
+            ? this.groupSelectionsStats
+            : this.groupSelectionsMap;
     },
     groupVisibilityMap: {
         A: true,

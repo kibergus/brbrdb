@@ -1086,6 +1086,24 @@ def test_parse_session_urls() -> None:
 
     assert sessions[1]['session_id'] == '12_14_race_3_cadet_lightweight_south_group_2_qualifying'
 
+    # Test telemetry URL support (meeting-level without session_id and with session_id)
+    telem_text = (
+        "https://brbrdb.brbrkitten.com/telemetry/kartsim/"
+        "iame_waterswift_restricted_cadet_uk/2026-10-03/Whilton%20Mill\n"
+        "https://brbrdb.brbrkitten.com/telemetry/kartsim/"
+        "iame_waterswift_restricted_cadet_uk/2026-10-03/Whilton%20Mill?session_id=sess1,sess2"
+    )
+    telem_sessions = location_handlers.parse_session_urls(telem_text)
+    assert len(telem_sessions) == 3
+    assert telem_sessions[0]['league'] == 'kartsim'
+    assert telem_sessions[0]['class_name'] == 'iame_waterswift_restricted_cadet_uk'
+    assert telem_sessions[0]['date'] == '2026-10-03'
+    assert telem_sessions[0]['track'] == 'Whilton Mill'
+    assert telem_sessions[0]['session_id'] is None
+
+    assert telem_sessions[1]['session_id'] == 'sess1'
+    assert telem_sessions[2]['session_id'] == 'sess2'
+
 
 def test_telemetry_launcher_get() -> None:
     client = flask_app.app.test_client()
@@ -1135,6 +1153,36 @@ def test_telemetry_launcher_post_multiple_valid() -> None:
         assert resp.headers['Location'] == (
             '/telemetry/club100_south/cadet_lw/2026-09-12/Lydd?session_id=12_14_race_3,15_12_race_13'
         )
+
+
+def test_telemetry_launcher_post_telemetry_meeting_link() -> None:
+    client = flask_app.app.test_client()
+    url = (
+        'https://brbrdb.brbrkitten.com/telemetry/kartsim/iame_waterswift_restricted_cadet_uk/'
+        '2026-10-03/Whilton%20Mill'
+    )
+    with patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': True}):
+        resp = client.post('/telemetry/', data={'session_links': url})
+        assert resp.status_code == 302
+        assert resp.headers['Location'] == (
+            '/telemetry/kartsim/iame_waterswift_restricted_cadet_uk/2026-10-03/Whilton%20Mill'
+        )
+
+
+def test_telemetry_launcher_post_telemetry_link_with_params() -> None:
+    client = flask_app.app.test_client()
+    url = (
+        'https://brbrdb.brbrkitten.com/telemetry/kartsim/iame_waterswift_restricted_cadet_uk/'
+        '2026-10-03/Whilton%20Mill?session_id=12_30_practice&tab=map#lap-5'
+    )
+    with patch('location_handlers.auth.get_current_acl', return_value={'see_telemetry': True}):
+        resp = client.post('/telemetry/', data={'session_links': url})
+        assert resp.status_code == 302
+        loc = resp.headers['Location']
+        assert loc.startswith('/telemetry/kartsim/iame_waterswift_restricted_cadet_uk/2026-10-03/Whilton%20Mill?')
+        assert 'session_id=12_30_practice' in loc
+        assert 'tab=map' in loc
+        assert loc.endswith('#lap-5')
 
 
 def test_telemetry_launcher_post_different_tracks() -> None:

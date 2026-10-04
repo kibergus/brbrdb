@@ -60,3 +60,37 @@ describe('state.js group visibility getters/setters', () => {
         expect(state.groupBVisibleMap).toBe(false);
     });
 });
+
+describe('state.js group selections getters/setters', () => {
+    beforeEach(() => {
+        state.activeTab = 'map';
+        state.groupSelectionsMap = { A: new Set(['lap-map-1']), B: new Set(['lap-map-2']) };
+        state.groupSelectionsStats = { A: new Set(['lap-stats-1', 'lap-stats-2']), B: new Set(['lap-stats-3']) };
+    });
+
+    it('returns map selections when activeTab is map', () => {
+        state.activeTab = 'map';
+        expect(state.groupSelections.A.has('lap-map-1')).toBe(true);
+        expect(state.groupSelections.A.has('lap-stats-1')).toBe(false);
+    });
+
+    it('returns stats selections when activeTab is stats', () => {
+        state.activeTab = 'stats';
+        expect(state.groupSelections.A.has('lap-stats-1')).toBe(true);
+        expect(state.groupSelections.A.has('lap-map-1')).toBe(false);
+    });
+
+    it('getGroupSelections explicitly returns map or stats selections regardless of activeTab', () => {
+        state.activeTab = 'map';
+        expect(state.getGroupSelections('stats').A.has('lap-stats-1')).toBe(true);
+        expect(state.getGroupSelections('map').A.has('lap-map-1')).toBe(true);
+    });
+
+    it('mutating groupSelections in stats tab does not affect map tab', () => {
+        state.activeTab = 'stats';
+        state.groupSelections.A.add('lap-stats-new');
+        expect(state.groupSelectionsStats.A.has('lap-stats-new')).toBe(true);
+        expect(state.groupSelectionsMap.A.has('lap-stats-new')).toBe(false);
+    });
+});
+

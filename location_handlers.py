@@ -17,7 +17,7 @@ import os
 import re
 import csv
 import logging
-from urllib.parse import unquote, quote
+from urllib.parse import unquote, quote, parse_qs
 from typing import Any
 from flask import Blueprint, render_template, abort, request, jsonify, Response, url_for, redirect
 import werkzeug.wrappers as werkzeug_wrappers
@@ -463,23 +463,61 @@ class TelemetrySessionItem:
 
 
 SESSION_URL_PATTERN = re.compile(
-    r'/session/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)'
+    r'(?:https?://[^/\s]+)?/(session|telemetry)/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)/([^/\s?#]+)'
+    r'(?:/([^/\s?#]+))?/?(?:\?([^\s#]+))?(?:#([^\s]*))?'
 )
 
 
-def parse_session_urls(text: str) -> list[dict[str, str]]:
-    """Parse session URLs from pasted text and extract session metadata."""
-    results: list[dict[str, str]] = []
+def parse_session_urls(text: str) -> list[dict[str, Any]]:
+    """Parse session and telemetry URLs from pasted text and extract session metadata."""
+    results: list[dict[str, Any]] = []
     if not text:
         return results
     for match in SESSION_URL_PATTERN.finditer(text):
-        league, class_name, date, track, session_id = [unquote(p) for p in match.groups()]
+        kind, p1, p2, p3, p4, p5, qs, frag = match.groups()
+        if kind == 'telemetry' and p1 in ('report', 'report_content'):
+            continue
+        if kind == 'session' and not p5:
+            continue
+
+        league = unquote(p1)
+        class_name = unquote(p2)
+        date = unquote(p3)
+        track = unquote(p4)
+        session_id = unquote(p5) if p5 else None
+
+        query_params: dict[str, str] = {}
+        if qs:
+            parsed_qs = parse_qs(qs)
+            for k, v in parsed_qs.items():
+                query_params[k] = ','.join(v)
+            if not session_id and 'session_id' in parsed_qs:
+                raw_sids = parsed_qs['session_id']
+                sids: list[str] = []
+                for s in raw_sids:
+                    sids.extend([item.strip() for item in s.split(',') if item.strip()])
+                if sids:
+                    for sid in sids:
+                        results.append({
+                            'league': league,
+                            'class_name': class_name,
+                            'date': date,
+                            'track': track,
+                            'session_id': sid,
+                            'query_params': query_params,
+                            'hash': f'#{frag}' if frag else '',
+                            'original_url': match.group(0)
+                        })
+                    continue
+
         results.append({
             'league': league,
             'class_name': class_name,
             'date': date,
             'track': track,
             'session_id': session_id,
+            'query_params': query_params,
+            'hash': f'#{frag}' if frag else '',
             'original_url': match.group(0)
         })
     return results
@@ -505,7 +543,8 @@ def _resolve_report_session_params(meta: dict[str, Any], track: str | None = Non
             parsed = parse_session_urls(s_clean)
             if parsed:
                 p = parsed[0]
-                params.append(f"{p['league']}/{p['class_name']}/{p['date']}/{p['track']}/{p['session_id']}")
+                if p.get('session_id'):
+                    params.append(f"{p['league']}/{p['class_name']}/{p['date']}/{p['track']}/{p['session_id']}")
             elif s_clean.count('/') == 4:
                 params.append(s_clean)
         if params:
@@ -728,7 +767,8 @@ def telemetry_launcher() -> str | werkzeug_wrappers.Response | Response:
         if not sessions:
             error = (
                 "No valid session links found. Please paste URLs like "
-                "https://brbrdb.brbrkitten.com/session/<league>/<class>/<date>/<track>/<session_id>"
+                "https://brbrdb.brbrkitten.com/session/<league>/<class>/<date>/<track>/<session_id> or "
+                "https://brbrdb.brbrkitten.com/telemetry/<league>/<class>/<date>/<track>"
             )
         else:
             tracks = list(dict.fromkeys(s['track'] for s in sessions))
@@ -749,20 +789,44 @@ def telemetry_launcher() -> str | werkzeug_wrappers.Response | Response:
                     league = sessions[0]['league']
                     class_name = sessions[0]['class_name']
                     date = sessions[0]['date']
-                    session_ids = list(dict.fromkeys(s['session_id'] for s in sessions))
-                    target_url = url_for(
-                        'location.telemetry_view',
-                        league=league,
-                        class_name=class_name,
-                        date=date,
-                        track=track,
-                        session_id=','.join(session_ids)
-                    )
+                    session_ids = list(dict.fromkeys(s['session_id'] for s in sessions if s.get('session_id')))
+                    kwargs: dict[str, Any] = {
+                        'league': league,
+                        'class_name': class_name,
+                        'date': date,
+                        'track': track,
+                    }
+                    if session_ids:
+                        kwargs['session_id'] = ','.join(session_ids)
+                    if len(sessions) == 1 and sessions[0].get('query_params'):
+                        for k, v in sessions[0]['query_params'].items():
+                            if k not in kwargs and k != 'session_id':
+                                kwargs[k] = v
+                    target_url = url_for('location.telemetry_view', **kwargs)
+                    if len(sessions) == 1 and sessions[0].get('hash'):
+                        target_url += sessions[0]['hash']
                 else:
-                    session_params = list(dict.fromkeys(
-                        f"{s['league']}/{s['class_name']}/{s['date']}/{s['track']}/{s['session_id']}"
-                        for s in sessions
-                    ))
+                    session_params = []
+                    for s in sessions:
+                        if s.get('session_id'):
+                            session_params.append(
+                                f"{s['league']}/{s['class_name']}/{s['date']}/{s['track']}/{s['session_id']}"
+                            )
+                        else:
+                            found = db.find_sessions(
+                                leagues=s['league'], classes=s['class_name'], date=s['date'], track=s['track']
+                            )
+                            for fs in found:
+                                cls = (
+                                    fs.class_name[0]
+                                    if isinstance(fs.class_name, list) and fs.class_name
+                                    else str(fs.class_name)
+                                )
+                                session_params.append(
+                                    f"{fs.league}/{cls}/{fs.date or s['date']}/{fs.track_name or s['track']}/"
+                                    f"{fs.session_id}"
+                                )
+                    session_params = list(dict.fromkeys(session_params))
                     target_url = url_for(
                         'location.telemetry_track_view',
                         track=track,

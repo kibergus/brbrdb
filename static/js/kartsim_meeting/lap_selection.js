@@ -639,12 +639,19 @@ export function showTab(tabId) {
             // Update group visibility icons for the active tab
             updateVisibilityIcons();
 
+            // Re-render lap checkboxes and master checkboxes to reflect active tab's selection
+            renderLapList();
+            updateSelectAllCheckboxes();
+
             if (tabId === 'map') {
                 if ((!state.globalTelemetryXRange || state.globalTelemetryXRange.length !== 2) && state.trackData && state.trackData.lap_length) {
                     state.globalTelemetryXRange = [0, state.trackData.lap_length];
                 }
+                updateFastestSelectedLap();
                 // Update map polylines for the Map tab
-                Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+                if (state.lapPolylines) {
+                    Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+                }
                 // Refresh bottom plots to respect Map tab's visibility settings
                 renderExpandablePlots();
                 // Ensure right panel chart is refreshed and resized
@@ -1021,11 +1028,19 @@ export function setSort(mode, turnIdx = undefined) {
         }
     }
     
-    updateFastestSelectedLap();
     renderLapList();
-    updateTelemetryPlots(state.currentTargetDist);
-    renderExpandablePlots();
-    renderStatsPlots();
+    if (state.activeTab === 'map') {
+        updateFastestSelectedLap();
+        updateTelemetryPlots(state.currentTargetDist);
+        renderExpandablePlots();
+    } else if (state.activeTab === 'stats') {
+        renderStatsPlots();
+    } else {
+        updateFastestSelectedLap();
+        updateTelemetryPlots(state.currentTargetDist);
+        renderExpandablePlots();
+        renderStatsPlots();
+    }
     debouncedUpdateURL();
 }
 
@@ -1035,6 +1050,8 @@ export function renderLapList() {
     updateSessionSelectorColors();
     renderGroupVisibilityControls();
     lapList.innerHTML = '';
+
+    if (!state.allSessionsData || state.allSessionsData.length === 0) return;
 
     let allLaps = [];
     state.allSessionsData.forEach(session => {
@@ -1130,16 +1147,14 @@ export function updateSelectAllCheckboxes() {
         const currentInputs = container.querySelectorAll('input[type="checkbox"]');
         if (currentInputs.length !== activeGroups.length) {
             let inputsHtml = '';
-            let labelParts = [];
             activeGroups.forEach(g => {
                 const color = getGroupColor(g);
-                inputsHtml += `<input type="checkbox" id="chk-all-${g.toLowerCase()}" style="cursor: pointer;" title="Select All ${g}">`;
-                labelParts.push(`<span style="color: ${color};">${g}</span>`);
+                inputsHtml += `<input type="checkbox" id="chk-all-${g.toLowerCase()}" style="cursor: pointer; accent-color: ${color};" title="Select All ${g}">`;
             });
             container.innerHTML = `
                 ${inputsHtml}
                 <label style="font-size: 0.75rem; color: var(--text-secondary); cursor: pointer; font-weight: 600; text-transform: uppercase; margin-left: 0.2rem;">
-                    All ${labelParts.join(' / ')}
+                    All
                 </label>
             `;
             initAllLapsHandlers();
@@ -1177,12 +1192,21 @@ export function toggleLap(lapId, group) {
         }
     }
 
-    updateFastestSelectedLap();
-    updateLapVisibility(lapId);
     updateSelectAllCheckboxes();
-    updateTelemetryPlots(state.currentTargetDist);
-    renderExpandablePlots();
-    renderStatsPlots();
+    if (state.activeTab === 'map') {
+        updateFastestSelectedLap();
+        updateLapVisibility(lapId);
+        updateTelemetryPlots(state.currentTargetDist);
+        renderExpandablePlots();
+    } else if (state.activeTab === 'stats') {
+        renderStatsPlots();
+    } else {
+        updateFastestSelectedLap();
+        updateLapVisibility(lapId);
+        updateTelemetryPlots(state.currentTargetDist);
+        renderExpandablePlots();
+        renderStatsPlots();
+    }
     debouncedUpdateURL();
 }
 
@@ -1363,21 +1387,35 @@ export function clearSelection(group) {
     const selection = state.groupSelections[group] || (state.groupSelections[group] = new Set());
     selection.clear();
     
-    updateFastestSelectedLap();
-    Object.keys(state.lapPolylines).forEach(lapId => {
-        updateLapVisibility(lapId);
-    });
-    
     document.querySelectorAll(`#lap-list input`).forEach(chk => {
         if (chk.id.startsWith(`chk-${group.toLowerCase()}-`)) {
             chk.checked = false;
         }
     });
     
-    updateTelemetryPlots(state.currentTargetDist);
-    renderExpandablePlots();
-    renderStatsPlots();
     updateSelectAllCheckboxes();
+    if (state.activeTab === 'map') {
+        updateFastestSelectedLap();
+        if (state.lapPolylines) {
+            Object.keys(state.lapPolylines).forEach(lapId => {
+                updateLapVisibility(lapId);
+            });
+        }
+        updateTelemetryPlots(state.currentTargetDist);
+        renderExpandablePlots();
+    } else if (state.activeTab === 'stats') {
+        renderStatsPlots();
+    } else {
+        updateFastestSelectedLap();
+        if (state.lapPolylines) {
+            Object.keys(state.lapPolylines).forEach(lapId => {
+                updateLapVisibility(lapId);
+            });
+        }
+        updateTelemetryPlots(state.currentTargetDist);
+        renderExpandablePlots();
+        renderStatsPlots();
+    }
     debouncedUpdateURL();
 }
 
@@ -1419,11 +1457,6 @@ export function selectLapsByCriteria(group, type, value, targetSessionId = null,
         selection.add(lapsToSelectFrom[i].lapId);
     }
 
-    updateFastestSelectedLap();
-    Object.keys(state.lapPolylines).forEach(lapId => {
-        updateLapVisibility(lapId);
-    });
-
     document.querySelectorAll(`#lap-list input`).forEach(chk => {
         if (chk.id.startsWith(`chk-${group.toLowerCase()}-`)) {
             const lapId = chk.id.replace(`chk-${group.toLowerCase()}-`, '');
@@ -1431,10 +1464,29 @@ export function selectLapsByCriteria(group, type, value, targetSessionId = null,
         }
     });
 
-    updateTelemetryPlots(state.currentTargetDist);
-    renderExpandablePlots();
-    renderStatsPlots();
     updateSelectAllCheckboxes();
+    if (state.activeTab === 'map') {
+        updateFastestSelectedLap();
+        if (state.lapPolylines) {
+            Object.keys(state.lapPolylines).forEach(lapId => {
+                updateLapVisibility(lapId);
+            });
+        }
+        updateTelemetryPlots(state.currentTargetDist);
+        renderExpandablePlots();
+    } else if (state.activeTab === 'stats') {
+        renderStatsPlots();
+    } else {
+        updateFastestSelectedLap();
+        if (state.lapPolylines) {
+            Object.keys(state.lapPolylines).forEach(lapId => {
+                updateLapVisibility(lapId);
+            });
+        }
+        updateTelemetryPlots(state.currentTargetDist);
+        renderExpandablePlots();
+        renderStatsPlots();
+    }
     debouncedUpdateURL();
 }
 
@@ -1444,123 +1496,94 @@ export function showSelectionMenu(e, group) {
 
     const menu = document.createElement('div');
     menu.id = 'lap-selection-menu';
-    menu.className = `lap-selection-menu group-${group.toLowerCase()}`;
+    menu.className = `lap-selection-menu group-${group.toLowerCase()} multi-session`;
 
-    const isMultiSession = state.allSessionsData && state.allSessionsData.length > 1;
+    // 1. All Sessions section
+    const allSec = document.createElement('div');
+    allSec.className = 'menu-section';
+    allSec.innerHTML = `<div class="menu-section-header"><span>All Sessions</span></div>`;
 
-    if (isMultiSession) {
-        menu.classList.add('multi-session');
+    const allBtnRow = document.createElement('div');
+    allBtnRow.className = 'menu-btn-row';
 
-        // 1. All Sessions section
-        const allSec = document.createElement('div');
-        allSec.className = 'menu-section';
-        allSec.innerHTML = `<div class="menu-section-header"><span>All Sessions</span></div>`;
+    const allPresets = [
+        { label: 'Top 1', type: 'count', value: 1 },
+        { label: 'Top 3', type: 'count', value: 3 },
+        { label: '50%', type: 'percent', value: 0.50 },
+        { label: '75%', type: 'percent', value: 0.75 },
+        { label: 'All', type: 'all', value: 1 },
+        { label: 'Clear All', type: 'clear', value: 0, isClear: true }
+    ];
 
-        const allBtnRow = document.createElement('div');
-        allBtnRow.className = 'menu-btn-row';
+    allPresets.forEach(preset => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = preset.label;
+        if (preset.isClear) btn.className = 'btn-clear';
+        btn.onclick = (btnEv) => {
+            selectLapsByCriteria(group, preset.type, preset.value, null, btnEv.shiftKey);
+            menu.remove();
+        };
+        allBtnRow.appendChild(btn);
+    });
+    allSec.appendChild(allBtnRow);
+    menu.appendChild(allSec);
 
-        const allPresets = [
+    // 2. Sections per session
+    const sessions = state.allSessionsData || [];
+    sessions.forEach(session => {
+        const sId = session.session_id;
+        const sColor = getSessionColor(sId);
+        let sName = session.session_name || sId;
+        if (session.session_start_datetime && session.session_start_datetime.includes(' ')) {
+            const timePart = session.session_start_datetime.split(' ')[1];
+            if (timePart && !sName.includes(timePart)) {
+                sName = `${timePart} ${sName}`;
+            }
+        }
+
+        const sec = document.createElement('div');
+        sec.className = 'menu-section';
+
+        const header = document.createElement('div');
+        header.className = 'menu-section-header';
+        header.innerHTML = `
+            <span class="session-dot" style="background: ${sColor};"></span>
+            <span style="color: ${sColor}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${sName}</span>
+        `;
+        sec.appendChild(header);
+
+        const btnRow = document.createElement('div');
+        btnRow.className = 'menu-btn-row';
+
+        const sessPresets = [
             { label: 'Top 1', type: 'count', value: 1 },
             { label: 'Top 3', type: 'count', value: 3 },
             { label: '50%', type: 'percent', value: 0.50 },
             { label: '75%', type: 'percent', value: 0.75 },
             { label: 'All', type: 'all', value: 1 },
-            { label: 'Clear All', type: 'clear', value: 0, isClear: true }
+            { label: 'Clear', type: 'clear', value: 0, isClear: true }
         ];
 
-        allPresets.forEach(preset => {
+        sessPresets.forEach(preset => {
             const btn = document.createElement('button');
             btn.type = 'button';
             btn.textContent = preset.label;
             if (preset.isClear) btn.className = 'btn-clear';
             btn.onclick = (btnEv) => {
-                selectLapsByCriteria(group, preset.type, preset.value, null, btnEv.shiftKey);
+                selectLapsByCriteria(group, preset.type, preset.value, sId, btnEv.shiftKey);
                 menu.remove();
             };
-            allBtnRow.appendChild(btn);
+            btnRow.appendChild(btn);
         });
-        allSec.appendChild(allBtnRow);
-        menu.appendChild(allSec);
+        sec.appendChild(btnRow);
+        menu.appendChild(sec);
+    });
 
-        // 2. Sections per session
-        state.allSessionsData.forEach(session => {
-            const sId = session.session_id;
-            const sColor = getSessionColor(sId);
-            let sName = session.session_name || sId;
-            if (session.session_start_datetime && session.session_start_datetime.includes(' ')) {
-                const timePart = session.session_start_datetime.split(' ')[1];
-                if (timePart && !sName.includes(timePart)) {
-                    sName = `${timePart} ${sName}`;
-                }
-            }
-
-            const sec = document.createElement('div');
-            sec.className = 'menu-section';
-
-            const header = document.createElement('div');
-            header.className = 'menu-section-header';
-            header.innerHTML = `
-                <span class="session-dot" style="background: ${sColor};"></span>
-                <span style="color: ${sColor}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${sName}</span>
-            `;
-            sec.appendChild(header);
-
-            const btnRow = document.createElement('div');
-            btnRow.className = 'menu-btn-row';
-
-            const sessPresets = [
-                { label: 'Top 1', type: 'count', value: 1 },
-                { label: 'Top 3', type: 'count', value: 3 },
-                { label: '50%', type: 'percent', value: 0.50 },
-                { label: '75%', type: 'percent', value: 0.75 },
-                { label: 'All', type: 'all', value: 1 },
-                { label: 'Clear', type: 'clear', value: 0, isClear: true }
-            ];
-
-            sessPresets.forEach(preset => {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.textContent = preset.label;
-                if (preset.isClear) btn.className = 'btn-clear';
-                btn.onclick = (btnEv) => {
-                    selectLapsByCriteria(group, preset.type, preset.value, sId, btnEv.shiftKey);
-                    menu.remove();
-                };
-                btnRow.appendChild(btn);
-            });
-            sec.appendChild(btnRow);
-            menu.appendChild(sec);
-        });
-
-        const hint = document.createElement('div');
-        hint.className = 'menu-hint';
-        hint.textContent = 'Shift+click to add to selection';
-        menu.appendChild(hint);
-    } else {
-        // Single session backward compatibility
-        const options = [
-            { label: 'Top 1', value: 1, type: 'count' },
-            { label: 'Top 3', value: 3, type: 'count' },
-            { label: 'Top 5', value: 5, type: 'count' },
-            { label: 'Top 10', value: 10, type: 'count' },
-            { label: 'Top 50%', value: 0.50, type: 'percent' },
-            { label: 'Top 75%', value: 0.75, type: 'percent' },
-            { label: 'Top 90%', value: 0.90, type: 'percent' },
-            { label: 'All Laps', value: 1, type: 'all' },
-            { label: 'Clear Selection', value: 0, type: 'clear' }
-        ];
-
-        options.forEach(opt => {
-            const item = document.createElement('div');
-            item.className = 'menu-item';
-            item.textContent = opt.label;
-            item.onclick = () => {
-                selectLapsByCriteria(group, opt.type, opt.value);
-                menu.remove();
-            };
-            menu.appendChild(item);
-        });
-    }
+    const hint = document.createElement('div');
+    hint.className = 'menu-hint';
+    hint.textContent = 'Shift+click to add to selection';
+    menu.appendChild(hint);
 
     document.body.appendChild(menu);
 
@@ -1571,7 +1594,7 @@ export function showSelectionMenu(e, group) {
 
     let left = scrollX + rect.left;
     let top = scrollY + rect.bottom + 6;
-    const menuWidth = isMultiSession ? 300 : 160;
+    const menuWidth = 300;
 
     if (left + menuWidth > winWidth - 10) {
         left = Math.max(10, winWidth - menuWidth - 10 + scrollX);
@@ -1629,24 +1652,34 @@ export function toggleAllLaps(group) {
 
 export function updateLapVisibility(lapId) {
     const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+    const mapSelections = state.getGroupSelections ? state.getGroupSelections('map') : state.groupSelections;
     const isVisible = activeGroups.some(g => {
-        const sel = state.groupSelections[g];
-        const visMap = state.groupVisibilityMap && state.groupVisibilityMap[g];
+        const sel = mapSelections && mapSelections[g];
+        const visMap = state.isGroupVisible ? state.isGroupVisible(g, 'map') : (state.groupVisibilityMap && state.groupVisibilityMap[g]);
         return sel && sel.has(lapId) && visMap;
     });
 
-    if (state.lapPolylines[lapId]) {
+    if (state.lapPolylines && state.lapPolylines[lapId]) {
         const refLap = getReferenceLap();
         const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
         const isRefLap = (lapId === refLapId);
         const zIndex = (state.trajectoryColorMode === 'delta_t') ? (isRefLap ? 1 : 10) : 1;
+        const targetMap = isVisible ? state.map : null;
 
         state.lapPolylines[lapId].forEach(p => {
             const isHitArea = p.strokeOpacity === 0;
             if (!isHitArea && typeof p.setOptions === 'function') {
-                p.setOptions({ zIndex: zIndex });
+                if (p.zIndex !== zIndex) {
+                    p.setOptions({ zIndex: zIndex });
+                }
             }
-            p.setMap(isVisible ? state.map : null);
+            if (typeof p.getMap === 'function') {
+                if (p.getMap() !== targetMap) {
+                    p.setMap(targetMap);
+                }
+            } else {
+                p.setMap(targetMap);
+            }
         });
     }
 }
@@ -1795,6 +1828,8 @@ export function addGroup() {
         const letter = String.fromCharCode(c);
         if (!state.groups.includes(letter)) {
             state.groups.push(letter);
+            if (state.groupSelectionsMap) state.groupSelectionsMap[letter] = new Set();
+            if (state.groupSelectionsStats) state.groupSelectionsStats[letter] = new Set();
             state.groupSelections[letter] = new Set();
             state.groupVisibilityMap[letter] = true;
             state.groupVisibilityStats[letter] = true;
@@ -1806,7 +1841,9 @@ export function addGroup() {
     renderGroupManagementPopup();
     renderLapList();
     updateSelectAllCheckboxes();
-    updateTelemetryPlots(state.currentTargetDist);
+    if (state.activeTab === 'map') {
+        updateTelemetryPlots(state.currentTargetDist);
+    }
     debouncedUpdateURL();
 }
 
@@ -1815,37 +1852,61 @@ export function deleteGroup(group) {
     const idx = state.groups.indexOf(group);
     if (idx !== -1) {
         state.groups.splice(idx, 1);
+        if (state.groupSelectionsMap) delete state.groupSelectionsMap[group];
+        if (state.groupSelectionsStats) delete state.groupSelectionsStats[group];
         delete state.groupSelections[group];
         delete state.groupVisibilityMap[group];
         delete state.groupVisibilityStats[group];
         delete state.groupEnabled[group];
     }
-    updateFastestSelectedLap();
-    if (state.lapPolylines) {
-        Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
-    }
     renderGroupVisibilityControls();
     renderGroupManagementPopup();
     renderLapList();
     updateSelectAllCheckboxes();
-    renderExpandablePlots();
-    renderStatsPlots();
-    updateTelemetryPlots(state.currentTargetDist);
+    if (state.activeTab === 'map') {
+        updateFastestSelectedLap();
+        if (state.lapPolylines) {
+            Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+        }
+        renderExpandablePlots();
+        updateTelemetryPlots(state.currentTargetDist);
+    } else if (state.activeTab === 'stats') {
+        renderStatsPlots();
+    } else {
+        updateFastestSelectedLap();
+        if (state.lapPolylines) {
+            Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+        }
+        renderExpandablePlots();
+        renderStatsPlots();
+        updateTelemetryPlots(state.currentTargetDist);
+    }
     debouncedUpdateURL();
 }
 
 export function toggleGroupEnabled(group, enabled) {
     state.groupEnabled[group] = enabled;
-    updateFastestSelectedLap();
-    if (state.lapPolylines) {
-        Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
-    }
     renderGroupVisibilityControls();
     renderGroupManagementPopup();
     renderLapList();
     updateSelectAllCheckboxes();
-    renderExpandablePlots();
-    renderStatsPlots();
+    if (state.activeTab === 'map') {
+        updateFastestSelectedLap();
+        if (state.lapPolylines) {
+            Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+        }
+        renderExpandablePlots();
+        updateTelemetryPlots(state.currentTargetDist);
+    } else if (state.activeTab === 'stats') {
+        renderStatsPlots();
+    } else {
+        updateFastestSelectedLap();
+        if (state.lapPolylines) {
+            Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+        }
+        renderExpandablePlots();
+        renderStatsPlots();
+    }
     debouncedUpdateURL();
 }
 
@@ -1859,10 +1920,11 @@ export function updateFastestSelectedLap() {
     let minTimeA = Infinity;
 
     const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+    const mapSelections = state.getGroupSelections ? state.getGroupSelections('map') : state.groupSelections;
     const selectedIds = new Set();
     activeGroups.forEach(g => {
-        if (state.groupSelections[g]) {
-            state.groupSelections[g].forEach(id => selectedIds.add(id));
+        if (mapSelections && mapSelections[g]) {
+            mapSelections[g].forEach(id => selectedIds.add(id));
         }
     });
 
@@ -1885,7 +1947,7 @@ export function updateFastestSelectedLap() {
                     fastest = lap;
                     fastestId = id;
                 }
-                if (state.groupSelections.A && state.groupSelections.A.has(id) && t < minTimeA) {
+                if (mapSelections && mapSelections.A && mapSelections.A.has(id) && t < minTimeA) {
                     minTimeA = t;
                     fastestA = lap;
                     fastestIdA = id;
@@ -1900,7 +1962,7 @@ export function updateFastestSelectedLap() {
     if (typeof getSortedLaps === 'function' && state.allSessionsData && state.allSessionsData.length > 0) {
         const sorted = getSortedLaps();
         for (const l of sorted) {
-            if (state.groupSelections.A && state.groupSelections.A.has(l.lapId)) {
+            if (mapSelections && mapSelections.A && mapSelections.A.has(l.lapId)) {
                 firstIdA = l.lapId;
                 firstA = state.lapDataLookup ? (state.lapDataLookup[l.lapId] || l) : l;
                 break;
@@ -1913,7 +1975,7 @@ export function updateFastestSelectedLap() {
     state.fastestSelectedLap = fastest;
     state.fastestSelectedLapId = fastestId;
 
-    if (state.trajectoryColorMode === 'delta_t' || state.trajectoryColorMode === 'time') {
+    if ((state.trajectoryColorMode === 'delta_t' || state.trajectoryColorMode === 'time') && state.activeTab === 'map') {
         updateAllPolylineColors();
     }
 }
@@ -2130,15 +2192,27 @@ export function selectLaps(lapsA, lapsB) {
     }
 
     if (changed) {
-        updateFastestSelectedLap();
-        if (state.lapPolylines) {
-            Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
-        }
-        updateAllPolylineColors();
         renderLapList();
-        renderStatsPlots();
-        renderExpandablePlots();
-        showRightPanelTab(state.activeRightTab || 'report');
+        if (state.activeTab === 'map') {
+            updateFastestSelectedLap();
+            if (state.lapPolylines) {
+                Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+            }
+            updateAllPolylineColors();
+            renderExpandablePlots();
+            showRightPanelTab(state.activeRightTab || 'report');
+        } else if (state.activeTab === 'stats') {
+            renderStatsPlots();
+        } else {
+            updateFastestSelectedLap();
+            if (state.lapPolylines) {
+                Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+            }
+            updateAllPolylineColors();
+            renderStatsPlots();
+            renderExpandablePlots();
+            showRightPanelTab(state.activeRightTab || 'report');
+        }
         debouncedUpdateURL();
     }
 }
