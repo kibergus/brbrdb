@@ -28,10 +28,16 @@ echo -e "${GREEN}Starting Python tests (pytest)...${NC}"
 if [ -d "$ANALYSIS_DIR/venv" ]; then
     source "$ANALYSIS_DIR/venv/bin/activate"
     export PYTHONPATH="$ANALYSIS_DIR:$PYTHONPATH"
+    if ! ls "$ANALYSIS_DIR"/_telemetry_native*.so 1> /dev/null 2>&1; then
+        python "$ANALYSIS_DIR/setup.py" build_ext --inplace
+    fi
     pytest
     PY_EXIT=$?
 else
     echo -e "${RED}Warning: Virtual environment not found, running pytest with system python...${NC}"
+    if ! ls "$ANALYSIS_DIR"/_telemetry_native*.so 1> /dev/null 2>&1; then
+        python3 "$ANALYSIS_DIR/setup.py" build_ext --inplace
+    fi
     pytest
     PY_EXIT=$?
 fi

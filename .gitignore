@@ -24,3 +24,8 @@ tests/goldens_diff/goldens/rendered
 scratch/
 tests/tmp_postgres/
 
+# Compiled native extensions
+*.so
+build/
+
+

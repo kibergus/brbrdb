@@ -14,7 +14,6 @@
 # ==============================================================================
 
 import struct
-import gzip
 import brotli  # type: ignore[import-untyped]
 from pathlib import Path
 from typing import Any
@@ -26,6 +25,21 @@ from flask import Flask
 
 import location_handlers
 import app as flask_app
+
+
+def _decode_channel_payload(data: bytes) -> tuple[float, float, list[float]]:
+    decompressed = brotli.decompress(data)
+    mean_val, scale = struct.unpack("<dd", decompressed[:16])
+    deltas = np.frombuffer(decompressed[16:], dtype=np.int16)
+    reconstructed = []
+    curr = 0.0
+    for d in deltas:
+        if d == -32768:
+            reconstructed.append(np.nan)
+        else:
+            curr += int(d)
+            reconstructed.append(mean_val + curr * scale)
+    return mean_val, scale, reconstructed
 
 
 class MockSession:
@@ -421,18 +435,7 @@ Time,Latitude,Longitude,Record,Lap,Steering Wheel Angle (deg)
     assert response.status_code == 200
 
     # Decode the binary response
-    mean_val, scale = struct.unpack("<dd", response.data[:16])
-    deltas = np.frombuffer(response.data[16:], dtype=np.int16)
-
-    reconstructed = []
-    curr = 0
-    for d in deltas:
-        if d == -32768:
-            reconstructed.append(np.nan)
-        else:
-            curr += d
-            reconstructed.append(mean_val + curr * scale)
-
+    _, _, reconstructed = _decode_channel_payload(response.data)
     assert np.allclose(reconstructed, [12.5, 14.2], atol=1e-5)
 
     # Test exact column matching
@@ -451,18 +454,7 @@ Time,Latitude,Longitude,Record,Lap,Speed (m/s)
     response_speed = client.get(url_speed)
     assert response_speed.status_code == 200
 
-    mean_val_speed, scale_speed = struct.unpack("<dd", response_speed.data[:16])
-    deltas_speed = np.frombuffer(response_speed.data[16:], dtype=np.int16)
-
-    reconstructed_speed = []
-    curr = 0
-    for d in deltas_speed:
-        if d == -32768:
-            reconstructed_speed.append(np.nan)
-        else:
-            curr += d
-            reconstructed_speed.append(mean_val_speed + curr * scale_speed)
-
+    _, _, reconstructed_speed = _decode_channel_payload(response_speed.data)
     assert np.allclose(reconstructed_speed, [36.0, 72.0], atol=1e-5)
 
     # Test 'Speed' column matching (when column in CSV is named 'Speed')
@@ -481,18 +473,7 @@ Time,Latitude,Longitude,Record,Lap,Speed
     response_speed_no_units = client.get(url_speed_no_units)
     assert response_speed_no_units.status_code == 200
 
-    mean_val_speed_no_units, scale_speed_no_units = struct.unpack("<dd", response_speed_no_units.data[:16])
-    deltas_speed_no_units = np.frombuffer(response_speed_no_units.data[16:], dtype=np.int16)
-
-    reconstructed_speed_no_units = []
-    curr = 0
-    for d in deltas_speed_no_units:
-        if d == -32768:
-            reconstructed_speed_no_units.append(np.nan)
-        else:
-            curr += d
-            reconstructed_speed_no_units.append(mean_val_speed_no_units + curr * scale_speed_no_units)
-
+    _, _, reconstructed_speed_no_units = _decode_channel_payload(response_speed_no_units.data)
     assert np.allclose(reconstructed_speed_no_units, [36.0, 72.0], atol=1e-5)
 
     # Test NaN / missing values
@@ -508,18 +489,7 @@ Time,Latitude,Longitude,Record,Lap,Steering Wheel Angle (deg)
     response_nan = client.get(url)
     assert response_nan.status_code == 200
 
-    mean_val_nan, scale_nan = struct.unpack("<dd", response_nan.data[:16])
-    deltas_nan = np.frombuffer(response_nan.data[16:], dtype=np.int16)
-
-    reconstructed_nan = []
-    curr = 0
-    for d in deltas_nan:
-        if d == -32768:
-            reconstructed_nan.append(np.nan)
-        else:
-            curr += d
-            reconstructed_nan.append(mean_val_nan + curr * scale_nan)
-
+    _, _, reconstructed_nan = _decode_channel_payload(response_nan.data)
     assert len(reconstructed_nan) == 3
     assert np.isclose(reconstructed_nan[0], 12.5, atol=1e-5)
     assert np.isnan(reconstructed_nan[1])
@@ -593,7 +563,7 @@ def test_get_track_points_security(
 
 @patch('location_handlers.db')
 @patch('auth.get_current_acl')
-def test_get_telemetry_channel_brotli_and_gzip(
+def test_get_telemetry_channel_always_brotli(
     mock_get_current_acl: MagicMock,
     mock_db: MagicMock,
     tmp_path: Path
@@ -636,26 +606,16 @@ Time,Latitude,Longitude,Record,Lap,Steering Wheel Angle (deg)
     deltas = np.frombuffer(decompressed_br[16:], dtype=np.int16)
     assert len(deltas) == 2
 
-    # 2. Test fallback to Gzip when client only accepts gzip
-    headers_gzip = {'Accept-Encoding': 'gzip'}
-    response_gzip = client.get(url, headers=headers_gzip)
-    assert response_gzip.status_code == 200
-    assert response_gzip.headers.get('Content-Encoding') == 'gzip'
-
-    decompressed_gzip = gzip.decompress(response_gzip.data)
-    mean_val, scale = struct.unpack("<dd", decompressed_gzip[:16])
-    deltas = np.frombuffer(decompressed_gzip[16:], dtype=np.int16)
-    assert len(deltas) == 2
-
-    # 3. Test uncompressed when client does not accept gzip or br
+    # 2. Test that it always returns Brotli even if client sends identity or gzip
     headers_none = {'Accept-Encoding': 'identity'}
     response_none = client.get(url, headers=headers_none)
     assert response_none.status_code == 200
-    assert 'Content-Encoding' not in response_none.headers
+    assert response_none.headers.get('Content-Encoding') == 'br'
 
-    mean_val, scale = struct.unpack("<dd", response_none.data[:16])
-    deltas = np.frombuffer(response_none.data[16:], dtype=np.int16)
-    assert len(deltas) == 2
+    decompressed_none = brotli.decompress(response_none.data)
+    mean_val_none, scale_none = struct.unpack("<dd", decompressed_none[:16])
+    deltas_none = np.frombuffer(decompressed_none[16:], dtype=np.int16)
+    assert len(deltas_none) == 2
 
 
 def test_should_smooth_channel() -> None:
@@ -730,17 +690,7 @@ Time,Latitude,Longitude,Record,Lap,GForceLat
     response_smooth = client.get(url_smooth)
     assert response_smooth.status_code == 200
 
-    mean_val, scale = struct.unpack("<dd", response_smooth.data[:16])
-    deltas = np.frombuffer(response_smooth.data[16:], dtype=np.int16)
-    reconstructed = []
-    curr = 0
-    for d in deltas:
-        if d == -32768:
-            reconstructed.append(np.nan)
-        else:
-            curr += d
-            reconstructed.append(mean_val + curr * scale)
-
+    _, _, reconstructed = _decode_channel_payload(response_smooth.data)
     assert np.allclose(reconstructed, [2.0, 2.5, 3.0, 3.5, 4.0], atol=1e-5)
 
     # Case B: league is NOT kartsim (should NOT smooth: [1.0, 2.0, 3.0, 4.0, 5.0])
@@ -751,17 +701,8 @@ Time,Latitude,Longitude,Record,Lap,GForceLat
     response_no_smooth = client.get(url_no_smooth)
     assert response_no_smooth.status_code == 200
 
-    mean_val, scale = struct.unpack("<dd", response_no_smooth.data[:16])
-    deltas = np.frombuffer(response_no_smooth.data[16:], dtype=np.int16)
-    reconstructed = []
-    curr = 0
-    for d in deltas:
-        if d == -32768:
-            reconstructed.append(np.nan)
-        else:
-            curr += d
-            reconstructed.append(mean_val + curr * scale)
-    assert np.allclose(reconstructed, [1.0, 2.0, 3.0, 4.0, 5.0], atol=1e-5)
+    _, _, reconstructed_no_smooth = _decode_channel_payload(response_no_smooth.data)
+    assert np.allclose(reconstructed_no_smooth, [1.0, 2.0, 3.0, 4.0, 5.0], atol=1e-5)
 
 
 def test_get_track_progression() -> None:
@@ -1434,27 +1375,21 @@ def test_get_telemetry_channel_and_track_points_gyroscope(tmp_path: Path) -> Non
         url_yaw = '/api/telemetry/channel?session_id=club100/cadet/2026-08-29/Lydd/14_59_practice&channel=Yaw Rate'
         resp_yaw = client.get(url_yaw)
         assert resp_yaw.status_code == 200
-        mean_val, scale = struct.unpack("<dd", resp_yaw.data[:16])
-        deltas = np.frombuffer(resp_yaw.data[16:], dtype=np.int16)
-        reconstructed = [mean_val + deltas[0] * scale, mean_val + (deltas[0] + deltas[1]) * scale]
+        _, _, reconstructed = _decode_channel_payload(resp_yaw.data)
         assert np.allclose(reconstructed, [25.5, 28.2], atol=1e-3)
 
         # 3. Test /api/telemetry/channel for Pitch Rate
         url_pitch = '/api/telemetry/channel?session_id=club100/cadet/2026-08-29/Lydd/14_59_practice&channel=Pitch Rate'
         resp_pitch = client.get(url_pitch)
         assert resp_pitch.status_code == 200
-        mean_val, scale = struct.unpack("<dd", resp_pitch.data[:16])
-        deltas = np.frombuffer(resp_pitch.data[16:], dtype=np.int16)
-        reconstructed_pitch = [mean_val + deltas[0] * scale, mean_val + (deltas[0] + deltas[1]) * scale]
+        _, _, reconstructed_pitch = _decode_channel_payload(resp_pitch.data)
         assert np.allclose(reconstructed_pitch, [-1.2, -1.15], atol=1e-3)
 
         # 4. Test /api/telemetry/channel for Roll Rate
         url_roll = '/api/telemetry/channel?session_id=club100/cadet/2026-08-29/Lydd/14_59_practice&channel=Roll Rate'
         resp_roll = client.get(url_roll)
         assert resp_roll.status_code == 200
-        mean_val, scale = struct.unpack("<dd", resp_roll.data[:16])
-        deltas = np.frombuffer(resp_roll.data[16:], dtype=np.int16)
-        reconstructed_roll = [mean_val + deltas[0] * scale, mean_val + (deltas[0] + deltas[1]) * scale]
+        _, _, reconstructed_roll = _decode_channel_payload(resp_roll.data)
         assert np.allclose(reconstructed_roll, [0.8, 0.85], atol=1e-3)
 
 

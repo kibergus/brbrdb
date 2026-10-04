@@ -18,7 +18,8 @@ exclude = [
     "__pycache__",
     "testdata",
     "scratch",
-    "notebook"
+    "notebook",
+    "setup.py"
 ]
 
 [[tool.mypy.overrides]]
@@ -43,7 +44,12 @@ module = [
     "googleapiclient.*",
     "seaborn.*",
     "psycopg2.*",
-    "gunicorn.*"
+    "gunicorn.*",
+    "_telemetry_native",
+    "_telemetry_native.*",
+    "setuptools",
+    "setuptools.*",
+    "pybind11.*"
 ]
 ignore_missing_imports = true
 

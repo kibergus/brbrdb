@@ -17,9 +17,7 @@ import os
 import re
 import csv
 import logging
-import gzip
 from urllib.parse import unquote, quote
-import brotli  # type: ignore[import-untyped]
 from typing import Any
 from flask import Blueprint, render_template, abort, request, jsonify, Response, url_for, redirect
 import werkzeug.wrappers as werkzeug_wrappers
@@ -30,9 +28,9 @@ from race_tools import sanitize
 import pandas as pd
 import numpy as np
 import auth
-import struct
 import report_parser
 import upload_handlers
+import _telemetry_native
 
 
 location_blueprint = Blueprint('location', __name__)
@@ -1377,26 +1375,7 @@ def smooth_telemetry_data(values: list[float]) -> list[float]:
     NaN values are ignored when computing the average in the window.
     If the original value at the index is NaN, it remains NaN.
     """
-    n = len(values)
-    smoothed = []
-    for i in range(n):
-        if np.isnan(values[i]):
-            smoothed.append(np.nan)
-            continue
-
-        window_vals = []
-        for k in range(-2, 3):
-            idx = i + k
-            if 0 <= idx < n:
-                val = values[idx]
-                if not np.isnan(val):
-                    window_vals.append(val)
-
-        if window_vals:
-            smoothed.append(float(np.mean(window_vals)))
-        else:
-            smoothed.append(np.nan)
-    return smoothed
+    return _telemetry_native.smooth_values(values)
 
 
 @location_blueprint.route('/api/telemetry/channel')
@@ -1450,161 +1429,33 @@ def get_telemetry_channel() -> Response | tuple[Response, int]:
 
     csv_path = os.path.join(telemetry_dir, target_csv)
 
-    values = []
-    with open(csv_path, 'r', encoding='utf-8') as f:
-        reader = csv.reader(f)
-        rows = list(reader)
+    driver_name = _telemetry_native.extract_driver_name(csv_path)
+    if not auth.can_see_telemetry(acl, league=league, driver=driver_name):
+        return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
 
-        blank_idx = -1
-        for i, row in enumerate(rows):
-            if not row or all(cell.strip() == '' for cell in row):
-                blank_idx = i
-                break
+    track_data = db.get_track(track) if track else None
+    ref_lat, ref_lon, max_dist_m = upload_handlers.get_track_coordinate_reference(track_data, [], [])
+    # has_ref is True if authoritative track coordinates were found in the database.
+    # If False, the native C++ scanner calculates the median coordinates from the CSV
+    # to establish a reference point and filter out GPS outlier records.
+    has_ref = (ref_lat is not None and ref_lon is not None)
 
-        if blank_idx == -1 or blank_idx >= len(rows) - 1:
-            empty_header_bytes = struct.pack("<dd", 0.0, 1.0)
-            return Response(empty_header_bytes, mimetype='application/octet-stream')
+    should_smooth = (league == 'kartsim' and _should_smooth_channel(channel))
 
-        metadata_rows = rows[:blank_idx]
-        driver_name = None
-        for row in metadata_rows:
-            if row and len(row) >= 2 and row[0] in ('Driver name', 'Configuration'):
-                driver_name = row[1]
-                break
+    binary_payload = _telemetry_native.process_telemetry_channel(
+        csv_path,
+        channel,
+        should_smooth,
+        ref_lat or 0.0,
+        ref_lon or 0.0,
+        max_dist_m or 5000.0,
+        has_ref
+    )
 
-        if not auth.can_see_telemetry(acl, league=league, driver=driver_name):
-            return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
-
-        csv_rows = rows[blank_idx+1:]
-        header = csv_rows[0]
-        data_rows = csv_rows[1:]
-
-        time_idx = header.index('Time') if 'Time' in header else -1
-        lat_idx = header.index('Latitude') if 'Latitude' in header else -1
-        lon_idx = header.index('Longitude') if 'Longitude' in header else -1
-        lap_idx = header.index('Lap') if 'Lap' in header else -1
-        col_idx = header.index(channel) if channel in header else -1
-
-        is_time = (channel == 'Time')
-        is_speed = (channel.lower() in ('speed', 'speed (m/s)'))
-
-        track_data = db.get_track(track) if track else None
-        ref_lat, ref_lon, max_dist_m = upload_handlers.get_track_coordinate_reference(track_data, [], [])
-        if ref_lat is None and lat_idx >= 0 and lon_idx >= 0:
-            raw_lats = [upload_handlers.parse_coordinate(r[lat_idx]) for r in data_rows if len(r) > lat_idx]
-            raw_lons = [upload_handlers.parse_coordinate(r[lon_idx]) for r in data_rows if len(r) > lon_idx]
-            ref_lat, ref_lon, max_dist_m = upload_handlers.get_track_coordinate_reference(
-                None, raw_lats, raw_lons
-            )
-
-        for row in data_rows:
-            if not row or len(row) < len(header):
-                continue
-
-            # Filter rows exactly as parse_telemetry_csv does
-            timestamp_str = row[time_idx] if time_idx >= 0 else None
-            lat_val = row[lat_idx] if lat_idx >= 0 else None
-            lon_val = row[lon_idx] if lon_idx >= 0 else None
-            lap_val = row[lap_idx] if lap_idx >= 0 else None
-            if not timestamp_str or lat_val is None or lon_val is None or lap_val is None:
-                continue
-
-            try:
-                f_lat = float(lat_val)
-                f_lon = float(lon_val)
-                if not upload_handlers.is_coordinate_within_bounds(
-                    f_lat, f_lon, ref_lat, ref_lon, max_dist_m
-                ):
-                    continue
-                int(lap_val)
-            except (ValueError, TypeError):
-                continue
-
-            if is_time:
-                try:
-                    t_part = timestamp_str.split('T')[1].replace('Z', '')
-                    h, m, s = t_part.split(':')
-                    total_sec = int(h) * 3600 + int(m) * 60 + float(s)
-                    values.append(total_sec)
-                except (ValueError, IndexError):
-                    values.append(np.nan)
-            elif col_idx != -1:
-                val_str = row[col_idx].strip()
-                if val_str == '':
-                    values.append(np.nan)
-                else:
-                    try:
-                        val = float(val_str)
-                        if is_speed:
-                            val *= 3.6
-                        values.append(val)
-                    except ValueError:
-                        values.append(np.nan)
-            else:
-                values.append(np.nan)
-
-    if league == 'kartsim' and _should_smooth_channel(channel):
-        values = smooth_telemetry_data(values)
-
-    # Convert values list to numpy array
-    arr = np.array(values, dtype=np.float64)
-    non_nan_mask = ~np.isnan(arr)
-
-    if np.any(non_nan_mask):
-        mean_val = float(np.mean(arr[non_nan_mask]))
-        diffs = np.diff(arr[non_nan_mask])
-        scale_base = np.max(np.abs(arr[non_nan_mask] - mean_val)) / 32760
-        scale_delta = np.max(np.abs(diffs)) / 32760 if len(diffs) > 0 else 0.0
-        scale = max(scale_base, scale_delta)
-        if scale == 0:
-            scale = 1.0
-    else:
-        mean_val = 0.0
-        scale = 1.0
-
-    # Quantize non-nan values
-    quantized = np.zeros(len(arr), dtype=np.int64)
-    if np.any(non_nan_mask):
-        quantized[non_nan_mask] = np.round((arr[non_nan_mask] - mean_val) / scale).astype(np.int64)
-
-    deltas = np.zeros(len(arr), dtype=np.int16)
-    last_valid_q = 0
-    has_seen_valid = False
-
-    for i in range(len(arr)):
-        if not non_nan_mask[i]:
-            deltas[i] = -32768  # Sentinel for NaN / unset value
-        else:
-            q_val = quantized[i]
-            if not has_seen_valid:
-                deltas[i] = np.clip(q_val, -32767, 32767)
-                has_seen_valid = True
-            else:
-                d = q_val - last_valid_q
-                deltas[i] = np.clip(d, -32767, 32767)
-            last_valid_q = q_val
-
-    # Pack the binary payload
-    header_bytes = struct.pack("<dd", mean_val, scale)
-    body_bytes = deltas.tobytes()
-    binary_payload = header_bytes + body_bytes
-
-    # Compress if client supports brotli or gzip
-    accept_encoding = request.headers.get('Accept-Encoding', '')
-    if 'br' in accept_encoding:
-        compressed_payload = brotli.compress(binary_payload)
-        response = Response(compressed_payload, mimetype='application/octet-stream')
-        response.headers['Content-Encoding'] = 'br'
-        response.headers['Content-Length'] = str(len(compressed_payload))
-        return response
-    elif 'gzip' in accept_encoding:
-        compressed_payload = gzip.compress(binary_payload)
-        response = Response(compressed_payload, mimetype='application/octet-stream')
-        response.headers['Content-Encoding'] = 'gzip'
-        response.headers['Content-Length'] = str(len(compressed_payload))
-        return response
-    else:
-        return Response(binary_payload, mimetype='application/octet-stream')
+    response = Response(binary_payload, mimetype='application/octet-stream')
+    response.headers['Content-Encoding'] = 'br'
+    response.headers['Content-Length'] = str(len(binary_payload))
+    return response
 
 
 @location_blueprint.route('/api/track_data')

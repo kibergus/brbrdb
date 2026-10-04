@@ -28,8 +28,8 @@ RUN python -m build --wheel
 # Stage 2: Final runtime image
 FROM python:3.12-slim
 
-# Install ffmpeg for transcode operations
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+# Install ffmpeg for transcode operations and g++/libbrotli-dev for native C++ extensions
+RUN apt-get update && apt-get install -y ffmpeg g++ libbrotli-dev && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -43,6 +43,7 @@ RUN pip install *.whl && rm *.whl
 
 # Copy all application files (subject to .dockerignore)
 COPY . .
+RUN python setup.py build_ext --inplace
 
 # Expose port 5000 internally
 EXPOSE 5000
