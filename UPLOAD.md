@@ -53,7 +53,7 @@ The metadata payload defines the session configuration and context.
 | `class_name` | String or Array | **Yes** | The engine/kart classification(s) for the session. | `"cadet"` or `["senior"]` |
 | `track_name` | String | **Yes** | The name of the track. | `"Rowrah"` |
 | `session_name` | String | **Yes** | The category or type of the session. | `"Practice"`, `"Qualifying"`, `"Final"` |
-| `session_start_datetime`| String | **Yes** | Start time in `"YYYY-MM-DD HH:MM"` format. | `"2026-05-10 14:30"` |
+| `session_start_datetime`| String | **Yes** | Start time in `"YYYY-MM-DD HH:MM"`, `"YYYY-MM-DD HH:MM:SS[.fff]"`, or ISO 8601 with timezone (e.g. `"2026-10-10T11:34:25.148+00:00"` or `"...Z"`). Timezone-aware inputs are automatically converted to track-local naive time. | `"2026-05-10 14:30"`, `"2026-10-10 12:34:25"`, or `"2026-10-10T11:34:25.148+00:00"` |
 | `driver_name` | String | No | Optional driver name (not required; driver names are validated against ACL permissions directly from results CSV). | `"Driver A"` |
 | `short_name` | String | No | Shorthand notation of the session name. | `"Practice"`, `"Q"`, `"F"` |
 | `meeting_name` | String | No | The overall race meeting name (defaults to track name).| `"Rowrah Practice"` |
@@ -63,6 +63,16 @@ The metadata payload defines the session configuration and context.
 | `distance_to_rear_axle` | Float | No | Distance from rear axle center to camera in meters. | `1.5` |
 | `alphatiming_url` | String | No | Reference link to Alphatiming or session results page. | `"https://..."` |
 
+##### Accepted Datetime Formats & Timezone Semantics
+1. **`YYYY-MM-DD HH:MM`** (minute-resolution, naive, track-local time).
+2. **`YYYY-MM-DD HH:MM:SS[.fff]`** (seconds-bearing, naive, track-local time). Fractional seconds are trimmed to whole seconds.
+3. **ISO 8601 with timezone offset or `Z`** (e.g. `2026-10-10T11:34:25.148+00:00`, `2026-10-10T11:34:25Z`). The server converts the timestamp to the track's local IANA timezone (using track configuration or track lookup, falling back to `Europe/London`).
+
+##### Persistence of High-Resolution Start Times (Seconds Preservation)
+When an upload updates an existing session (e.g. final results uploaded after partial live timing):
+- If the incoming value has **minute resolution only** (no seconds in input) and is within 5 minutes of the stored value, the existing high-resolution start time (including seconds) is preserved.
+- If the incoming value has **minute resolution only** and differs by 5 minutes or more, it is treated as a genuine change and overwrites.
+- If the incoming value contains **seconds**, it always overwrites with the latest high-resolution value.
 
 #### Example `metadata.json`
 ```json
@@ -72,7 +82,7 @@ The metadata payload defines the session configuration and context.
     "track_name": "Rowrah",
     "session_name": "Practice",
     "short_name": "Practice",
-    "session_start_datetime": "2026-05-10 14:30",
+    "session_start_datetime": "2026-05-10 14:30:25",
     "driver_name": "Driver A",
     "track_conditions": "Dry",
     "temperature": 18.0,

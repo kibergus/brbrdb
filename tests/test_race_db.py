@@ -17,6 +17,7 @@ import os
 import json
 import pandas as pd
 import pytest
+import datetime
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -106,6 +107,11 @@ def test_race_metadata_properties() -> None:
     rm = race_db.RaceMetadata(session_start_datetime='2026-05-03 21:18')
     assert rm.date == '2026-05-03'
     assert rm.time == '21_18'
+
+    rm_sec = race_db.RaceMetadata(session_start_datetime='2026-05-03 21:18:25')
+    assert rm_sec.date == '2026-05-03'
+    assert rm_sec.time == '21_18'
+    assert rm_sec.session_start == datetime.datetime(2026, 5, 3, 21, 18, 25)
 
     rm2 = race_db.RaceMetadata(session_start_datetime='corrupt data')
     with pytest.raises(ValueError, match='Invalid session_start_datetime format'):

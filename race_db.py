@@ -21,6 +21,7 @@ import os
 import json
 import re
 import aliases
+import session_time
 import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
 from race_tools import sanitize
@@ -127,7 +128,11 @@ class RaceMetadata:
             return ''
         if ' ' not in self.session_start_datetime:
             raise ValueError(f'Invalid session_start_datetime format: {self.session_start_datetime!r}')
-        return self.session_start_datetime.split(' ')[1].replace(':', '_')
+        time_part = self.session_start_datetime.split(' ')[1]
+        time_parts = time_part.split(':')
+        if len(time_parts) < 2:
+            raise ValueError(f'Invalid session_start_datetime format: {self.session_start_datetime!r}')
+        return f'{time_parts[0]}_{time_parts[1]}'
 
     @property
     def session_start(self) -> datetime.datetime:
@@ -135,8 +140,8 @@ class RaceMetadata:
         if not self.session_start_datetime:
             raise ValueError(f'Session start time missing for session {self.session_id}')
         try:
-            return datetime.datetime.strptime(self.session_start_datetime, '%Y-%m-%d %H:%M')
-        except ValueError:
+            return session_time.parse_session_start_datetime_tolerant(self.session_start_datetime)
+        except Exception:
             raise ValueError(f'Invalid session_start_datetime format: {self.session_start_datetime!r}') from None
 
     @property
@@ -461,7 +466,11 @@ class RaceDB:
                     if row_session_id not in session_id_filter and session_filename not in session_id_filter:
                         continue
 
-                m_start_dt = session_start_datetime.strftime('%Y-%m-%d %H:%M') if session_start_datetime else ''
+                m_start_dt = (
+                    session_start_datetime.strftime('%Y-%m-%d %H:%M:%S')
+                    if (session_start_datetime and session_start_datetime.second)
+                    else (session_start_datetime.strftime('%Y-%m-%d %H:%M') if session_start_datetime else '')
+                )
 
                 meta = RaceMetadata(
                     league=league,
@@ -634,7 +643,11 @@ class RaceDB:
                         'ChampPoints': int(champ_points) if champ_points is not None else None,
                         'SessionName': session_name or '',
                         'MeetingName': meeting_name or '',
-                        'DateTime': dt.strftime('%Y-%m-%d %H:%M') if dt else '',
+                        'DateTime': (
+                            dt.strftime('%Y-%m-%d %H:%M:%S')
+                            if (dt and dt.second)
+                            else (dt.strftime('%Y-%m-%d %H:%M') if dt else '')
+                        ),
                         'TrackConditions': cond or '',
                         'Temperature': str(temp) if temp is not None else '',
                         'Weather': weather or '',
@@ -775,7 +788,11 @@ class RaceDB:
                     'SessionID': session_filename,
                     'SessionName': session_name or '',
                     'MeetingName': meeting_name or '',
-                    'DateTime': dt.strftime('%Y-%m-%d %H:%M') if dt else ''
+                    'DateTime': (
+                        dt.strftime('%Y-%m-%d %H:%M:%S')
+                        if (dt and dt.second)
+                        else (dt.strftime('%Y-%m-%d %H:%M') if dt else '')
+                    )
                 })
         if df_rows:
             return pd.DataFrame(df_rows)
@@ -928,8 +945,8 @@ class RaceDB:
 
         # TODO: make timezone configurable, currently hardcoded to BST (UTC+1)
         bst_offset = datetime.timezone(datetime.timedelta(hours=1))
-        session_start = datetime.datetime.strptime(
-            session_meta.session_start_datetime, '%Y-%m-%d %H:%M'
+        session_start = session_time.parse_session_start_datetime_tolerant(
+            session_meta.session_start_datetime
         ).replace(tzinfo=bst_offset)
 
         # Load time corrections from time_correction.json

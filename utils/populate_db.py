@@ -26,6 +26,12 @@ from typing import Any
 import pandas as pd
 import psycopg2
 
+try:
+    import session_time
+except ImportError:
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+    import session_time
+
 from race_tools import sanitize
 
 # Helper functions matching race_db.py to avoid depending on it
@@ -306,17 +312,28 @@ def populate_single_session(meta_path: str, conn: Any, base_dir: str) -> str:
     weather = meta.get('weather', '')
 
     # Standardize date
+    has_seconds = False
     if not session_start_datetime:
         session_start_datetime = '1970-01-01 00:00'
     try:
-        dt = datetime.datetime.strptime(session_start_datetime, '%Y-%m-%d %H:%M')
+        dt, has_seconds = session_time.parse_session_start_datetime(
+            session_start_datetime, track_name=track_name
+        )
         date_str = dt.strftime('%Y-%m-%d')
-    except ValueError:
+    except Exception:
         dt = datetime.datetime(1970, 1, 1, 0, 0)
+        has_seconds = False
         date_str = '1970-01-01'
 
     # Start database transaction for this session
     with conn.cursor() as cur:
+        # Check existing session_start_datetime in DB before deleting to preserve seconds
+        cur.execute('SELECT session_start_datetime FROM sessions WHERE session_id = %s', (db_session_id,))
+        row = cur.fetchone()
+        if row and row[0]:
+            existing_db_dt = row[0]
+            dt = session_time.resolve_start_datetime_overwrite(existing_db_dt, dt, has_seconds)
+
         # Delete any existing session/results/penalties to allow overwriting
         cur.execute('DELETE FROM sessions WHERE session_id = %s', (db_session_id,))
 

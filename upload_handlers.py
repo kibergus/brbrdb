@@ -31,6 +31,7 @@ from utils import populate_db
 from race_tools import rfactor, sanitize
 import auth
 import aliases
+import session_time
 from plot_handlers import invalidate_plot_cache
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class CSVSessionMetadata:
     class_name: str
     session_name: str
     session_start_datetime: datetime.datetime
+    has_seconds: bool = False
     kart_number: str | None = None
     track_conditions: str | None = None
     temperature: str | None = None
@@ -120,12 +122,20 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
             except (ValueError, TypeError):
                 distance_to_rear_axle = None
 
+    has_seconds = False
     if date_str and time_str:
-        session_start_datetime_str = f'{date_str} {time_str[:5]}'
+        date_clean = date_str.strip()
+        time_clean = time_str.strip()
+        if 'T' in date_clean or (len(date_clean) > 10 and ' ' in date_clean):
+            session_start_datetime_str = date_clean
+        else:
+            session_start_datetime_str = f'{date_clean} {time_clean}'
         try:
-            session_start_datetime = datetime.datetime.strptime(session_start_datetime_str, '%Y-%m-%d %H:%M')
-        except ValueError:
-            raise BadRequest('Invalid session_start_datetime format. Must be YYYY-MM-DD HH:MM.')
+            session_start_datetime, has_seconds = session_time.parse_session_start_datetime(
+                session_start_datetime_str, track_name=track_name, db=db
+            )
+        except Exception:
+            raise BadRequest(session_time.INVALID_FORMAT_MESSAGE)
 
     # Validate that all required fields are present
     if not league:
@@ -148,6 +158,7 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
         class_name=class_name,
         session_name=session_name,
         session_start_datetime=session_start_datetime,
+        has_seconds=has_seconds,
         kart_number=kart_number,
         track_conditions=track_conditions,
         temperature=temperature,
@@ -1178,7 +1189,11 @@ def process_telemetry_derivative_data(
 
     metadata_json = {
         'alphatiming_url': '',
-        'session_start_datetime': dt.strftime('%Y-%m-%d %H:%M'),
+        'session_start_datetime': (
+            dt.strftime('%Y-%m-%d %H:%M:%S')
+            if (getattr(session_info, 'has_seconds', False) or dt.second)
+            else dt.strftime('%Y-%m-%d %H:%M')
+        ),
         'track_name': canonical_track_name,
         'meeting_name': canonical_track_name,
         'league': session_info.league,
@@ -1432,6 +1447,24 @@ def stream_upload() -> Any:
                         written_rows_count = len(df_telemetry)
 
                     if not has_alphatiming:
+                        if os.path.exists(meta_path):
+                            try:
+                                with open(meta_path, 'r', encoding='utf-8') as f:
+                                    ex_meta = json.load(f)
+                                ex_dt_str = ex_meta.get('session_start_datetime')
+                                if ex_dt_str:
+                                    ex_dt = session_time.parse_session_start_datetime_tolerant(ex_dt_str)
+                                    resolved_dt = session_time.resolve_start_datetime_overwrite(
+                                        ex_dt, metadata.session_start_datetime, getattr(metadata, 'has_seconds', False)
+                                    )
+                                    metadata_json['session_start_datetime'] = (
+                                        resolved_dt.strftime('%Y-%m-%d %H:%M:%S')
+                                        if (getattr(metadata, 'has_seconds', False) or resolved_dt.second)
+                                        else resolved_dt.strftime('%Y-%m-%d %H:%M')
+                                    )
+                            except Exception:
+                                pass
+
                         # Write metadata.json
                         with open(meta_path, 'w', encoding='utf-8') as f:
                             json.dump(metadata_json, f, indent=4)
@@ -1521,9 +1554,11 @@ def files_upload() -> Any:
 
     # Form paths
     try:
-        dt = datetime.datetime.strptime(session_start_datetime, '%Y-%m-%d %H:%M')
+        dt, has_seconds = session_time.parse_session_start_datetime(
+            session_start_datetime, track_name=track_name, db=db
+        )
     except Exception:
-        raise BadRequest('Invalid session_start_datetime format. Must be YYYY-MM-DD HH:MM.')
+        raise BadRequest(session_time.INVALID_FORMAT_MESSAGE)
 
     date_str = dt.strftime('%Y_%m_%d')
     time_str = dt.strftime('%H_%M')
@@ -1555,6 +1590,38 @@ def files_upload() -> Any:
                         f'have permission to upload for driver {driver!r} '
                         'in the existing session.'
                     )
+
+    # Check if session already exists to apply overwrite retention rule for seconds
+    existing_dt = None
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                ex_meta = json.load(f)
+            ex_str = ex_meta.get('session_start_datetime')
+            if ex_str:
+                existing_dt = session_time.parse_session_start_datetime_tolerant(ex_str)
+        except Exception:
+            pass
+
+    if existing_dt is None:
+        candidate_session_id = f'{meeting_folder}_{session_filename}'
+        try:
+            with db.conn.cursor() as cur:
+                cur.execute(
+                    'SELECT session_start_datetime FROM sessions WHERE session_id = %s',
+                    (candidate_session_id,)
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    existing_dt = row[0]
+        except Exception:
+            pass
+
+    resolved_dt = session_time.resolve_start_datetime_overwrite(existing_dt, dt, has_seconds)
+    if has_seconds or (existing_dt is not None and resolved_dt == existing_dt and resolved_dt.second):
+        meta['session_start_datetime'] = resolved_dt.strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        meta['session_start_datetime'] = resolved_dt.strftime('%Y-%m-%d %H:%M')
 
     # Save files (Files are primary!)
     with open(meta_path, 'w', encoding='utf-8') as f:

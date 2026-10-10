@@ -335,7 +335,13 @@ def test_stream_upload_missing_or_invalid_params() -> None:
             environ_base={'REMOTE_ADDR': '192.168.1.100'}
         )
         assert response.status_code == 400
-        assert response.get_json() == {'error': 'Invalid session_start_datetime format. Must be YYYY-MM-DD HH:MM.'}
+        assert response.get_json() == {
+            'error': (
+                'Invalid session_start_datetime format. Must be YYYY-MM-DD HH:MM, '
+                'YYYY-MM-DD HH:MM:SS[.fff], or ISO 8601 with timezone (e.g. '
+                'YYYY-MM-DDTHH:MM:SS+00:00 or ...Z).'
+            )
+        }
 
 
 def test_stream_upload_league_forbidden() -> None:

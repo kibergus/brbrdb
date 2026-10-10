@@ -121,7 +121,7 @@ CREATE TABLE sessions (
     class_name TEXT NOT NULL,
     session_name TEXT NOT NULL,
     short_name TEXT NOT NULL,
-    session_start_datetime TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    session_start_datetime TIMESTAMP WITHOUT TIME ZONE NOT NULL, -- Track-local timestamp (second precision)
     alphatiming_url TEXT,
     track_conditions TEXT,
     temperature REAL, -- Celsius float (e.g. 18.5)
