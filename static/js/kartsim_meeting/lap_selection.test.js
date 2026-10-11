@@ -263,6 +263,51 @@ describe('selectTurnAndSwitchToMap', () => {
         expect(mockFitBounds).toHaveBeenCalled();
     });
 
+    it('preserves stats group selections when switching from stats tab via selectTurnAndSwitchToMap', async () => {
+        const { selectTurnAndSwitchToMap } = await import('./lap_selection.js');
+
+        state.activeTab = 'stats';
+        state.groupSelectionsStats = { A: new Set(['sess1-original-stats']) };
+        state.groupSelectionsMap = { A: new Set(['old-map-lap']) };
+
+        selectTurnAndSwitchToMap(0);
+
+        expect(state.activeTab).toBe('map');
+        // Group A on map has the turn laps
+        expect(state.groupSelectionsMap.A.has('sess1-2')).toBe(true);
+        expect(state.groupSelectionsMap.A.has('sess1-1')).toBe(true);
+        // Stats selection is untouched
+        expect(state.groupSelectionsStats.A.has('sess1-original-stats')).toBe(true);
+        expect(state.groupSelectionsStats.A.has('sess1-2')).toBe(false);
+    });
+
+    it('preserves subtab-specific sortMode and currentTurnIdx when switching between map and stats tabs', async () => {
+        const { selectTurnAndSwitchToMap, showTab } = await import('./lap_selection.js');
+
+        state.activeTab = 'stats';
+        state.sortModeStats = 'time';
+        state.sortModeMap = 'time';
+
+        selectTurnAndSwitchToMap(0);
+
+        expect(state.activeTab).toBe('map');
+        expect(state.sortMode).toBe('turn');
+        expect(state.currentTurnIdx).toBe(0);
+        expect(state.sortModeMap).toBe('turn');
+        expect(state.sortModeStats).toBe('time');
+
+        // Return to stats tab
+        showTab('stats');
+        expect(state.activeTab).toBe('stats');
+        expect(state.sortMode).toBe('time');
+
+        // Return to map tab
+        showTab('map');
+        expect(state.activeTab).toBe('map');
+        expect(state.sortMode).toBe('turn');
+        expect(state.currentTurnIdx).toBe(0);
+    });
+
     it('updates currentTurnIdx when user changes turn selector dropdown', () => {
         const mockTurnSelector = { value: '1', style: {} };
         const mockSlider = { value: 0 };

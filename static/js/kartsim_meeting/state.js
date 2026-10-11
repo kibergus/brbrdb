@@ -27,7 +27,22 @@ export const state = {
     lapColorsForId: {}, // lapId -> color
     allSessionsData: [],
     lapDataLookup: {}, // lapId -> lap object
-    sortMode: 'time',
+    sortModeMap: 'time',
+    sortModeStats: 'time',
+    get sortMode() {
+        return (this.activeTab === 'stats') ? this.sortModeStats : this.sortModeMap;
+    },
+    set sortMode(val) {
+        if (this.activeTab === 'stats') {
+            this.sortModeStats = val;
+        } else {
+            this.sortModeMap = val;
+        }
+    },
+    getSortMode(tab) {
+        const targetTab = tab || this.activeTab;
+        return (targetTab === 'stats') ? this.sortModeStats : this.sortModeMap;
+    },
     baseColor: '#fb923c', // Orange
     highlightColor: '#38bdf8', // Light Blue
 
@@ -172,7 +187,22 @@ export const state = {
     fastestGroupALapId: null,
     
     // Turn selection for sorting
-    currentTurnIdx: 0,
+    currentTurnIdxMap: 0,
+    currentTurnIdxStats: 0,
+    get currentTurnIdx() {
+        return (this.activeTab === 'stats') ? this.currentTurnIdxStats : this.currentTurnIdxMap;
+    },
+    set currentTurnIdx(val) {
+        if (this.activeTab === 'stats') {
+            this.currentTurnIdxStats = val;
+        } else {
+            this.currentTurnIdxMap = val;
+        }
+    },
+    getCurrentTurnIdx(tab) {
+        const targetTab = tab || this.activeTab;
+        return (targetTab === 'stats') ? this.currentTurnIdxStats : this.currentTurnIdxMap;
+    },
     
     // Expandable plots state
     activePlotChannels: new Set(),

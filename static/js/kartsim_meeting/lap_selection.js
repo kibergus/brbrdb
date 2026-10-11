@@ -636,6 +636,9 @@ export function showTab(tabId) {
                 mapControlsBar.style.display = (tabId === 'stats') ? 'none' : 'flex';
             }
 
+            // Update sort buttons and turn selector for active tab
+            updateSortUI();
+
             // Update group visibility icons for the active tab
             updateVisibilityIcons();
 
@@ -917,7 +920,7 @@ export function selectTurnAndSwitchToMap(turnIdx) {
     const turns = state.trackData && state.trackData.turns ? state.trackData.turns : [];
     if (turnIdx < 0 || turnIdx >= turns.length) return;
 
-    state.currentTurnIdx = turnIdx;
+    state.currentTurnIdxMap = turnIdx;
     const turnSelector = document.getElementById('turn-selector');
     if (turnSelector) {
         turnSelector.value = turnIdx;
@@ -953,9 +956,9 @@ export function selectTurnAndSwitchToMap(turnIdx) {
     }
 
     if (selectedIds.size > 0) {
-        state.groupASelection = selectedIds;
-        state.groupAVisibleMap = true;
-        state.groupAVisibleStats = true;
+        if (!state.groupSelectionsMap) state.groupSelectionsMap = {};
+        state.groupSelectionsMap.A = selectedIds;
+        state.groupVisibilityMap.A = true;
     }
 
     state.deltaPlotVisible = true;
@@ -963,21 +966,30 @@ export function selectTurnAndSwitchToMap(turnIdx) {
 
     setTrajectoryColorMode('delta_t');
 
-    state.sortMode = 'turn';
+    state.sortModeMap = 'turn';
     showTab('map');
     setSort('turn', turnIdx);
 }
 
-export function setSort(mode, turnIdx = undefined) {
-    state.sortMode = mode;
+export function updateSortUI() {
+    const mode = state.sortMode || 'time';
     document.querySelectorAll('.sort-btn').forEach(btn => btn.classList.remove('active'));
     const btn = document.getElementById('sort-' + mode);
     if (btn) btn.classList.add('active');
-    
+
     const turnSelector = document.getElementById('turn-selector');
     if (turnSelector) {
         turnSelector.style.display = (mode === 'turn') ? 'block' : 'none';
+        if (state.currentTurnIdx !== undefined && turnSelector.value != state.currentTurnIdx) {
+            turnSelector.value = state.currentTurnIdx;
+        }
+    }
+}
 
+export function setSort(mode, turnIdx = undefined) {
+    state.sortMode = mode;
+    const turnSelector = document.getElementById('turn-selector');
+    if (turnSelector) {
         if (turnIdx !== undefined && turnIdx !== null && !isNaN(parseInt(turnIdx))) {
             state.currentTurnIdx = parseInt(turnIdx);
             turnSelector.value = state.currentTurnIdx;
@@ -989,43 +1001,46 @@ export function setSort(mode, turnIdx = undefined) {
             state.currentTurnIdx = 0;
             turnSelector.value = 0;
         }
-        
-        if (mode === 'turn' && state.trackData && state.trackData.turns) {
-            const turns = state.trackData.turns;
-            const turn = turns[state.currentTurnIdx];
-            if (turn) {
-                let rangeEnd = turn.end;
-                // Include the straight after the turn until the next turn starts
-                const nextTurn = turns[state.currentTurnIdx + 1];
-                if (nextTurn) {
-                    rangeEnd = nextTurn.start;
-                } else if (state.trackData.lap_length) {
-                    rangeEnd = state.trackData.lap_length;
-                }
-                const rangeStart = Math.max(0, turn.start - 20);
-                state.globalTelemetryXRange = [rangeStart, rangeEnd];
+    } else if (turnIdx !== undefined && turnIdx !== null && !isNaN(parseInt(turnIdx))) {
+        state.currentTurnIdx = parseInt(turnIdx);
+    }
+    updateSortUI();
 
-                // Move cursor on bottom slider to the start of that turn
-                const turnStart = (turn.start !== undefined && turn.start !== null) ? turn.start : 0;
-                state.playbackDistance = turnStart;
-                state.currentTargetDist = turnStart;
-                const slider = document.getElementById('distance-slider');
-                const display = document.getElementById('distance-display');
-                if (slider) slider.value = turnStart;
-                if (display) display.textContent = Math.round(turnStart) + 'm';
-                import('./map.js').then(m => {
-                    if (m && typeof m.updateDistanceMarker === 'function') {
-                        m.updateDistanceMarker(turnStart);
-                    }
-                });
-
-                if (state.map) {
-                    focusMapOnTurn(state.currentTurnIdx);
-                }
+    if (mode === 'turn' && state.trackData && state.trackData.turns) {
+        const turns = state.trackData.turns;
+        const turn = turns[state.currentTurnIdx];
+        if (turn) {
+            let rangeEnd = turn.end;
+            // Include the straight after the turn until the next turn starts
+            const nextTurn = turns[state.currentTurnIdx + 1];
+            if (nextTurn) {
+                rangeEnd = nextTurn.start;
+            } else if (state.trackData.lap_length) {
+                rangeEnd = state.trackData.lap_length;
             }
-        } else if (mode === 'time' && state.trackData) {
-            state.globalTelemetryXRange = [0, state.trackData.lap_length];
+            const rangeStart = Math.max(0, turn.start - 20);
+            state.globalTelemetryXRange = [rangeStart, rangeEnd];
+
+            // Move cursor on bottom slider to the start of that turn
+            const turnStart = (turn.start !== undefined && turn.start !== null) ? turn.start : 0;
+            state.playbackDistance = turnStart;
+            state.currentTargetDist = turnStart;
+            const slider = document.getElementById('distance-slider');
+            const display = document.getElementById('distance-display');
+            if (slider) slider.value = turnStart;
+            if (display) display.textContent = Math.round(turnStart) + 'm';
+            import('./map.js').then(m => {
+                if (m && typeof m.updateDistanceMarker === 'function') {
+                    m.updateDistanceMarker(turnStart);
+                }
+            });
+
+            if (state.map) {
+                focusMapOnTurn(state.currentTurnIdx);
+            }
         }
+    } else if (mode === 'time' && state.trackData) {
+        state.globalTelemetryXRange = [0, state.trackData.lap_length];
     }
     
     renderLapList();
@@ -2038,6 +2053,11 @@ export function toggleSpeedPlot() {
 export function handleReportTriggerAction(data) {
     if (!data) return;
 
+    // 0. Switch tab (map/stats) first if requested so subsequent actions target the active tab
+    if (data.tab) {
+        showTab(data.tab);
+    }
+
     // 1. Distance seek
     if (data.dist !== undefined && data.dist !== null && data.dist !== '') {
         const dist = parseFloat(data.dist);
@@ -2095,10 +2115,6 @@ export function handleReportTriggerAction(data) {
         setVisiblePlots(data.plots !== undefined ? data.plots : data.plot);
     }
 
-    // 7. Switch tab (map/stats)
-    if (data.tab) {
-        showTab(data.tab);
-    }
 
     // 8. Switch right tab
     if (data.rtab) {

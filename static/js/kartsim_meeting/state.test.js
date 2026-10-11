@@ -94,3 +94,45 @@ describe('state.js group selections getters/setters', () => {
     });
 });
 
+describe('state.js sortMode and currentTurnIdx getters/setters', () => {
+    beforeEach(() => {
+        state.activeTab = 'map';
+        state.sortModeMap = 'time';
+        state.sortModeStats = 'num';
+        state.currentTurnIdxMap = 1;
+        state.currentTurnIdxStats = 3;
+    });
+
+    it('returns map sortMode and turn index when activeTab is map', () => {
+        state.activeTab = 'map';
+        expect(state.sortMode).toBe('time');
+        expect(state.currentTurnIdx).toBe(1);
+    });
+
+    it('returns stats sortMode and turn index when activeTab is stats', () => {
+        state.activeTab = 'stats';
+        expect(state.sortMode).toBe('num');
+        expect(state.currentTurnIdx).toBe(3);
+    });
+
+    it('mutating sortMode and currentTurnIdx in stats tab does not affect map tab', () => {
+        state.activeTab = 'stats';
+        state.sortMode = 'turn';
+        state.currentTurnIdx = 5;
+        expect(state.sortModeStats).toBe('turn');
+        expect(state.currentTurnIdxStats).toBe(5);
+        expect(state.sortModeMap).toBe('time');
+        expect(state.currentTurnIdxMap).toBe(1);
+    });
+
+    it('mutating sortMode and currentTurnIdx in map tab does not affect stats tab', () => {
+        state.activeTab = 'map';
+        state.sortMode = 'turn';
+        state.currentTurnIdx = 2;
+        expect(state.sortModeMap).toBe('turn');
+        expect(state.currentTurnIdxMap).toBe(2);
+        expect(state.sortModeStats).toBe('num');
+        expect(state.currentTurnIdxStats).toBe(3);
+    });
+});
+
