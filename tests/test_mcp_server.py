@@ -59,6 +59,8 @@ def test_get_track_info_success() -> None:
     assert len(info["sector_end"]) > 0
     assert isinstance(info["turns"], list)
     assert len(info["turns"]) > 0
+    assert "center_line" not in info
+    assert "geojson" not in info
 
     t1 = info["turns"][0]
     assert t1["name"] == "1"
@@ -66,6 +68,12 @@ def test_get_track_info_success() -> None:
     assert isinstance(t1["apex"], list)
     assert isinstance(t1["end"], float)
     assert t1["start"] < t1["end"]
+
+    info_with_geom = server.get_track_info("Lydd", include_geometry=True)
+    assert "center_line" in info_with_geom
+    assert len(info_with_geom["center_line"]) > 0
+    assert "geojson" in info_with_geom
+    assert len(info_with_geom["geojson"]) > 0
 
 
 def test_get_track_info_invalid_track() -> None:

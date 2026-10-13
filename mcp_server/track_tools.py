@@ -18,13 +18,15 @@ from typing import Any
 from database import db
 
 
-def get_track_info_impl(track: str) -> dict[str, Any]:
+def get_track_info_impl(track: str, include_geometry: bool = False) -> dict[str, Any]:
     """
     Returns track metadata including lap length, sector boundaries, and named turn definitions
     with distances along the lap.
 
     Parameters:
     - track: Track name (e.g. "Lydd", "Lydd Karting 2026", "Buckmore Park")
+    - include_geometry: Whether to include track geometry (centerline coordinates and boundary GeoJSON).
+      Defaults to False.
 
     Returns track information dictionary with canonical field names:
     - lap_length (meters)
@@ -68,4 +70,7 @@ def get_track_info_impl(track: str) -> dict[str, Any]:
                 })
 
     track_data['turns'] = normalized_turns
+    if not include_geometry:
+        for geom_key in ('center_line', 'centerline', 'geojson', 'boundaries'):
+            track_data.pop(geom_key, None)
     return track_data

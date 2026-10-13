@@ -7,8 +7,8 @@ This reference outlines the available MCP server tools for fetching telemetry da
 ### 1. `list_sessions(track=None, date=None, driver_name=None, league=None, class_name=None)`
 - Lists recorded sessions with metadata (session_id, date, track, driver_names, telemetry_channels).
 
-### 2. `get_track_info(track)`
-- Returns track length (`lap_length`), sector boundaries (`sector_end`), and named turn definitions (`turns`).
+### 2. `get_track_info(track, include_geometry=False)`
+- Returns track length (`lap_length`), sector boundaries (`sector_end`), and named turn definitions (`turns`). Track geometry (`center_line` coordinates and boundary `geojson`) is omitted by default and can be included by passing `include_geometry=True`.
 - Each turn object contains: `name` (e.g. "1"), `start` (meters), `apex` (list of meters), `end` (meters).
 
 ### 3. `get_pace_summary(track, date, session_id=None, driver_name=None)`

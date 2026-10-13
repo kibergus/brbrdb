@@ -123,7 +123,7 @@ def list_sessions(
 
 
 @mcp.tool()
-def get_track_info(track: str) -> dict[str, Any]:
+def get_track_info(track: str, include_geometry: bool = False) -> dict[str, Any]:
     """
     Returns track metadata including lap length, sector boundaries, and named turn definitions
     with distances along the lap. This is the primary reference for interpreting distance-based
@@ -131,10 +131,12 @@ def get_track_info(track: str) -> dict[str, Any]:
 
     Parameters:
     - track: Track name (e.g. "Lydd", "Lydd Karting 2026", "Buckmore Park")
+    - include_geometry: Whether to include track geometry (centerline coordinates and boundary GeoJSON).
+      Defaults to False.
 
     Returns track information dictionary.
     """
-    return track_tools.get_track_info_impl(track)
+    return track_tools.get_track_info_impl(track, include_geometry=include_geometry)
 
 
 @mcp.tool()

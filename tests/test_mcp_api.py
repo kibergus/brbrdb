@@ -96,6 +96,26 @@ def test_mcp_tool_call_over_http() -> None:
     content = res_data["result"]["content"]
     assert len(content) > 0
     assert "Lydd Karting 2026" in content[0]["text"]
+    assert "center_line" not in content[0]["text"]
+    assert "geojson" not in content[0]["text"]
+
+    response_geom = client.post(f'/api/mcp?key={valid_key}', json={
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "tools/call",
+        "params": {
+            "name": "get_track_info",
+            "arguments": {
+                "track": "Lydd",
+                "include_geometry": True
+            }
+        }
+    }, environ_base={'REMOTE_ADDR': '192.168.1.100'})
+    assert response_geom.status_code == 200
+    res_geom_data = json.loads(response_geom.data)
+    content_geom = res_geom_data["result"]["content"]
+    assert "center_line" in content_geom[0]["text"]
+    assert "geojson" in content_geom[0]["text"]
 
 
 def test_mcp_sse_endpoint_authentication() -> None:

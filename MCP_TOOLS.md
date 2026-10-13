@@ -82,6 +82,7 @@ parameters.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `track` | string | yes | Track name |
+| `include_geometry` | boolean | no | Whether to include track geometry (`center_line` coordinates and boundary `geojson`). Defaults to `false`. |
 
 **Returns:**
 ```json
