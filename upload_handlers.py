@@ -1478,7 +1478,7 @@ def stream_upload() -> Any:
                         meeting_folder = os.path.basename(meeting_dir)
                         db_session_id = f'{meeting_folder}_{session_filename}'
 
-                    invalidate_plot_cache([db_session_id])
+                    invalidate_plot_cache([db_session_id, session_filename])
 
                     last_write_time = now
 
@@ -1636,7 +1636,7 @@ def files_upload() -> Any:
 
     # Update database using populate_db code
     db_session_id = populate_db.populate_single_session(meta_path, db.conn, DATA_DIR)
-    invalidate_plot_cache([db_session_id])
+    invalidate_plot_cache([db_session_id, session_filename])
 
     return jsonify({
         'message': 'Files uploaded and session imported successfully.',
