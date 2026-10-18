@@ -19,14 +19,17 @@ import json
 import io
 import math
 import datetime
+import gzip
+import brotli  # type: ignore[import-untyped]
 from unittest.mock import patch
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from werkzeug.exceptions import BadRequest
 import app
 import upload_handlers
-from upload_handlers import CSVSessionMetadata
+from upload_handlers import CSVSessionMetadata, StreamingLineReader
 from database import db, config
 
 
@@ -269,6 +272,272 @@ def test_stream_upload_flow() -> None:
                 }
                 mock_populate.assert_called_once()
                 mock_get_track.assert_called()
+
+
+def test_streaming_line_reader() -> None:
+    test_text = 'Track name,Rowrah\nDate,2026-05-10\nTime,14:30:00\nNo newline at end'
+    expected_lines = ['Track name,Rowrah\n', 'Date,2026-05-10\n', 'Time,14:30:00\n', 'No newline at end']
+
+    # 1. Uncompressed
+    reader_raw = StreamingLineReader(io.BytesIO(test_text.encode('utf-8')))
+    lines_raw = []
+    while (line := reader_raw.readline()) is not None:
+        lines_raw.append(line)
+    assert lines_raw == expected_lines
+
+    # 2. Gzip
+    gz_data = gzip.compress(test_text.encode('utf-8'))
+    reader_gz = StreamingLineReader(io.BytesIO(gz_data), content_encoding='gzip')
+    lines_gz = []
+    while (line := reader_gz.readline()) is not None:
+        lines_gz.append(line)
+    assert lines_gz == expected_lines
+
+    # 3. Brotli ('br' and 'brotli')
+    br_data = brotli.compress(test_text.encode('utf-8'))
+    reader_br = StreamingLineReader(io.BytesIO(br_data), content_encoding='br')
+    lines_br = []
+    while (line := reader_br.readline()) is not None:
+        lines_br.append(line)
+    assert lines_br == expected_lines
+
+    reader_brotli = StreamingLineReader(io.BytesIO(br_data), content_encoding='brotli')
+    lines_brotli = []
+    while (line := reader_brotli.readline()) is not None:
+        lines_brotli.append(line)
+    assert lines_brotli == expected_lines
+
+    # 4. Multi-chunk incremental streaming (feed 5 bytes at a time)
+    class SmallChunkStream:
+        def __init__(self, data: bytes, chunk_size: int = 5) -> None:
+            self.data = data
+            self.chunk_size = chunk_size
+            self.pos = 0
+
+        def read(self, size: int = -1) -> bytes:
+            if self.pos >= len(self.data):
+                return b''
+            read_len = min(self.chunk_size, len(self.data) - self.pos)
+            chunk = self.data[self.pos:self.pos + read_len]
+            self.pos += read_len
+            return chunk
+
+    reader_chunked_gz = StreamingLineReader(SmallChunkStream(gz_data, 7), content_encoding='gzip')
+    lines_chunked_gz = []
+    while (line := reader_chunked_gz.readline()) is not None:
+        lines_chunked_gz.append(line)
+    assert lines_chunked_gz == expected_lines
+
+    reader_chunked_br = StreamingLineReader(SmallChunkStream(br_data, 7), content_encoding='br')
+    lines_chunked_br = []
+    while (line := reader_chunked_br.readline()) is not None:
+        lines_chunked_br.append(line)
+    assert lines_chunked_br == expected_lines
+
+    # 5. Unsupported Content-Encoding
+    with pytest.raises(BadRequest) as exc_info:
+        StreamingLineReader(io.BytesIO(b'abc'), content_encoding='zstd')
+    assert 'Unsupported Content-Encoding' in str(exc_info.value)
+
+    # 6. Corrupted gzip data
+    reader_corrupted_gz = StreamingLineReader(io.BytesIO(b'not a gzip stream'), content_encoding='gzip')
+    with pytest.raises(BadRequest) as exc_info:
+        reader_corrupted_gz.readline()
+    assert 'Decompression error' in str(exc_info.value)
+
+    # 7. Truncated brotli stream
+    reader_truncated_br = StreamingLineReader(io.BytesIO(br_data[:len(br_data) // 2]), content_encoding='br')
+    with pytest.raises(BadRequest) as exc_info:
+        while reader_truncated_br.readline() is not None:
+            pass
+    assert 'Decompression error' in str(exc_info.value)
+
+    # 8. Decompressed size exceeds limit
+    with patch('upload_handlers.MAX_METADATA_SIZE', 10):
+        reader_limit = StreamingLineReader(io.BytesIO(gz_data), content_encoding='gzip')
+        with pytest.raises(BadRequest) as exc_info:
+            reader_limit.readline()
+        assert 'exceeds maximum size limit' in str(exc_info.value)
+
+    # 9. Invalid UTF-8 bytes
+    invalid_utf8_gz = gzip.compress(b'\xff\xfe\xfd\n')
+    reader_bad_utf8 = StreamingLineReader(io.BytesIO(invalid_utf8_gz), content_encoding='gzip')
+    with pytest.raises(BadRequest) as exc_info:
+        reader_bad_utf8.readline()
+    assert 'Invalid UTF-8 encoding' in str(exc_info.value)
+
+
+def test_stream_upload_compressed_gzip_and_brotli() -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['*']
+            },
+            'see_telemetry': True
+        }
+    }
+
+    csv_data = (
+        'Track name,Rowrah\n'
+        'Date,2026-05-10\n'
+        'Time,14:30:00\n'
+        'Driver name,Driver A\n'
+        'League,kartsim\n'
+        'Class,cadet\n'
+        'Session,Practice\n'
+        '\n'
+        'Time,Latitude,Longitude,Speed,Lap\n'
+        '2026-05-10T14:30:00.000Z,54.123,-3.123,10.0,1\n'
+    )
+    csv_bytes = csv_data.encode('utf-8')
+
+    with patch('auth.load_keys', return_value=mock_keys):
+        patch_path = 'upload_handlers.populate_db.populate_single_session'
+
+        # 1. Gzip compression
+        gz_bytes = gzip.compress(csv_bytes)
+        with patch(patch_path, return_value='session_stream_gz') as mock_populate:
+            with patch('upload_handlers.db.get_track', return_value={}) as mock_get_track:
+                response = client.post(
+                    '/api/upload/stream',
+                    data=gz_bytes,
+                    headers={
+                        'X-API-Key': 'test_key',
+                        'Content-Encoding': 'gzip'
+                    },
+                    environ_base={'REMOTE_ADDR': '192.168.1.100'}
+                )
+                assert response.status_code == 200
+                assert response.get_json() == {
+                    'message': 'Session completed and imported successfully.',
+                    'session_id': 'session_stream_gz'
+                }
+                mock_populate.assert_called_once()
+                mock_get_track.assert_called()
+
+        # 2. Brotli compression ('br')
+        br_bytes = brotli.compress(csv_bytes)
+        with patch(patch_path, return_value='session_stream_br') as mock_populate:
+            with patch('upload_handlers.db.get_track', return_value={}) as mock_get_track:
+                response = client.post(
+                    '/api/upload/stream',
+                    data=br_bytes,
+                    headers={
+                        'X-API-Key': 'test_key',
+                        'Content-Encoding': 'br'
+                    },
+                    environ_base={'REMOTE_ADDR': '192.168.1.100'}
+                )
+                assert response.status_code == 200
+                assert response.get_json() == {
+                    'message': 'Session completed and imported successfully.',
+                    'session_id': 'session_stream_br'
+                }
+                mock_populate.assert_called_once()
+                mock_get_track.assert_called()
+
+        # 3. Brotli compression ('brotli')
+        with patch(patch_path, return_value='session_stream_brotli') as mock_populate:
+            with patch('upload_handlers.db.get_track', return_value={}) as mock_get_track:
+                response = client.post(
+                    '/api/upload/stream',
+                    data=br_bytes,
+                    headers={
+                        'X-API-Key': 'test_key',
+                        'Content-Encoding': 'brotli'
+                    },
+                    environ_base={'REMOTE_ADDR': '192.168.1.100'}
+                )
+                assert response.status_code == 200
+                assert response.get_json() == {
+                    'message': 'Session completed and imported successfully.',
+                    'session_id': 'session_stream_brotli'
+                }
+                mock_populate.assert_called_once()
+                mock_get_track.assert_called()
+
+
+def test_stream_upload_compressed_errors() -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['*']
+            },
+            'see_telemetry': True
+        }
+    }
+
+    csv_data = (
+        'Track name,Rowrah\n'
+        'Date,2026-05-10\n'
+        'Time,14:30:00\n'
+        'Driver name,Driver A\n'
+        'League,kartsim\n'
+        'Class,cadet\n'
+        'Session,Practice\n'
+        '\n'
+        'Time,Latitude,Longitude,Speed,Lap\n'
+        '2026-05-10T14:30:00.000Z,54.123,-3.123,10.0,1\n'
+    )
+
+    with patch('auth.load_keys', return_value=mock_keys):
+        # 1. Corrupted gzip body
+        response = client.post(
+            '/api/upload/stream',
+            data=b'not_gzip_binary_data',
+            headers={
+                'X-API-Key': 'test_key',
+                'Content-Encoding': 'gzip'
+            },
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response.status_code == 400
+        assert 'Decompression error' in response.get_json()['error']
+
+        # 2. Corrupted brotli body
+        response = client.post(
+            '/api/upload/stream',
+            data=b'not_brotli_binary_data',
+            headers={
+                'X-API-Key': 'test_key',
+                'Content-Encoding': 'br'
+            },
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response.status_code == 400
+        assert 'Decompression error' in response.get_json()['error']
+
+        # 3. Unsupported Content-Encoding
+        response = client.post(
+            '/api/upload/stream',
+            data=b'raw_data',
+            headers={
+                'X-API-Key': 'test_key',
+                'Content-Encoding': 'unknown_encoding'
+            },
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response.status_code == 400
+        assert 'Unsupported Content-Encoding' in response.get_json()['error']
+
+        # 4. Decompression bomb / exceeding MAX_METADATA_SIZE
+        gz_bytes = gzip.compress(csv_data.encode('utf-8'))
+        with patch('upload_handlers.MAX_METADATA_SIZE', 10):
+            response = client.post(
+                '/api/upload/stream',
+                data=gz_bytes,
+                headers={
+                    'X-API-Key': 'test_key',
+                    'Content-Encoding': 'gzip'
+                },
+                environ_base={'REMOTE_ADDR': '192.168.1.100'}
+            )
+            assert response.status_code == 400
+            assert 'exceeds maximum size limit' in response.get_json()['error']
 
 
 def test_stream_upload_missing_or_invalid_params() -> None:

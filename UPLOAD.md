@@ -135,9 +135,10 @@ Alternatively, detailed telemetry (e.g. from a simulator) can be streamed to thi
 - **Content Type**: `text/csv` or `application/octet-stream`
 - **Request Headers**:
   - `X-API-Key`: Required for authentication. No other request headers are required for session metadata.
+  - `Content-Encoding`: Optional. Supports `gzip`, `br` (or `brotli`), and `deflate`. Streamed telemetry can be compressed incrementally on the fly; the server decompresses in a streaming fashion without buffering the whole request in memory.
 
 - **Request Limits & Constraints**:
-  - **Maximum Size**: Strict limit of 200 MB (`MAX_METADATA_SIZE`). Uploads exceeding this size are rejected with a `400 Bad Request` error.
+  - **Maximum Size**: Strict limit of 200 MB (`MAX_METADATA_SIZE`) applied to both raw incoming bytes and decompressed data. Uploads exceeding this size are rejected with a `400 Bad Request` error.
   - **Flush Interval**: Telemetry is buffered in memory and flushed to the database and files every 15 seconds, as well as on completion.
 
 - **Request Body**:

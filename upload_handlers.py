@@ -20,6 +20,8 @@ import math
 import datetime
 import time
 import logging
+import zlib
+import brotli  # type: ignore[import-untyped]
 from typing import Any, Iterable
 from dataclasses import dataclass, asdict
 import numpy as np
@@ -1213,6 +1215,107 @@ def process_telemetry_derivative_data(
     return df_telemetry, metadata_json, df_summary
 
 
+class StreamingLineReader:
+    """Reads lines incrementally from a streaming request body with optional compression.
+
+    Supports uncompressed (identity), gzip, and brotli (br) Content-Encoding.
+    Enforces maximum size limits on both raw incoming data and decompressed data.
+    """
+
+    CHUNK_SIZE = 64 * 1024
+
+    def __init__(self, stream: Any, content_encoding: str | None = None) -> None:
+        self.stream = stream
+        raw_encoding = (content_encoding or '').strip().lower()
+        if raw_encoding in ('', 'identity'):
+            self.encoding = None
+            self.decompressor: Any = None
+        elif raw_encoding in ('gzip', 'x-gzip'):
+            self.encoding = 'gzip'
+            self.decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        elif raw_encoding in ('deflate', 'zlib'):
+            self.encoding = 'deflate'
+            self.decompressor = zlib.decompressobj(32 + zlib.MAX_WBITS)
+        elif raw_encoding in ('br', 'brotli'):
+            self.encoding = 'br'
+            self.decompressor = brotli.Decompressor()
+        else:
+            raise BadRequest(f'Unsupported Content-Encoding: {content_encoding}')
+
+        self.raw_bytes_read = 0
+        self.decompressed_bytes_read = 0
+        self.buffer = bytearray()
+        self.eof = False
+
+    def readline(self) -> str | None:
+        while True:
+            idx = self.buffer.find(b'\n')
+            if idx != -1:
+                line_bytes = self.buffer[:idx + 1]
+                del self.buffer[:idx + 1]
+                try:
+                    return line_bytes.decode('utf-8')
+                except UnicodeDecodeError as e:
+                    raise BadRequest(f'Invalid UTF-8 encoding in CSV data: {e}')
+
+            if self.eof:
+                if self.buffer:
+                    line_bytes = self.buffer[:]
+                    self.buffer.clear()
+                    try:
+                        return line_bytes.decode('utf-8')
+                    except UnicodeDecodeError as e:
+                        raise BadRequest(f'Invalid UTF-8 encoding in CSV data: {e}')
+                return None
+
+            chunk = self.stream.read(self.CHUNK_SIZE)
+            if chunk:
+                self.raw_bytes_read += len(chunk)
+                if self.raw_bytes_read > MAX_METADATA_SIZE:
+                    raise BadRequest(f'File exceeds maximum size limit of {MAX_METADATA_SIZE} bytes.')
+
+                if self.decompressor is not None:
+                    try:
+                        if self.encoding in ('gzip', 'deflate'):
+                            decompressed = self.decompressor.decompress(chunk)
+                            while self.decompressor.unused_data:
+                                unused = self.decompressor.unused_data
+                                self.decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                                decompressed += self.decompressor.decompress(unused)
+                        elif self.encoding == 'br':
+                            decompressed = self.decompressor.process(chunk)
+                        else:
+                            decompressed = chunk
+                    except Exception as e:
+                        raise BadRequest(f'Decompression error: {e}')
+                else:
+                    decompressed = chunk
+
+                self.decompressed_bytes_read += len(decompressed)
+                if self.decompressed_bytes_read > MAX_METADATA_SIZE:
+                    raise BadRequest(f'File exceeds maximum size limit of {MAX_METADATA_SIZE} bytes.')
+
+                self.buffer.extend(decompressed)
+            else:
+                self.eof = True
+                if self.decompressor is not None:
+                    try:
+                        if self.encoding in ('gzip', 'deflate'):
+                            decompressed = self.decompressor.flush()
+                            if decompressed:
+                                self.decompressed_bytes_read += len(decompressed)
+                                if self.decompressed_bytes_read > MAX_METADATA_SIZE:
+                                    raise BadRequest(f'File exceeds maximum size limit of {MAX_METADATA_SIZE} bytes.')
+                                self.buffer.extend(decompressed)
+                        elif self.encoding == 'br':
+                            if not self.decompressor.is_finished() and self.raw_bytes_read > 0:
+                                raise BadRequest('Decompression error: truncated compressed data.')
+                    except Exception as e:
+                        if isinstance(e, BadRequest):
+                            raise
+                        raise BadRequest(f'Decompression error: {e}')
+
+
 @upload_blueprint.route('/api/upload/stream', methods=['POST'])
 def stream_upload() -> Any:
     """Stream telemetry CSV directly into the handler.
@@ -1222,17 +1325,9 @@ def stream_upload() -> Any:
     if not acl.get('upload_sessions'):
         raise Forbidden('Forbidden: No session upload permission.')
 
-    total_bytes_read = 0
-
-    def read_line_with_limit() -> str | None:
-        nonlocal total_bytes_read
-        line = request.stream.readline()
-        if not line:
-            return None
-        total_bytes_read += len(line)
-        if total_bytes_read > MAX_METADATA_SIZE:
-            raise BadRequest(f'File exceeds maximum size limit of {MAX_METADATA_SIZE} bytes.')
-        return line.decode('utf-8')
+    content_encoding = request.content_encoding or request.headers.get('Content-Encoding')
+    line_reader = StreamingLineReader(request.stream, content_encoding=content_encoding)
+    read_line_with_limit = line_reader.readline
 
     # 1. Read first real lines until an empty line (metadata block/header)
     header_lines: list[str] = []
