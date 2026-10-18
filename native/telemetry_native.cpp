@@ -8,6 +8,7 @@
 #include <limits>
 #include <charconv>
 #include <numbers>
+#include <unordered_map>
 #include <brotli/encode.h>
 
 namespace telemetry {
@@ -427,6 +428,198 @@ std::string process_telemetry_channel(
     }
 
     return compress_brotli(raw_payload);
+}
+
+std::vector<int> detect_lap_crossings(
+    const double* lat_arr,
+    const double* lon_arr,
+    size_t N,
+    const double* cl_lat,
+    const double* cl_lon,
+    const double* cl_dist,
+    size_t M,
+    double lap_length
+) {
+    std::vector<int> lap_col(N, 1);
+    if (N == 0 || M == 0) return lap_col;
+
+    double sum_lat = 0.0;
+    for (size_t c = 0; c < M; ++c) sum_lat += cl_lat[c];
+    double avg_lat = sum_lat / M;
+    double cos_lat_track = std::cos(avg_lat * (std::numbers::pi / 180.0));
+
+    std::vector<double> raw_dist(N, 0.0);
+    std::vector<bool> valid_coords(N, false);
+
+    for (size_t i = 0; i < N; ++i) {
+        double lat = lat_arr[i];
+        double lon = lon_arr[i];
+        if (std::isnan(lat) || std::isnan(lon)) {
+            valid_coords[i] = false;
+            continue;
+        }
+        valid_coords[i] = true;
+
+        double min_d2 = std::numeric_limits<double>::infinity();
+        size_t best_idx = 0;
+        for (size_t c = 0; c < M; ++c) {
+            double dlat = cl_lat[c] - lat;
+            double dlon = (cl_lon[c] - lon) * cos_lat_track;
+            double d2 = dlat * dlat + dlon * dlon;
+            if (d2 < min_d2) {
+                min_d2 = d2;
+                best_idx = c;
+            }
+        }
+        raw_dist[i] = cl_dist[best_idx];
+    }
+
+    std::vector<size_t> crossings;
+    bool has_last_valid = false;
+    double last_valid_dist = 0.0;
+    for (size_t i = 0; i < N; ++i) {
+        if (!valid_coords[i]) continue;
+        if (has_last_valid) {
+            if (raw_dist[i] < last_valid_dist - (0.5 * lap_length)) {
+                crossings.push_back(i);
+            }
+        }
+        last_valid_dist = raw_dist[i];
+        has_last_valid = true;
+    }
+
+    for (size_t i = 0; i < crossings.size(); ++i) {
+        size_t crossing_idx = crossings[i];
+        int lap_num = static_cast<int>(i) + 2;
+        std::fill(lap_col.begin() + crossing_idx, lap_col.end(), lap_num);
+    }
+
+    return lap_col;
+}
+
+std::vector<double> interpolate_lap_distances(
+    const double* lat_arr,
+    const double* lon_arr,
+    const int* lap_col,
+    size_t N,
+    const double* cl_lat,
+    const double* cl_lon,
+    const double* cl_dist,
+    size_t M,
+    double lap_length
+) {
+    std::vector<double> lap_distance_m(N, std::numeric_limits<double>::quiet_NaN());
+    if (N == 0 || M == 0) return lap_distance_m;
+
+    double sum_lat = 0.0;
+    for (size_t c = 0; c < M; ++c) sum_lat += cl_lat[c];
+    double avg_lat = sum_lat / M;
+    double cos_lat_track = std::cos(avg_lat * (std::numbers::pi / 180.0));
+
+    std::vector<int> unique_laps;
+    std::unordered_map<int, std::vector<size_t>> lap_indices;
+    for (size_t i = 0; i < N; ++i) {
+        int l = lap_col[i];
+        if (lap_indices.find(l) == lap_indices.end()) {
+            unique_laps.push_back(l);
+        }
+        lap_indices[l].push_back(i);
+    }
+    std::sort(unique_laps.begin(), unique_laps.end());
+
+    constexpr double epsilon = 1e-10;
+
+    for (int lap_num : unique_laps) {
+        const auto& indices = lap_indices[lap_num];
+        size_t n_lap = indices.size();
+        if (n_lap == 0) continue;
+
+        for (size_t j = 0; j < n_lap; ++j) {
+            size_t p = indices[j];
+            double lat_P = lat_arr[p];
+            double lon_P = lon_arr[p];
+
+            if (std::isnan(lat_P) || std::isnan(lon_P)) {
+                lap_distance_m[p] = std::numeric_limits<double>::quiet_NaN();
+                continue;
+            }
+
+            double progress = (n_lap > 1) ? (static_cast<double>(j) / (n_lap - 1)) : 0.0;
+
+            double min_d2_biased = std::numeric_limits<double>::infinity();
+            size_t idx = 0;
+            for (size_t c = 0; c < M; ++c) {
+                double dlat = cl_lat[c] - lat_P;
+                double dlon = (cl_lon[c] - lon_P) * cos_lat_track;
+                double d2 = dlat * dlat + dlon * dlon;
+                double track_progress = cl_dist[c] / lap_length;
+                double diff_prog = track_progress - progress;
+                double d2_biased = d2 + epsilon * diff_prog * diff_prog;
+                if (d2_biased < min_d2_biased) {
+                    min_d2_biased = d2_biased;
+                    idx = c;
+                }
+            }
+
+            size_t idx_prev = (idx + M - 1) % M;
+            size_t idx_next = (idx + 1) % M;
+
+            double lat_A = cl_lat[idx];
+            double lon_A = cl_lon[idx];
+            double dist_A = cl_dist[idx];
+
+            double lat_prev = cl_lat[idx_prev];
+            double lon_prev = cl_lon[idx_prev];
+            double dist_prev = cl_dist[idx_prev];
+
+            double lat_next = cl_lat[idx_next];
+            double lon_next = cl_lon[idx_next];
+            double dist_next = cl_dist[idx_next];
+
+            double cos_lat = std::cos(lat_A * (std::numbers::pi / 180.0));
+            double dlat_P = lat_P - lat_A;
+            double dlon_P = (lon_P - lon_A) * cos_lat;
+
+            // Next segment projection
+            double dlat_next = lat_next - lat_A;
+            double dlon_next = (lon_next - lon_A) * cos_lat;
+            double len2_next = dlat_next * dlat_next + dlon_next * dlon_next;
+            double dot_next = dlat_P * dlat_next + dlon_P * dlon_next;
+            double t_next = (len2_next > 1e-15) ? (dot_next / len2_next) : 0.0;
+
+            // Previous segment projection
+            double dlat_prev = lat_prev - lat_A;
+            double dlon_prev = (lon_prev - lon_A) * cos_lat;
+            double len2_prev = dlat_prev * dlat_prev + dlon_prev * dlon_prev;
+            double dot_prev = dlat_P * dlat_prev + dlon_P * dlon_prev;
+            double t_prev = (len2_prev > 1e-15) ? (dot_prev / len2_prev) : 0.0;
+
+            double t_next_clipped = std::clamp(t_next, -0.5, 0.5);
+            double t_prev_clipped = std::clamp(t_prev, -0.5, 0.5);
+
+            double diff_next = std::fmod(dist_next - dist_A + 0.5 * lap_length, lap_length);
+            if (diff_next < 0.0) diff_next += lap_length;
+            diff_next -= 0.5 * lap_length;
+
+            double diff_prev = std::fmod(dist_prev - dist_A + 0.5 * lap_length, lap_length);
+            if (diff_prev < 0.0) diff_prev += lap_length;
+            diff_prev -= 0.5 * lap_length;
+
+            double dist_if_next = dist_A + t_next_clipped * diff_next;
+            double dist_if_prev = dist_A + t_prev_clipped * diff_prev;
+
+            double interpolated_dist = (t_next > t_prev) ? dist_if_next : dist_if_prev;
+            if (interpolated_dist >= lap_length) {
+                interpolated_dist = lap_length - 1e-3;
+            }
+
+            double final_dist = std::fmod(interpolated_dist, lap_length);
+            if (final_dist < 0.0) final_dist += lap_length;
+            lap_distance_m[p] = final_dist;
+        }
+    }
+
+    return lap_distance_m;
 }
 
 } // namespace telemetry

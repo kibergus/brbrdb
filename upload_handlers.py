@@ -35,6 +35,7 @@ import auth
 import aliases
 import session_time
 from plot_handlers import invalidate_plot_cache
+import _telemetry_native
 
 logger = logging.getLogger(__name__)
 upload_blueprint = Blueprint('upload', __name__)
@@ -286,94 +287,15 @@ def interpolate_lap_distances(
     lap_col: np.ndarray,
     centerline: list[dict],
     lap_length: float,
-    d2_matrix: np.ndarray
+    d2_matrix: np.ndarray | None = None
 ) -> np.ndarray:
     """Interpolates lap distance along the track by projecting coordinates onto track segments."""
-    lap_distance_m = np.zeros(len(lat_arr))
-    cl_lat = np.array([p['lat'] for p in centerline])
-    cl_lon = np.array([p['lon'] for p in centerline])
-    cl_dist = np.array([p['dist'] for p in centerline])
-    N = len(centerline)
-
-    for lap_num in sorted(np.unique(lap_col)):
-        mask = (lap_col == lap_num)
-        n_lap = np.sum(mask)
-        if n_lap == 0:
-            continue
-
-        d2 = d2_matrix[mask, :]
-        progress = np.linspace(0, 1, n_lap)[:, None]
-        track_progress = cl_dist / lap_length
-        epsilon = 1e-10
-        d2_biased = d2 + epsilon * (track_progress - progress)**2
-        idxs = np.argmin(d2_biased, axis=1)
-
-        lat_P = lat_arr[mask]
-        lon_P = lon_arr[mask]
-
-        lat_A = cl_lat[idxs]
-        lon_A = cl_lon[idxs]
-        dist_A = cl_dist[idxs]
-
-        idx_prev = (idxs - 1) % N
-        idx_next = (idxs + 1) % N
-
-        lat_prev = cl_lat[idx_prev]
-        lon_prev = cl_lon[idx_prev]
-        dist_prev = cl_dist[idx_prev]
-
-        lat_next = cl_lat[idx_next]
-        lon_next = cl_lon[idx_next]
-        dist_next = cl_dist[idx_next]
-
-        cos_lat = np.cos(np.radians(lat_A))
-        dlat_P = lat_P - lat_A
-        dlon_P = (lon_P - lon_A) * cos_lat
-
-        # Next segment projection
-        dlat_next = lat_next - lat_A
-        dlon_next = (lon_next - lon_A) * cos_lat
-        len2_next = dlat_next**2 + dlon_next**2
-        dot_next = dlat_P * dlat_next + dlon_P * dlon_next
-        t_next = np.zeros_like(dot_next)
-        valid_next = len2_next > 1e-15
-        t_next[valid_next] = dot_next[valid_next] / len2_next[valid_next]
-
-        # Previous segment projection
-        dlat_prev = lat_prev - lat_A
-        dlon_prev = (lon_prev - lon_A) * cos_lat
-        len2_prev = dlat_prev**2 + dlon_prev**2
-        dot_prev = dlat_P * dlat_prev + dlon_P * dlon_prev
-        t_prev = np.zeros_like(dot_prev)
-        valid_prev = len2_prev > 1e-15
-        t_prev[valid_prev] = dot_prev[valid_prev] / len2_prev[valid_prev]
-
-        t_next_clipped = np.clip(t_next, -0.5, 0.5)
-        t_prev_clipped = np.clip(t_prev, -0.5, 0.5)
-
-        diff_next = (dist_next - dist_A + 0.5 * lap_length) % lap_length - 0.5 * lap_length
-        diff_prev = (dist_prev - dist_A + 0.5 * lap_length) % lap_length - 0.5 * lap_length
-
-        dist_if_next = dist_A + t_next_clipped * diff_next
-        dist_if_prev = dist_A + t_prev_clipped * diff_prev
-
-        use_next = t_next > t_prev
-        interpolated_dist = np.where(use_next, dist_if_next, dist_if_prev)
-
-        # Clamp any interpolated distance that overshoots lap_length back to just
-        # below it. Without this, the % operator wraps end-of-lap points (e.g.
-        # 1053m for a 1052.58m lap) to near-zero, making is_lap_valid incorrectly
-        # conclude that no points are near the end of the lap (crossed_end=False).
-        interpolated_dist = np.where(
-            interpolated_dist >= lap_length,
-            lap_length - 1e-3,
-            interpolated_dist,
-        )
-        lap_distance_m[mask] = interpolated_dist % lap_length
-
-    invalid_mask = np.isnan(lat_arr) | np.isnan(lon_arr)
-    lap_distance_m[invalid_mask] = np.nan
-    return lap_distance_m
+    cl_lat = np.array([p['lat'] for p in centerline], dtype=float)
+    cl_lon = np.array([p['lon'] for p in centerline], dtype=float)
+    cl_dist = np.array([p['dist'] for p in centerline], dtype=float)
+    return _telemetry_native.interpolate_lap_distances(
+        lat_arr, lon_arr, lap_col.astype(np.int32), cl_lat, cl_lon, cl_dist, float(lap_length)
+    )
 
 
 def to_naive_datetime(val: Any) -> pd.Timestamp | None:
@@ -851,36 +773,18 @@ def process_telemetry_derivative_data(
     sector_end = []
 
     if track_data and centerline:
-        cl_lat = np.array([p['lat'] for p in centerline])
-        cl_lon = np.array([p['lon'] for p in centerline])
-        cl_dist = np.array([p['dist'] for p in centerline])
+        cl_lat = np.array([p['lat'] for p in centerline], dtype=float)
+        cl_lon = np.array([p['lon'] for p in centerline], dtype=float)
+        cl_dist = np.array([p['dist'] for p in centerline], dtype=float)
         lap_length = float(track_data.get('lap_length', 1000.0))
         turns = track_data.get('turns', [])
         sector_end = track_data.get('sector_end', [])
 
-        lats_v = lat_arr[:, None]
-        lons_v = lon_arr[:, None]
-        avg_lat = np.mean(cl_lat)
-        cos_lat_track = np.cos(np.radians(avg_lat))
-        d2_matrix = (cl_lat[None, :] - lats_v)**2 + ((cl_lon[None, :] - lons_v) * cos_lat_track)**2
-        idxs_all = np.argmin(d2_matrix, axis=1)
-        raw_dist = cl_dist[idxs_all]
-
-        crossings = []
-        last_valid_dist = None
-        for i in range(len(raw_dist)):
-            if not valid_coords[i]:
-                continue
-            if last_valid_dist is not None:
-                if raw_dist[i] < last_valid_dist - (0.5 * lap_length):
-                    crossings.append(i)
-            last_valid_dist = raw_dist[i]
-
-        for i, crossing in enumerate(crossings):
-            lap_col[crossing:] = i + 2
-
-        lap_distance_m = interpolate_lap_distances(
-            lat_arr, lon_arr, lap_col, centerline, lap_length, d2_matrix
+        lap_col = _telemetry_native.detect_lap_crossings(
+            lat_arr, lon_arr, cl_lat, cl_lon, cl_dist, lap_length
+        )
+        lap_distance_m = _telemetry_native.interpolate_lap_distances(
+            lat_arr, lon_arr, lap_col, cl_lat, cl_lon, cl_dist, lap_length
         )
     else:
         for i in range(len(records)):
@@ -912,42 +816,43 @@ def process_telemetry_derivative_data(
 
         laps_data.append({'num': int(l_num), 'time': lap_time_seconds})
 
-    # Quaternions and angles
-    q_x = [safe_float(r.get('Ori Quat X'), 0.0) for r in records]
-    q_y = [safe_float(r.get('Ori Quat Y'), 0.0) for r in records]
-    q_z = [safe_float(r.get('Ori Quat Z'), 0.0) for r in records]
-    q_w = [safe_float(r.get('Ori Quat W'), 1.0) for r in records]
+    # Initialize DataFrame from records in one batch
+    df_telemetry = pd.DataFrame(records)
+    n_records = len(records)
 
-    def quat_to_yaw(x: float, y: float, z: float, w: float) -> float:
-        siny_cosp = 2 * (w * y + x * z)
-        cosy_cosp = 1 - 2 * (y * y + z * z)
-        return math.degrees(math.atan2(siny_cosp, cosy_cosp))
+    speeds_raw = np.array([safe_float(r.get('Speed'), 0.0) for r in records], dtype=float)
+    speeds_ms = np.where(speeds_raw > 50.0, speeds_raw / 3.6, speeds_raw)
 
-    def wrap_360(a: float) -> float:
-        return a % 360
+    has_quat = any(k in df_telemetry.columns for k in ('Ori Quat X', 'q_x', 'Ori Quat W'))
+    has_toe = any(k in df_telemetry.columns for k in ('Toe FL', 'toe_fl'))
 
-    def wrap_180(a: float) -> float:
-        return (a + 180) % 360 - 180
+    if has_quat:
+        quat_x_col = df_telemetry['Ori Quat X'] if 'Ori Quat X' in df_telemetry.columns else df_telemetry.get('q_x', [])
+        quat_y_col = df_telemetry['Ori Quat Y'] if 'Ori Quat Y' in df_telemetry.columns else df_telemetry.get('q_y', [])
+        quat_z_col = df_telemetry['Ori Quat Z'] if 'Ori Quat Z' in df_telemetry.columns else df_telemetry.get('q_z', [])
+        quat_w_col = df_telemetry['Ori Quat W'] if 'Ori Quat W' in df_telemetry.columns else df_telemetry.get('q_w', [])
+        q_x = np.array([safe_float(v, 0.0) for v in quat_x_col], dtype=float)
+        q_y = np.array([safe_float(v, 0.0) for v in quat_y_col], dtype=float)
+        q_z = np.array([safe_float(v, 0.0) for v in quat_z_col], dtype=float)
+        q_w = np.array([safe_float(v, 1.0) for v in quat_w_col], dtype=float)
 
-    speeds_ms = np.zeros(len(records))
-    for i, r in enumerate(records):
-        s_val = safe_float(r.get('Speed'), 0.0)
-        speeds_ms[i] = s_val / 3.6 if s_val > 50.0 else s_val
+    if 'Slip Angle Rear' in df_telemetry.columns:
+        valid_raw_slip_count = sum(
+            1 for v in df_telemetry['Slip Angle Rear']
+            if v is not None and str(v).strip() != ''
+        )
+        has_raw_slip_rear = (valid_raw_slip_count > n_records * 0.5)
+    else:
+        has_raw_slip_rear = False
 
-    telemetry_rows = []
-    has_quat = any('Ori Quat X' in r or 'q_x' in r or 'Ori Quat W' in r for r in records)
-    has_toe = any('Toe FL' in r or 'toe_fl' in r for r in records)
+    if 'Yaw Rate' in df_telemetry.columns:
+        has_gyro = any(
+            parse_optional_float(v) is not None
+            for v in df_telemetry['Yaw Rate']
+        )
+    else:
+        has_gyro = False
 
-    valid_raw_slip_count = sum(
-        1 for r in records
-        if r.get('Slip Angle Rear') is not None and str(r.get('Slip Angle Rear')).strip() != ''
-    )
-    has_raw_slip_rear = (valid_raw_slip_count > len(records) * 0.5) if records else False
-
-    has_gyro = any(
-        parse_optional_float(r.get('Yaw Rate')) is not None
-        for r in records
-    )
     can_compute_gyro_slip = (
         not has_quat
         and not has_raw_slip_rear
@@ -960,21 +865,30 @@ def process_telemetry_derivative_data(
             records, course, speeds_ms, session_info.distance_to_rear_axle
         )
     else:
-        gyro_heading_arr, gyro_slip_rear_arr = np.zeros(len(records)), np.full(len(records), np.nan)
+        gyro_heading_arr, gyro_slip_rear_arr = np.zeros(n_records), np.full(n_records, np.nan)
 
     # Physics-engine per-wheel forces (from KartSim) have non-zero lateral forces.
     # In real kart telemetry (e.g. GoPro), RaceTools CSV headers often contain
     # dummy placeholder columns with 0.00 values.
-    has_per_wheel_forces = any(
-        abs(safe_float(r.get('Lat Force FL'), 0.0)) > 1e-4
-        or abs(safe_float(r.get('Lat Force FR'), 0.0)) > 1e-4
-        for r in records
-    )
-    valid_raw_forces_count = sum(
-        1 for r in records
-        if r.get('Lat Force Front') is not None and str(r.get('Lat Force Front')).strip() != ''
-    )
-    has_raw_per_axle_forces = (valid_raw_forces_count > len(records) * 0.5) if records else False
+    if 'Lat Force FL' in df_telemetry.columns or 'Lat Force FR' in df_telemetry.columns:
+        fl_col = df_telemetry['Lat Force FL'] if 'Lat Force FL' in df_telemetry.columns else []
+        fr_col = df_telemetry['Lat Force FR'] if 'Lat Force FR' in df_telemetry.columns else []
+        has_per_wheel_forces = any(
+            abs(safe_float(v, 0.0)) > 1e-4 for v in fl_col
+        ) or any(
+            abs(safe_float(v, 0.0)) > 1e-4 for v in fr_col
+        )
+    else:
+        has_per_wheel_forces = False
+
+    if 'Lat Force Front' in df_telemetry.columns:
+        valid_raw_forces_count = sum(
+            1 for v in df_telemetry['Lat Force Front']
+            if v is not None and str(v).strip() != ''
+        )
+        has_raw_per_axle_forces = (valid_raw_forces_count > n_records * 0.5)
+    else:
+        has_raw_per_axle_forces = False
     has_raw_forces = has_per_wheel_forces or has_raw_per_axle_forces
 
     can_compute_gyro_forces = (
@@ -988,10 +902,10 @@ def process_telemetry_derivative_data(
             records, speeds_ms, session_info.distance_to_rear_axle
         )
     else:
-        gyro_lat_f_arr = np.full(len(records), np.nan)
-        gyro_lat_r_arr = np.full(len(records), np.nan)
-        gyro_lon_f_arr = np.full(len(records), np.nan)
-        gyro_lon_r_arr = np.full(len(records), np.nan)
+        gyro_lat_f_arr = np.full(n_records, np.nan)
+        gyro_lat_r_arr = np.full(n_records, np.nan)
+        gyro_lon_f_arr = np.full(n_records, np.nan)
+        gyro_lon_r_arr = np.full(n_records, np.nan)
 
     sim_channels = [
         'RPS FL', 'RPS FR', 'RPS RL', 'RPS RR',
@@ -1004,139 +918,144 @@ def process_telemetry_derivative_data(
         'Slide Pct FL', 'Slide Pct FR', 'Slide Pct RL', 'Slide Pct RR'
     ]
 
-    for i in range(len(records)):
-        r = records[i]
-        speed_val = safe_float(r.get('Speed'), 0.0)
-        if speed_val > 50.0:
-            speed_ms = speed_val / 3.6
+    # Core and derived geo/time/speed/lap columns
+    df_telemetry['Record'] = np.arange(1, n_records + 1)
+    df_telemetry['Time'] = [r.get('Time') or '' for r in records]
+    df_telemetry['Latitude'] = ['' if np.isnan(x) else f'{x:.8f}' for x in lat_arr]
+    df_telemetry['Longitude'] = ['' if np.isnan(x) else f'{x:.8f}' for x in lon_arr]
+    df_telemetry['Speed'] = [f'{s:.5f}' for s in speeds_ms]
+    df_telemetry['Lap'] = [str(lap_val) for lap_val in lap_col]
+    df_telemetry['Lap Distance'] = ['' if np.isnan(d) else f'{d:.2f}' for d in lap_distance_m]
+
+    # Format optional base columns ONLY if present in input
+    if 'Direction of Travel' in df_telemetry.columns:
+        raw_dot = df_telemetry['Direction of Travel'].values
+        course_mod = course % 360.0
+        dot_col = []
+        for i in range(n_records):
+            raw_val = raw_dot[i]
+            is_empty = (
+                raw_val is None
+                or raw_val == ''
+                or (isinstance(raw_val, float) and np.isnan(raw_val))
+            )
+            if not valid_coords[i] and is_empty:
+                dot_col.append('')
+            else:
+                dot_col.append(f'{course_mod[i]:.2f}')
+        df_telemetry['Direction of Travel'] = dot_col
+
+    if 'Altitude' in df_telemetry.columns:
+        df_telemetry['Altitude'] = [f'{safe_float(v, 0.0):.2f}' for v in df_telemetry['Altitude']]
+
+    if 'GForceLat' in df_telemetry.columns:
+        df_telemetry['GForceLat'] = [f'{safe_float(v, 0.0):.3f}' for v in df_telemetry['GForceLat']]
+
+    if 'GForceLon' in df_telemetry.columns:
+        df_telemetry['GForceLon'] = [f'{safe_float(v, 0.0):.3f}' for v in df_telemetry['GForceLon']]
+
+    if 'GForceVert' in df_telemetry.columns:
+        df_telemetry['GForceVert'] = [f'{safe_float(v, 0.0):.3f}' for v in df_telemetry['GForceVert']]
+
+    if 'Throttle' in df_telemetry.columns:
+        df_telemetry['Throttle'] = [f'{safe_float(v, 0.0):.1f}' for v in df_telemetry['Throttle']]
+
+    if 'Brake' in df_telemetry.columns:
+        df_telemetry['Brake'] = [f'{safe_float(v, 0.0):.1f}' for v in df_telemetry['Brake']]
+
+    if 'Steering Angle' in df_telemetry.columns:
+        df_telemetry['Steering Angle'] = [f'{safe_float(v, 0.0):.1f}' for v in df_telemetry['Steering Angle']]
+
+    if 'Yaw Rate' in df_telemetry.columns:
+        df_telemetry['Yaw Rate'] = [
+            f'{y:.3f}' if (y := parse_optional_float(v)) is not None else ''
+            for v in df_telemetry['Yaw Rate']
+        ]
+
+    if 'Pitch Rate' in df_telemetry.columns:
+        df_telemetry['Pitch Rate'] = [
+            f'{p:.3f}' if (p := parse_optional_float(v)) is not None else ''
+            for v in df_telemetry['Pitch Rate']
+        ]
+
+    if 'Roll Rate' in df_telemetry.columns:
+        df_telemetry['Roll Rate'] = [
+            f'{r_val:.3f}' if (r_val := parse_optional_float(v)) is not None else ''
+            for v in df_telemetry['Roll Rate']
+        ]
+
+    # Orientation / Heading / Slip angles
+    if has_quat:
+        siny_cosp = 2.0 * (q_w * q_y + q_x * q_z)
+        cosy_cosp = 1.0 - 2.0 * (q_y * q_y + q_z * q_z)
+        kart_heading = np.degrees(np.arctan2(siny_cosp, cosy_cosp)) % 360.0
+        course_val = course % 360.0
+
+        df_telemetry['Kart Heading'] = [f'{x:.2f}' for x in kart_heading]
+        df_telemetry['Yaw'] = df_telemetry['Kart Heading']
+        df_telemetry['Ori Quat X'] = [f'{x:.6f}' for x in q_x]
+        df_telemetry['Ori Quat Y'] = [f'{x:.6f}' for x in q_y]
+        df_telemetry['Ori Quat Z'] = [f'{x:.6f}' for x in q_z]
+        df_telemetry['Ori Quat W'] = [f'{x:.6f}' for x in q_w]
+
+        if has_toe:
+            toe_fl_col = df_telemetry['Toe FL'] if 'Toe FL' in df_telemetry.columns else df_telemetry.get('toe_fl', [])
+            toe_fr_col = df_telemetry['Toe FR'] if 'Toe FR' in df_telemetry.columns else df_telemetry.get('toe_fr', [])
+            toe_fl_arr = np.array([safe_float(v, 0.0) for v in toe_fl_col])
+            toe_fr_arr = np.array([safe_float(v, 0.0) for v in toe_fr_col])
+            wa_fl_arr = np.degrees(toe_fl_arr)
+            wa_fr_arr = np.degrees(toe_fr_arr)
+            slip_front = (course_val - (kart_heading + (wa_fl_arr + wa_fr_arr) / 2.0) + 360.0) % 360.0 - 180.0
+            slip_rear = (course_val - kart_heading + 360.0) % 360.0 - 180.0
+
+            df_telemetry['Toe FL'] = [f'{x:.6f}' for x in toe_fl_arr]
+            df_telemetry['Toe FR'] = [f'{x:.6f}' for x in toe_fr_arr]
+            df_telemetry['Wheel Angle FL'] = [f'{x:.2f}' for x in wa_fl_arr]
+            df_telemetry['Wheel Angle FR'] = [f'{x:.2f}' for x in wa_fr_arr]
+            df_telemetry['Wheel Heading FL'] = [f'{(h + w) % 360.0:.2f}' for h, w in zip(kart_heading, wa_fl_arr)]
+            df_telemetry['Wheel Heading FR'] = [f'{(h + w) % 360.0:.2f}' for h, w in zip(kart_heading, wa_fr_arr)]
+            df_telemetry['Slip Angle Front'] = [f'{x:.2f}' for x in slip_front]
+            df_telemetry['Slip Angle Rear'] = [f'{x:.2f}' for x in slip_rear]
         else:
-            speed_ms = speed_val
+            slip_rear = (course_val - kart_heading + 360.0) % 360.0 - 180.0
+            df_telemetry['Slip Angle Rear'] = [f'{x:.2f}' for x in slip_rear]
+    elif can_compute_gyro_slip:
+        df_telemetry['Kart Heading'] = [f'{x:.2f}' for x in gyro_heading_arr]
+        df_telemetry['Yaw'] = df_telemetry['Kart Heading']
+        df_telemetry['Slip Angle Rear'] = [
+            '' if np.isnan(x) else f'{x:.2f}' for x in gyro_slip_rear_arr
+        ]
+    else:
+        if 'Kart Heading' in df_telemetry.columns:
+            df_telemetry['Kart Heading'] = [f'{safe_float(v, 0.0):.2f}' for v in df_telemetry['Kart Heading']]
+        if 'Yaw' in df_telemetry.columns:
+            df_telemetry['Yaw'] = [f'{safe_float(v, 0.0):.2f}' for v in df_telemetry['Yaw']]
+        if 'Slip Angle Rear' in df_telemetry.columns:
+            df_telemetry['Slip Angle Rear'] = [
+                (
+                    f'{safe_float(v, 0.0):.2f}'
+                    if v is not None and v != '' and not (isinstance(v, float) and np.isnan(v))
+                    else ''
+                )
+                for v in df_telemetry['Slip Angle Rear']
+            ]
 
-        course_val = wrap_360(course[i])
-        time_str_point = r.get('Time') or ''
+    # Front & Rear specific forces derived from IMU / Gyro
+    if can_compute_gyro_forces:
+        df_telemetry['Lat Force Front'] = ['' if np.isnan(x) else f'{x:.3f}' for x in gyro_lat_f_arr]
+        df_telemetry['Lat Force Rear'] = ['' if np.isnan(x) else f'{x:.3f}' for x in gyro_lat_r_arr]
+        df_telemetry['Long Force Front'] = ['' if np.isnan(x) else f'{x:.3f}' for x in gyro_lon_f_arr]
+        df_telemetry['Long Force Rear'] = ['' if np.isnan(x) else f'{x:.3f}' for x in gyro_lon_r_arr]
 
-        # Start with all original columns from the input record
-        row = dict(r)
-
-        # Core and derived geo/time/speed/lap columns
-        row['Record'] = i + 1
-        row['Time'] = time_str_point
-        row['Latitude'] = '' if np.isnan(lat_arr[i]) else f'{lat_arr[i]:.8f}'
-        row['Longitude'] = '' if np.isnan(lon_arr[i]) else f'{lon_arr[i]:.8f}'
-        row['Speed'] = f'{speed_ms:.5f}'
-        row['Lap'] = str(lap_col[i])
-        row['Lap Distance'] = '' if np.isnan(lap_distance_m[i]) else f'{lap_distance_m[i]:.2f}'
-
-        # Format optional base columns ONLY if present in input
-        if 'Direction of Travel' in r:
-            if not valid_coords[i] and (r.get('Direction of Travel') is None or r.get('Direction of Travel') == ''):
-                row['Direction of Travel'] = ''
-            else:
-                row['Direction of Travel'] = f'{course_val:.2f}'
-
-        if 'Altitude' in r:
-            row['Altitude'] = f"{safe_float(r.get('Altitude'), 0.0):.2f}"
-
-        if 'GForceLat' in r:
-            row['GForceLat'] = f"{safe_float(r.get('GForceLat'), 0.0):.3f}"
-
-        if 'GForceLon' in r:
-            row['GForceLon'] = f"{safe_float(r.get('GForceLon'), 0.0):.3f}"
-
-        if 'GForceVert' in r:
-            row['GForceVert'] = f"{safe_float(r.get('GForceVert'), 0.0):.3f}"
-
-        if 'Throttle' in r:
-            row['Throttle'] = f"{safe_float(r.get('Throttle'), 0.0):.1f}"
-
-        if 'Brake' in r:
-            row['Brake'] = f"{safe_float(r.get('Brake'), 0.0):.1f}"
-
-        if 'Steering Angle' in r:
-            row['Steering Angle'] = f"{safe_float(r.get('Steering Angle'), 0.0):.1f}"
-
-        if 'Yaw Rate' in r:
-            y_val = parse_optional_float(r.get('Yaw Rate'))
-            row['Yaw Rate'] = f"{y_val:.3f}" if y_val is not None else ''
-
-        if 'Pitch Rate' in r:
-            p_val = parse_optional_float(r.get('Pitch Rate'))
-            row['Pitch Rate'] = f"{p_val:.3f}" if p_val is not None else ''
-
-        if 'Roll Rate' in r:
-            r_val = parse_optional_float(r.get('Roll Rate'))
-            row['Roll Rate'] = f"{r_val:.3f}" if r_val is not None else ''
-
-        # Orientation / Heading / Slip angles
-        if has_quat:
-            kart_heading = wrap_360(quat_to_yaw(q_x[i], q_y[i], q_z[i], q_w[i]))
-            row['Kart Heading'] = f'{kart_heading:.2f}'
-            row['Yaw'] = f'{kart_heading:.2f}'
-            row['Ori Quat X'] = f"{q_x[i]:.6f}"
-            row['Ori Quat Y'] = f"{q_y[i]:.6f}"
-            row['Ori Quat Z'] = f"{q_z[i]:.6f}"
-            row['Ori Quat W'] = f"{q_w[i]:.6f}"
-
-            if has_toe:
-                toe_fl = safe_float(r.get('Toe FL', r.get('toe_fl')), 0.0)
-                toe_fr = safe_float(r.get('Toe FR', r.get('toe_fr')), 0.0)
-                wa_fl = math.degrees(toe_fl)
-                wa_fr = math.degrees(toe_fr)
-                slip_front = wrap_180(course_val - (kart_heading + (wa_fl + wa_fr) / 2) + 180)
-                slip_rear = wrap_180(course_val - kart_heading + 180)
-
-                row['Toe FL'] = f"{toe_fl:.6f}"
-                row['Toe FR'] = f"{toe_fr:.6f}"
-                row['Wheel Angle FL'] = f'{wa_fl:.2f}'
-                row['Wheel Angle FR'] = f'{wa_fr:.2f}'
-                row['Wheel Heading FL'] = f'{wrap_360(kart_heading + wa_fl):.2f}'
-                row['Wheel Heading FR'] = f'{wrap_360(kart_heading + wa_fr):.2f}'
-                row['Slip Angle Front'] = f'{slip_front:.2f}'
-                row['Slip Angle Rear'] = f'{slip_rear:.2f}'
-            else:
-                slip_rear = wrap_180(course_val - kart_heading + 180)
-                row['Slip Angle Rear'] = f'{slip_rear:.2f}'
-        elif can_compute_gyro_slip:
-            row['Kart Heading'] = f'{gyro_heading_arr[i]:.2f}'
-            row['Yaw'] = f'{gyro_heading_arr[i]:.2f}'
-            if not np.isnan(gyro_slip_rear_arr[i]):
-                row['Slip Angle Rear'] = f'{gyro_slip_rear_arr[i]:.2f}'
-            else:
-                row['Slip Angle Rear'] = ''
-        else:
-            if 'Kart Heading' in r:
-                row['Kart Heading'] = f"{safe_float(r.get('Kart Heading'), 0.0):.2f}"
-            if 'Yaw' in r:
-                row['Yaw'] = f"{safe_float(r.get('Yaw'), 0.0):.2f}"
-            if 'Slip Angle Rear' in r and r.get('Slip Angle Rear') not in (None, ''):
-                row['Slip Angle Rear'] = f"{safe_float(r.get('Slip Angle Rear'), 0.0):.2f}"
-
-        # Front & Rear specific forces derived from IMU / Gyro
-        if can_compute_gyro_forces:
-            if not np.isnan(gyro_lat_f_arr[i]):
-                row['Lat Force Front'] = f'{gyro_lat_f_arr[i]:.3f}'
-                row['Lat Force Rear'] = f'{gyro_lat_r_arr[i]:.3f}'
-                row['Long Force Front'] = f'{gyro_lon_f_arr[i]:.3f}'
-                row['Long Force Rear'] = f'{gyro_lon_r_arr[i]:.3f}'
-            else:
-                row['Lat Force Front'] = ''
-                row['Lat Force Rear'] = ''
-                row['Long Force Front'] = ''
-                row['Long Force Rear'] = ''
-
-        # Optional simulation physics channels
-        for ch in sim_channels:
-            if (
-                ch in ('Lat Force Front', 'Lat Force Rear', 'Long Force Front', 'Long Force Rear')
-                and can_compute_gyro_forces
-            ):
-                continue
-            if ch in r:
-                row[ch] = f"{safe_float(r.get(ch), 0.0):.2f}"
-
-        telemetry_rows.append(row)
-
-    df_telemetry = pd.DataFrame(telemetry_rows)
+    # Optional simulation physics channels
+    for ch in sim_channels:
+        if (
+            ch in ('Lat Force Front', 'Lat Force Rear', 'Long Force Front', 'Long Force Rear')
+            and can_compute_gyro_forces
+        ):
+            continue
+        if ch in df_telemetry.columns:
+            df_telemetry[ch] = [f'{safe_float(v, 0.0):.2f}' for v in df_telemetry[ch]]
 
     best_lap_time = ''
     best_lap_num = ''
@@ -1245,28 +1164,37 @@ class StreamingLineReader:
         self.raw_bytes_read = 0
         self.decompressed_bytes_read = 0
         self.buffer = bytearray()
+        self.pos = 0
         self.eof = False
 
     def readline(self) -> str | None:
         while True:
-            idx = self.buffer.find(b'\n')
+            idx = self.buffer.find(b'\n', self.pos)
             if idx != -1:
-                line_bytes = self.buffer[:idx + 1]
-                del self.buffer[:idx + 1]
+                line_bytes = self.buffer[self.pos:idx + 1]
+                self.pos = idx + 1
                 try:
                     return line_bytes.decode('utf-8')
                 except UnicodeDecodeError as e:
                     raise BadRequest(f'Invalid UTF-8 encoding in CSV data: {e}')
 
             if self.eof:
-                if self.buffer:
-                    line_bytes = self.buffer[:]
+                if self.pos < len(self.buffer):
+                    line_bytes = self.buffer[self.pos:]
                     self.buffer.clear()
+                    self.pos = 0
                     try:
                         return line_bytes.decode('utf-8')
                     except UnicodeDecodeError as e:
                         raise BadRequest(f'Invalid UTF-8 encoding in CSV data: {e}')
                 return None
+
+            if self.pos > 0:
+                if self.pos >= len(self.buffer):
+                    self.buffer.clear()
+                else:
+                    del self.buffer[:self.pos]
+                self.pos = 0
 
             chunk = self.stream.read(self.CHUNK_SIZE)
             if chunk:

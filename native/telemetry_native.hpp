@@ -38,4 +38,30 @@ std::string process_telemetry_channel(
     bool has_ref
 );
 
+// Detects lap crossings by projecting onto the track centerline and monitoring wrap-arounds.
+// Returns lap number for each point (1-based, starting at 1, incrementing at each crossing).
+std::vector<int> detect_lap_crossings(
+    const double* lat_arr,
+    const double* lon_arr,
+    size_t N,
+    const double* cl_lat,
+    const double* cl_lon,
+    const double* cl_dist,
+    size_t M,
+    double lap_length
+);
+
+// Interpolates distance along track centerline for each telemetry point.
+std::vector<double> interpolate_lap_distances(
+    const double* lat_arr,
+    const double* lon_arr,
+    const int* lap_col,
+    size_t N,
+    const double* cl_lat,
+    const double* cl_lon,
+    const double* cl_dist,
+    size_t M,
+    double lap_length
+);
+
 } // namespace telemetry
