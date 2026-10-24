@@ -564,6 +564,7 @@ def utility_processor() -> dict[str, Any]:
         get_league_name=aliases.get_league_name,
         get_league_color=aliases.get_league_color,
         get_class_info=aliases.get_class_info,
+        is_sim_league=aliases.is_sim_league,
         format_time=format_time,
         HERO_NAMES=hero_pilots,
         get_current_acl=auth.get_current_acl,
@@ -669,7 +670,7 @@ def league_list() -> str:
     acl = auth.get_current_acl()
     leagues = [
         lg for lg in db.list_leagues()
-        if auth.can_see_league(acl, lg) and (lg != 'kartsim' or auth.can_see_telemetry(acl, league='kartsim'))
+        if auth.can_see_league(acl, lg) and (not aliases.is_sim_league(lg) or auth.can_see_telemetry(acl, league=lg))
     ]
     grouped_leagues = aliases.group_leagues(leagues)
     return render_template('league_list.html', grouped_leagues=grouped_leagues)
@@ -677,13 +678,13 @@ def league_list() -> str:
 
 @app.route('/league/<league>/last')
 def last_meeting_redirect(league: str) -> werkzeug_wrappers.Response | str:
-    if league == 'kartsim':
+    if aliases.is_sim_league(league):
         hero_names = plot_handlers.get_hero_names()
         if not hero_names:
             return render_template('suggest_hero.html')
 
-        # Find all sessions in KartSim matching these drivers
-        sessions = db.find_sessions(leagues='kartsim', driver_names=hero_names)
+        # Find all sessions in this sim league matching these drivers
+        sessions = db.find_sessions(leagues=league, driver_names=hero_names)
         if not sessions:
             return render_template('suggest_hero.html')
 
@@ -691,12 +692,13 @@ def last_meeting_redirect(league: str) -> werkzeug_wrappers.Response | str:
         last_session = max(sessions, key=lambda s: s.session_start_datetime)
 
         # Redirect to the meeting page using canonical track name
-        selected_class = last_session.class_name[0] if last_session.class_name else 'cadet'
+        default_class = aliases.get_default_class(league)
+        selected_class = last_session.class_name[0] if last_session.class_name else default_class
         track_info = db.get_track(last_session.track_name)
         canonical_track = track_info.get('track_name') if track_info else last_session.track_name
         return redirect(url_for(
             'location.telemetry_view',
-            league='kartsim',
+            league=league,
             class_name=selected_class,
             date=last_session.date,
             track=canonical_track
@@ -731,7 +733,7 @@ def last_meeting_redirect(league: str) -> werkzeug_wrappers.Response | str:
                 participated_class = c_name
                 break
 
-    selected_class = participated_class if participated_class else 'cadet'
+    selected_class = participated_class if participated_class else aliases.get_default_class(league)
     return redirect(url_for(
         'meeting_view',
         league=league,
@@ -854,10 +856,11 @@ def render_kartsim_league(league: str, class_name: str | None = None) -> str:
         if sorted_tracks:
             kartsim_track_groups[c] = sorted_tracks
 
+    default_class = aliases.get_default_class(league)
     return render_template(
         'league.html',
         league=league,
-        class_name=selected_class or (available_classes[0] if available_classes else 'cadet'),
+        class_name=selected_class or (available_classes[0] if available_classes else default_class),
         selected_class=selected_class,
         available_classes=available_classes,
         years=years,
@@ -879,7 +882,7 @@ def render_kartsim_league(league: str, class_name: str | None = None) -> str:
 
 @app.route('/league/<league>')
 def league_view(league: str) -> str:
-    if league == 'kartsim':
+    if aliases.is_sim_league(league):
         return render_kartsim_league(league)
 
     meetings = db.list_meetings(league)
@@ -889,7 +892,7 @@ def league_view(league: str) -> str:
 
 @app.route('/league/<league>/<class_name>')
 def class_view(league: str, class_name: str) -> str:
-    if league == 'kartsim':
+    if aliases.is_sim_league(league):
         return render_kartsim_league(league, class_name=class_name)
 
     years = db.list_years(league, class_name)
@@ -903,7 +906,7 @@ def class_view(league: str, class_name: str) -> str:
     class_meetings = db.list_meetings(league, year=selected_year, class_name=class_name)
 
     # View mode: 'by_date' (default) or 'by_track' or 'activity'
-    is_kartsim = (league == 'kartsim')
+    is_kartsim = aliases.is_sim_league(league)
     view_mode = request.args.get('view', 'by_date')
 
     if view_mode == 'by_track':
@@ -1074,7 +1077,7 @@ def meeting_view(league: str, class_name: str, date: str, track: str) -> str:
 @app.route('/meeting/<league>/<class_name>/<path:date>/<track>/socials')
 def meeting_socials(league: str, class_name: str, date: str, track: str) -> str:
     hero_names = plot_handlers.get_hero_names()
-    load_names = tuple(hero_names) if league == 'kartsim' else None
+    load_names = tuple(hero_names) if aliases.is_sim_league(league) else None
     sessions = db.find_sessions(leagues=league, classes=class_name, date=date, track=track)
     df = db.load(leagues=league, classes=class_name, date=date, track=track, driver_names=load_names)
 
@@ -1235,7 +1238,7 @@ def meeting_socials(league: str, class_name: str, date: str, track: str) -> str:
 def session_view(league: str, class_name: str, date: str, track: str, session_id: str) -> str:
     # Load session data
     hero_names = plot_handlers.get_hero_names()
-    load_names = tuple(hero_names) if league == 'kartsim' else None
+    load_names = tuple(hero_names) if aliases.is_sim_league(league) else None
     df = db.load(leagues=league, classes=class_name, date=date, track=track, driver_names=load_names)
     if df.empty:
         abort(404)
@@ -1430,7 +1433,7 @@ def track_sessions_view(league: str, class_name: str, track: str, track_conditio
         year=selected_year, track_conditions=cond_query
     )
 
-    if league == 'kartsim':
+    if aliases.is_sim_league(league):
         hero_names = plot_handlers.get_hero_names()
         if not hero_names:
             return render_template('suggest_hero.html')

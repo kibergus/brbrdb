@@ -11,7 +11,7 @@
 <a href="{{ url_for('league_list') }}">Leagues</a> /
 <a href="{{ url_for('league_view', league=league) }}">{{ get_league_name(league) }}</a> /
 <a href="{{ url_for('class_view', league=league, class_name=class_name) }}">{{get_class_info(class_name).name}}</a> /
-{% if league == 'kartsim' %}
+{% if is_sim_league(league) %}
 <a href="{{ url_for('location.telemetry_view', league=league, class_name=class_name, date=date, track=track) }}">{{ date }} - {{
     track }}</a> /
 {% else %}

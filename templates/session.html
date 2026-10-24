@@ -24,7 +24,7 @@
 <a href="{{ url_for('class_view', league=metadata.league, class_name=metadata.class) }}">
     {{get_class_info(metadata.class).name}}
 </a> /
-{% if metadata.league == 'kartsim' %}
+{% if is_sim_league(metadata.league) %}
 <a
     href="{{ url_for('location.telemetry_view', league=metadata.league, class_name=metadata.class, date=metadata.date, track=metadata.track) }}">{{
     metadata.date }} - {{ metadata.track }}</a> /

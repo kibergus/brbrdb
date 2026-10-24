@@ -27,10 +27,10 @@ from dataclasses import dataclass, asdict
 import numpy as np
 import pandas as pd
 from flask import Blueprint, request, jsonify
-from werkzeug.exceptions import BadRequest, Forbidden, HTTPException
+from werkzeug.exceptions import BadRequest, Forbidden, HTTPException, NotFound
 from database import db, config
 from utils import populate_db
-from race_tools import rfactor, sanitize
+from race_tools import assetto_corsa, rfactor, sanitize, track_data
 import auth
 import aliases
 import session_time
@@ -68,6 +68,31 @@ class CSVSessionMetadata:
     temperature: str | None = None
     weather: str | None = None
     distance_to_rear_axle: float | None = None
+    track_configuration: str | None = None
+    origin: track_data.TrackOrigin | None = None
+
+
+def create_track_origin(
+    league: str,
+    track_name: str,
+    lat: float | None,
+    lon: float | None,
+    heading: float = 0.0,
+) -> track_data.TrackOrigin | None:
+    """Create a simulator-specific TrackOrigin instance if coordinates are provided."""
+    if lat is None or lon is None:
+        return None
+    if league == 'acevo':
+        try:
+            corr = assetto_corsa.get_track_origin(track_name).correction
+        except ValueError as e:
+            raise NotFound(str(e)) from e
+        return assetto_corsa.AssettoCorsaTrackOrigin(
+            lat=lat, lon=lon, correction=corr, heading=heading
+        )
+    return rfactor.RFactorTrackOrigin(
+        lat=lat, lon=lon, heading=heading
+    )
 
 
 def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessionMetadata:
@@ -85,6 +110,10 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
     temperature = None
     weather = None
     distance_to_rear_axle = None
+    track_configuration = None
+    origin_lat = None
+    origin_lon = None
+    origin_heading = 0.0
 
     date_str = None
     time_str = None
@@ -124,6 +153,14 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
                 distance_to_rear_axle = float(val)
             except (ValueError, TypeError):
                 distance_to_rear_axle = None
+        elif key == 'track configuration':
+            track_configuration = val
+        elif key == 'track origin latitude':
+            origin_lat = float(val)
+        elif key == 'track origin longitude':
+            origin_lon = float(val)
+        elif key == 'track origin heading':
+            origin_heading = float(val)
 
     has_seconds = False
     if date_str and time_str:
@@ -154,6 +191,14 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
     if not driver_name:
         raise BadRequest('Driver name is missing')
 
+    origin = create_track_origin(
+        league=league,
+        track_name=track_name,
+        lat=origin_lat,
+        lon=origin_lon,
+        heading=origin_heading,
+    )
+
     return CSVSessionMetadata(
         driver_name=driver_name,
         track_name=track_name,
@@ -166,7 +211,9 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
         track_conditions=track_conditions,
         temperature=temperature,
         weather=weather,
-        distance_to_rear_axle=distance_to_rear_axle
+        distance_to_rear_axle=distance_to_rear_axle,
+        track_configuration=track_configuration,
+        origin=origin,
     )
 
 
@@ -229,7 +276,7 @@ def is_lap_valid(lap_dists: np.ndarray, turns: list[dict], lap_length: float) ->
 
     A lap is considered valid if:
     1. It contains at least one telemetry distance point.
-    2. The lap's telemetry points span across the start/finish line (within a 10m buffer of
+    2. The lap's telemetry points span across the start/finish line (within a 20m buffer of
        both the start of the lap and the end of the lap).
     3. If track turns are defined, the driver must have crossed each turn (within a 5m buffer
        around the turn's start and end boundaries).
@@ -248,7 +295,7 @@ def is_lap_valid(lap_dists: np.ndarray, turns: list[dict], lap_length: float) ->
     """
     if len(lap_dists) == 0:
         return False
-    sf_buffer = 10.0
+    sf_buffer = 20.0
     crossed_start = np.any(lap_dists <= sf_buffer)
     crossed_end = np.any(lap_dists >= lap_length - sf_buffer)
     if turns:
@@ -362,7 +409,7 @@ def parse_coordinate(val: Any) -> float:
 
 
 def get_track_coordinate_reference(
-    track_data: dict | None,
+    track_info: dict | None,
     lats: list[float] | np.ndarray,
     lons: list[float] | np.ndarray
 ) -> tuple[float | None, float | None, float]:
@@ -371,14 +418,14 @@ def get_track_coordinate_reference(
     Uses track centerline or origin if available, otherwise computes median coordinates
     of valid data points.
     """
-    if track_data:
-        centerline = track_data.get('center_line')
+    if track_info:
+        centerline = track_info.get('center_line')
         if centerline and isinstance(centerline, list):
             cl_lat = [p['lat'] for p in centerline if isinstance(p, dict) and 'lat' in p]
             cl_lon = [p['lon'] for p in centerline if isinstance(p, dict) and 'lon' in p]
             if cl_lat and cl_lon:
                 return float(np.mean(cl_lat)), float(np.mean(cl_lon)), 5000.0
-        origin = track_data.get('origin')
+        origin = track_info.get('origin')
         if origin and isinstance(origin, dict) and 'lat' in origin and 'lon' in origin:
             return float(origin['lat']), float(origin['lon']), 5000.0
 
@@ -688,23 +735,28 @@ def process_telemetry_derivative_data(
     track_name_raw = session_info.track_name
 
     # Load track data
-    track_data = db.get_track(track_name_raw)
+    track_info = db.get_track(track_name_raw)
     centerline = None
-    if track_data:
-        centerline = track_data.get('center_line')
+    if track_info:
+        centerline = track_info.get('center_line')
     else:
         logger.warning(f"Track data not found for: '{track_name_raw}'")
-        track_data = {}
+        track_info = {}
 
     # Coordinate conversion
     lat_list = []
     lon_list = []
 
-    origin = None
-    league = session_info.league
-    if league == 'kartsim' or 'x' in records[0]:
-        resolved_track_name = (track_data.get('track_name') if track_data else None) or track_name_raw
-        origin = rfactor.get_track_origin(resolved_track_name)
+    origin: track_data.TrackOrigin | None = session_info.origin
+    if origin is None:
+        resolved_track_name = (track_info.get('track_name') if track_info else None) or track_name_raw
+        try:
+            if session_info.league == 'kartsim':
+                origin = rfactor.get_track_origin(resolved_track_name)
+            elif session_info.league == 'acevo':
+                origin = assetto_corsa.get_track_origin(resolved_track_name)
+        except ValueError as e:
+            raise NotFound(str(e)) from e
 
     for r in records:
         if origin is not None:
@@ -712,7 +764,7 @@ def process_telemetry_derivative_data(
             z_m = r.get('z')
 
             if x_m is not None and z_m is not None and x_m != '' and z_m != '':
-                p_lat, p_lon = rfactor.rfactor_to_gps(safe_float(x_m), safe_float(z_m), origin)
+                p_lat, p_lon = origin.to_gps(safe_float(x_m), safe_float(z_m))
                 lat_list.append(p_lat)
                 lon_list.append(p_lon)
                 continue
@@ -729,7 +781,7 @@ def process_telemetry_derivative_data(
             lon_list.append(lon_val)
 
     # Filter out geographic outliers far outside track limits
-    ref_lat, ref_lon, max_dist_m = get_track_coordinate_reference(track_data, lat_list, lon_list)
+    ref_lat, ref_lon, max_dist_m = get_track_coordinate_reference(track_info, lat_list, lon_list)
     if ref_lat is not None and ref_lon is not None:
         for i in range(len(lat_list)):
             if not np.isnan(lat_list[i]) and not np.isnan(lon_list[i]):
@@ -772,13 +824,13 @@ def process_telemetry_derivative_data(
     lap_length = 1000.0
     sector_end = []
 
-    if track_data and centerline:
+    if track_info and centerline:
         cl_lat = np.array([p['lat'] for p in centerline], dtype=float)
         cl_lon = np.array([p['lon'] for p in centerline], dtype=float)
         cl_dist = np.array([p['dist'] for p in centerline], dtype=float)
-        lap_length = float(track_data.get('lap_length', 1000.0))
-        turns = track_data.get('turns', [])
-        sector_end = track_data.get('sector_end', [])
+        lap_length = float(track_info.get('lap_length', 1000.0))
+        turns = track_info.get('turns', [])
+        sector_end = track_info.get('sector_end', [])
 
         lap_col = _telemetry_native.detect_lap_crossings(
             lat_arr, lon_arr, cl_lat, cl_lon, cl_dist, lap_length
@@ -1104,7 +1156,7 @@ def process_telemetry_derivative_data(
                 weather = inferred
 
     canonical_track_name = (
-        (track_data.get('track_name') if track_data else None)
+        (track_info.get('track_name') if track_info else None)
         or sanitize.humanize_track_name(track_name_raw)
     )
 
@@ -1130,6 +1182,12 @@ def process_telemetry_derivative_data(
 
     if session_info.distance_to_rear_axle is not None:
         metadata_json['distance_to_rear_axle'] = session_info.distance_to_rear_axle
+    if session_info.track_configuration is not None:
+        metadata_json['track_configuration'] = session_info.track_configuration
+    if session_info.origin is not None:
+        metadata_json['track_origin_lat'] = session_info.origin.lat
+        metadata_json['track_origin_lon'] = session_info.origin.lon
+        metadata_json['track_origin_heading'] = session_info.origin.heading
 
     return df_telemetry, metadata_json, df_summary
 
@@ -1275,9 +1333,9 @@ def stream_upload() -> Any:
 
     # Resolve any car/class name aliases
     metadata.class_name = aliases.resolve_car_name(metadata.class_name)
-    track_data = db.get_track(metadata.track_name)
-    if track_data and track_data.get('track_name'):
-        metadata.track_name = track_data['track_name']
+    track_info = db.get_track(metadata.track_name)
+    if track_info and track_info.get('track_name'):
+        metadata.track_name = track_info['track_name']
 
     # Prepare directories and file paths
     time_str = metadata.session_start_datetime.strftime('%H_%M')
@@ -1297,7 +1355,7 @@ def stream_upload() -> Any:
 
     # Check if session already exists and has AlphaTiming data
     has_alphatiming = False
-    if metadata.league != 'kartsim':
+    if not aliases.is_sim_league(metadata.league):
         if os.path.exists(meta_path):
             with open(meta_path, 'r', encoding='utf-8') as f:
                 existing_meta = json.load(f)
@@ -1333,17 +1391,38 @@ def stream_upload() -> Any:
     # and after each line check if 15 seconds have passed (or the file has been closed)
     # and write data to the filesystem and to the DB.
     existing_lines = load_existing_telemetry_lines(telemetry_path)
-    if metadata.distance_to_rear_axle is None and existing_lines:
+    if existing_lines:
+        ex_origin_lat = None
+        ex_origin_lon = None
+        ex_origin_heading = 0.0
         for ex_line in existing_lines:
             if not ex_line.strip():
                 break
             parts = [p.strip() for p in ex_line.split(',', 1)]
-            if len(parts) == 2 and parts[0].lower() == 'distance to rear axle':
-                try:
-                    metadata.distance_to_rear_axle = float(parts[1])
-                except (ValueError, TypeError):
-                    pass
-                break
+            if len(parts) == 2:
+                pk = parts[0].lower()
+                pv = parts[1]
+                if pk == 'distance to rear axle' and metadata.distance_to_rear_axle is None:
+                    try:
+                        metadata.distance_to_rear_axle = float(pv)
+                    except (ValueError, TypeError):
+                        pass
+                elif pk == 'track configuration' and metadata.track_configuration is None:
+                    metadata.track_configuration = pv
+                elif pk == 'track origin latitude':
+                    ex_origin_lat = float(pv)
+                elif pk == 'track origin longitude':
+                    ex_origin_lon = float(pv)
+                elif pk == 'track origin heading':
+                    ex_origin_heading = float(pv)
+        if metadata.origin is None:
+            metadata.origin = create_track_origin(
+                league=metadata.league,
+                track_name=metadata.track_name,
+                lat=ex_origin_lat,
+                lon=ex_origin_lon,
+                heading=ex_origin_heading,
+            )
     pruned_and_merged = False
 
     written_rows_count = 0
@@ -1357,6 +1436,8 @@ def stream_upload() -> Any:
         writer = csv.writer(telemetry_file)
         writer.writerow(['Format', 'RaceTools CSV'])
         writer.writerow(['Track name', metadata.track_name])
+        if metadata.track_configuration is not None:
+            writer.writerow(['Track configuration', metadata.track_configuration])
         writer.writerow(['Date', metadata.session_start_datetime.strftime('%Y-%m-%d')])
         writer.writerow(['Time', metadata.session_start_datetime.strftime('%H:%M:%S')])
         writer.writerow(['Driver name', metadata.driver_name])
@@ -1365,6 +1446,10 @@ def stream_upload() -> Any:
         writer.writerow(['Session', metadata.session_name])
         if metadata.distance_to_rear_axle is not None:
             writer.writerow(['Distance to rear axle', metadata.distance_to_rear_axle])
+        if metadata.origin is not None:
+            writer.writerow(['Track Origin Latitude', metadata.origin.lat])
+            writer.writerow(['Track Origin Longitude', metadata.origin.lon])
+            writer.writerow(['Track Origin Heading', metadata.origin.heading])
         writer.writerow([])  # Mandatory separator
 
         buffered_lines: list[str] = []
@@ -1556,9 +1641,9 @@ def files_upload() -> Any:
     meta['class_name'] = class_name
 
     # Resolve any track name aliases
-    track_data = db.get_track(track_name)
-    if track_data and track_data.get('track_name'):
-        track_name = track_data['track_name']
+    track_info = db.get_track(track_name)
+    if track_info and track_info.get('track_name'):
+        track_name = track_info['track_name']
     meta['track_name'] = track_name
 
     # ACL Check for league

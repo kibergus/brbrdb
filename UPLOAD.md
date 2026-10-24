@@ -161,6 +161,10 @@ Alternatively, detailed telemetry (e.g. from a simulator) can be streamed to thi
   | `Temperature` | No | Temperature of the venue. | `Temperature,21.5` |
   | `Weather` | No | General weather state (e.g. Sunny, Dry, Rain). | `Weather,Sunny` |
 | `Distance to rear axle` | No | Distance from rear axle center to camera in meters. | `Distance to rear axle,1.5` |
+  | `Track configuration` | No | Specific track layout or configuration name. | `Track configuration,GP` |
+  | `Track Origin Latitude` | No | Origin latitude for local (x, z) coordinate translation. | `Track Origin Latitude,45.61389` |
+  | `Track Origin Longitude` | No | Origin longitude for local (x, z) coordinate translation. | `Track Origin Longitude,9.28624` |
+  | `Track Origin Heading` | No | Track origin heading (degrees clockwise from North). | `Track Origin Heading,180.0` |
 
   Example embedded header at the start of the stream:
   ```csv

@@ -270,8 +270,8 @@ def _detect_is_outlap(first_lap: dict, second_lap: dict) -> bool:
     if not d0:
         return False
 
-    # 1. Distance starts away from start/finish line (>15m) e.g. Lydd pit exit joins at ~117m
-    starts_away = (d0[0] > 15.0) or (min(d0[:min(len(d0), 5)]) > 15.0)
+    # 1. Distance starts away from start/finish line (>20m) e.g. Lydd pit exit joins at ~117m
+    starts_away = (d0[0] > 20.0) or (min(d0[:min(len(d0), 5)]) > 20.0)
 
     # 2. Distance covered is significantly shorter than the next lap (<90%)
     is_short = False
@@ -1092,7 +1092,10 @@ def _override_with_official_laps(
     # Correlate official lap duration sequence against GPS lap durations
     best_shift = None
     best_avg_diff = float('inf')
-    min_compare_count = min(3, M)
+    valid_off_count = sum(1 for item in off_items if item['seconds'] > 0)
+    if valid_off_count == 0:
+        return
+    min_compare_count = min(3, valid_off_count)
 
     for shift in range(-(M - 1), N):
         diff_sum = 0.0

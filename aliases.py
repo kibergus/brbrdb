@@ -37,6 +37,7 @@ _LEAGUE_NAMES = {
     'club100_north': 'Club 100 North',
     'club100_south': 'Club 100 South',
     'kartsim': 'KartSim',
+    'acevo': 'Assetto Corsa Evo',
     'fat': 'FAT Testing',
     'fat_pro': 'FAT Pro',
     'fat_regional': 'FAT Regional',
@@ -66,6 +67,7 @@ _LEAGUE_COLORS = {
     'fat_de': '#1D4296',
     'fat_other': '#1D4296',
     'kartsim': '#3498db',  # blue
+    'acevo': '#e74c3c',    # racing red
     'fekc': '#9b59b6',  # purple
     'drs': '#55b0cb',   # DRS Cyan
 }
@@ -126,7 +128,22 @@ _CLASS_NAMES = {
     'drs50': ClassInfo('DRS50', None),
     'drs100': ClassInfo('DRS100', None),
     'drs125': ClassInfo('DRS125', None),
+    # F1 classes.
+    'f1': ClassInfo('F1', 'f1'),
 }
+
+SIM_LEAGUES = {'kartsim', 'acevo'}
+
+
+def is_sim_league(league_id: str | None) -> bool:
+    return bool(league_id and league_id in SIM_LEAGUES)
+
+
+def get_default_class(league: str | None) -> str:
+    """Returns the default class ID for a league when none is specified."""
+    if league == 'acevo':
+        return 'f1'
+    return 'cadet'
 
 
 def get_league_name(league_id: str) -> str:
@@ -138,8 +155,8 @@ def get_league_color(league_id: str) -> str:
 
 
 def get_league_group(league_id: str) -> str:
-    if league_id == 'kartsim':
-        return 'kartsim'
+    if league_id in ('kartsim', 'acevo'):
+        return 'sim'
     if league_id.startswith('club100'):
         return 'club100'
     if league_id.startswith('fat_us'):
@@ -154,7 +171,7 @@ def get_league_group(league_id: str) -> str:
 def group_leagues(leagues: list[str]) -> list[tuple[str, list[str]]]:
     """Group leagues into club100, fat, and other buckets, sorted by name."""
     groups: dict[str, list[str]] = {
-        'kartsim': [],
+        'sim': [],
         'club100': [],
         'fat': [],
         'fat_us': [],
@@ -170,7 +187,7 @@ def group_leagues(leagues: list[str]) -> list[tuple[str, list[str]]]:
 
     # Convert to list of (group_name, list_of_leagues) for stable iteration
     grouped_list = [
-        ('kartsim', groups['kartsim']),
+        ('sim', groups['sim']),
         ('club100', groups['club100']),
         ('fat', groups['fat']),
         ('fat_us', groups['fat_us']),
@@ -230,6 +247,7 @@ CAR_NAME_ALIASES: dict[str, str] = {
     'ksp_gx200': 'honda_gx200',
     'ksp_iame_junior_x30': 'x30_junior',
     'ksp_iame_senior_x30': 'x30_senior',
+    'ferrari sf25': 'f1',
 }
 
 

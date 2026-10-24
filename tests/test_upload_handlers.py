@@ -26,10 +26,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from werkzeug.exceptions import BadRequest
+from werkzeug.exceptions import BadRequest, NotFound
 import app
 import upload_handlers
 from upload_handlers import CSVSessionMetadata, StreamingLineReader
+from race_tools import assetto_corsa, rfactor
 from database import db, config
 
 
@@ -1174,7 +1175,7 @@ def test_process_telemetry_derivative_data_resolves_track_alias() -> None:
         session_info = upload_handlers.CSVSessionMetadata(
             track_name=track_name,
             session_name='Practice',
-            driver_name='Alexey Guseynov',
+            driver_name='Driver A',
             league='kartsim',
             class_name='iame_waterswift_restricted_cadet_uk',
             session_start_datetime=datetime.datetime(2026, 8, 17, 18, 45),
@@ -1214,7 +1215,7 @@ def test_process_telemetry_derivative_data_does_not_inject_missing_columns() -> 
     session_info = upload_handlers.CSVSessionMetadata(
         track_name='Llandow',
         session_name='Practice',
-        driver_name='Katia Guseinova',
+        driver_name='Driver A',
         league='club100_south',
         class_name='cadet_lw',
         session_start_datetime=datetime.datetime(2026, 8, 2, 11, 18),
@@ -1261,7 +1262,7 @@ def test_process_telemetry_derivative_data_empty_lat_lon_strings() -> None:
     session_info = upload_handlers.CSVSessionMetadata(
         track_name='Clay Pigeon',
         session_name='Practice',
-        driver_name='Katia Guseinova',
+        driver_name='Driver A',
         league='fat_pro',
         class_name='cadet',
         session_start_datetime=datetime.datetime(2026, 9, 5, 9, 21),
@@ -1304,7 +1305,7 @@ def test_process_telemetry_derivative_data_gyroscope_channels() -> None:
     session_info = upload_handlers.CSVSessionMetadata(
         track_name='Clay Pigeon',
         session_name='Practice',
-        driver_name='Katia Guseinova',
+        driver_name='Driver A',
         league='fat_pro',
         class_name='cadet',
         session_start_datetime=datetime.datetime(2026, 9, 5, 9, 21),
@@ -1341,7 +1342,7 @@ def test_process_telemetry_derivative_data_does_not_inject_gyro_channels() -> No
     session_info = upload_handlers.CSVSessionMetadata(
         track_name='Clay Pigeon',
         session_name='Practice',
-        driver_name='Katia Guseinova',
+        driver_name='Driver A',
         league='fat_pro',
         class_name='cadet',
         session_start_datetime=datetime.datetime(2026, 9, 5, 9, 21),
@@ -1541,6 +1542,218 @@ def test_stream_upload_with_distance_to_rear_axle(tmp_path: Path) -> None:
         with open(meta_files[0], 'r', encoding='utf-8') as f:
             meta_json = json.load(f)
         assert meta_json.get('distance_to_rear_axle') == 1.5
+
+
+def test_parse_csv_metadata_rows_track_origin_headers() -> None:
+    rows = [
+        ['Track name', 'Monza'],
+        ['Date', '2026-10-22'],
+        ['Time', '08:56:35'],
+        ['Driver name', 'Driver A'],
+        ['League', 'acevo'],
+        ['Class', 'Ferrari SF25'],
+        ['Session', 'Practice'],
+        ['Track configuration', 'GP'],
+        ['Track Origin Latitude', '45.61389'],
+        ['Track Origin Longitude', '9.28624'],
+        ['Track Origin Heading', '180.5'],
+    ]
+    meta = upload_handlers.parse_csv_metadata_rows(rows)
+    assert meta.track_configuration == 'GP'
+    assert meta.origin is not None
+    assert meta.origin.lat == 45.61389
+    assert meta.origin.lon == 9.28624
+    assert meta.origin.heading == 180.5
+
+    # Missing optional headers
+    rows_minimal = [
+        ['Track name', 'Monza'],
+        ['Date', '2026-10-22'],
+        ['Time', '08:56:35'],
+        ['Driver name', 'Driver A'],
+        ['League', 'acevo'],
+        ['Class', 'Ferrari SF25'],
+        ['Session', 'Practice'],
+    ]
+    meta_min = upload_handlers.parse_csv_metadata_rows(rows_minimal)
+    assert meta_min.track_configuration is None
+    assert meta_min.origin is None
+
+
+def test_track_origin_to_gps_conversion() -> None:
+    # rFactor: +Z is North, +X is East
+    origin_rf = rfactor.RFactorTrackOrigin(lat=45.0, lon=9.0, heading=0.0)
+    lat_n, lon_n = origin_rf.to_gps(x=0.0, z=1000.0)
+    assert lat_n > 45.0
+    assert abs(lon_n - 9.0) < 1e-6
+
+    lat_e, lon_e = origin_rf.to_gps(x=1000.0, z=0.0)
+    assert abs(lat_e - 45.0) < 1e-6
+    assert lon_e > 9.0
+
+    # Assetto Corsa: -Z is North (+Z is South), +X is East
+    origin_ace = assetto_corsa.AssettoCorsaTrackOrigin(lat=45.0, lon=9.0, heading=0.0)
+    lat_ace_n, lon_ace_n = origin_ace.to_gps(x=0.0, z=-1000.0)
+    assert lat_ace_n > 45.0
+    assert abs(lon_ace_n - 9.0) < 1e-6
+
+    lat_ace_s, lon_ace_s = origin_ace.to_gps(x=0.0, z=1000.0)
+    assert lat_ace_s < 45.0
+    assert abs(lon_ace_s - 9.0) < 1e-6
+
+
+def test_process_telemetry_derivative_data_with_track_origin() -> None:
+    session_info = upload_handlers.CSVSessionMetadata(
+        driver_name='Katia Guseinova',
+        track_name='Monza',
+        league='acevo',
+        class_name='f1',
+        session_name='Practice',
+        session_start_datetime=datetime.datetime(2026, 10, 22, 8, 56, 35),
+        track_configuration='GP',
+        origin=assetto_corsa.AssettoCorsaTrackOrigin(lat=45.61389, lon=9.28624, heading=0.0),
+    )
+    records = [
+        {'Time': '2026-10-22T08:56:35.000Z', 'x': '100.0', 'z': '200.0', 'Speed': '50.0'},
+        {'Time': '2026-10-22T08:56:35.100Z', 'x': '105.0', 'z': '210.0', 'Speed': '52.0'},
+    ]
+    with patch('upload_handlers.db.get_track', return_value={}):
+        df_telemetry, metadata_json, _ = upload_handlers.process_telemetry_derivative_data(
+            records, session_info, '/dummy/dir'
+        )
+
+        assert metadata_json.get('track_configuration') == 'GP'
+        assert metadata_json.get('track_origin_lat') == 45.61389
+        assert metadata_json.get('track_origin_lon') == 9.28624
+        assert metadata_json.get('track_origin_heading') == 0.0
+
+        lat_0 = float(df_telemetry['Latitude'].iloc[0])
+        lon_0 = float(df_telemetry['Longitude'].iloc[0])
+        assert lat_0 < 45.61389
+        assert lon_0 > 9.28624
+
+
+def test_create_track_origin() -> None:
+    # None coordinates return None
+    assert upload_handlers.create_track_origin('acevo', 'Monza', None, None) is None
+    assert upload_handlers.create_track_origin('kartsim', 'Buckmore Park', 51.3, None) is None
+
+    # acevo with known track includes corrections
+    origin_ace = upload_handlers.create_track_origin('acevo', 'Monza', 45.61389, 9.28624, 0.0)
+    assert isinstance(origin_ace, assetto_corsa.AssettoCorsaTrackOrigin)
+    assert origin_ace.correction == assetto_corsa.get_track_origin('Monza').correction
+
+    # acevo with unknown track raises NotFound (404)
+    with pytest.raises(NotFound) as exc_info:
+        upload_handlers.create_track_origin('acevo', 'Unknown Track', 45.61389, 9.28624, 0.0)
+    assert "Unknown track: 'Unknown Track'" in str(exc_info.value)
+
+    # other leagues create RFactorTrackOrigin
+    origin_rf = upload_handlers.create_track_origin('kartsim', 'Buckmore Park', 51.34, 0.50, 1.5)
+    assert isinstance(origin_rf, rfactor.RFactorTrackOrigin)
+    assert origin_rf.lat == 51.34
+    assert origin_rf.lon == 0.50
+    assert origin_rf.heading == 1.5
+
+
+def test_process_telemetry_derivative_data_unknown_track_raises_not_found() -> None:
+    session_info = upload_handlers.CSVSessionMetadata(
+        driver_name='Driver A',
+        track_name='Unknown Track',
+        league='acevo',
+        class_name='f1',
+        session_name='Practice',
+        session_start_datetime=datetime.datetime(2026, 10, 22, 8, 56, 35),
+    )
+    records = [
+        {'Time': '2026-10-22T08:56:35.000Z', 'x': '100.0', 'z': '200.0', 'Speed': '50.0'},
+    ]
+    with patch('upload_handlers.db.get_track', return_value={}):
+        with pytest.raises(NotFound) as exc_info:
+            upload_handlers.process_telemetry_derivative_data(records, session_info, '/dummy/dir')
+        assert "Unknown track: 'Unknown Track'" in str(exc_info.value)
+
+
+def test_stream_upload_preserves_track_origin_headers(tmp_path: Path) -> None:
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['*']
+            },
+            'see_telemetry': True
+        }
+    }
+    client = app.app.test_client()
+    temp_data_dir = str(tmp_path)
+
+    csv_data = (
+        'Format,RaceTools CSV\n'
+        'Track name,Monza\n'
+        'Track configuration,GP\n'
+        'Date,2026-10-22\n'
+        'Time,08:56:35\n'
+        'Driver name,Driver A\n'
+        'League,acevo\n'
+        'Class,Ferrari SF25\n'
+        'Session,Practice\n'
+        'Track Origin Latitude,45.61389\n'
+        'Track Origin Longitude,9.28624\n'
+        'Track Origin Heading,180.0\n'
+        '\n'
+        'Time,x,z,Speed\n'
+        '2026-10-22T08:56:35.000Z,10.0,20.0,15.0\n'
+        '2026-10-22T08:56:35.100Z,12.0,22.0,16.0\n'
+    )
+
+    with (patch('auth.load_keys', return_value=mock_keys),
+          patch('upload_handlers.DATA_DIR', temp_data_dir),
+          patch('upload_handlers.db.load', return_value=pd.DataFrame()),
+          patch('upload_handlers.db.get_track', return_value={}),
+          patch('upload_handlers.populate_db.populate_single_session', return_value='session_acevo')):
+
+        response = client.post(
+            '/api/upload/stream',
+            data=csv_data,
+            headers={'X-API-Key': 'test_key'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response.status_code == 200
+
+        meeting_dir = tmp_path / 'acevo' / 'f1' / '2026_10_22_monza'
+        telemetry_dir = meeting_dir / 'telemetry'
+        csv_files = list(telemetry_dir.glob('*.csv'))
+        assert len(csv_files) == 1
+
+        content = csv_files[0].read_text()
+        assert 'Track configuration,GP' in content
+        assert 'Track Origin Latitude,45.61389' in content
+        assert 'Track Origin Longitude,9.28624' in content
+        assert 'Track Origin Heading,180.0' in content
+
+        # Check that Latitude and Longitude columns were computed in the telemetry rows
+        lines = content.splitlines()
+        header_idx = -1
+        for i, l in enumerate(lines):
+            if 'Latitude' in l and 'Longitude' in l:
+                header_idx = i
+                break
+        assert header_idx != -1
+        cols = lines[header_idx].split(',')
+        lat_idx = cols.index('Latitude')
+        lon_idx = cols.index('Longitude')
+        data_row = lines[header_idx + 1].split(',')
+        assert data_row[lat_idx] != ''
+        assert data_row[lon_idx] != ''
+
+        meta_files = list(meeting_dir.glob('*_metadata.json'))
+        assert len(meta_files) == 1
+        with open(meta_files[0], 'r', encoding='utf-8') as f:
+            meta_json = json.load(f)
+        assert meta_json.get('track_configuration') == 'GP'
+        assert meta_json.get('track_origin_lat') == 45.61389
+        assert meta_json.get('track_origin_lon') == 9.28624
+        assert meta_json.get('track_origin_heading') == 180.0
 
 
 def test_compute_gyro_rear_slip_angle_straight() -> None:

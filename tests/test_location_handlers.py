@@ -100,6 +100,23 @@ def test_override_with_official_laps() -> None:
     assert laps_outlap[2]['lap_time'] == '1:00.500'
     assert laps_outlap[2]['is_valid'] is True
 
+    # Test shift correlation when only 1 official lap has a recorded time (e.g. outlap is 0.0s)
+    df_single_valid = pd.DataFrame([
+        {'SessionID': 'S2', 'Name': 'Driver A', 'Lap': 1, 'LapTime': '', 'LapTimeSeconds': 0.0},
+        {'SessionID': 'S2', 'Name': 'Driver A', 'Lap': 2, 'LapTime': '1:39.401', 'LapTimeSeconds': 99.401}
+    ])
+    laps_single = [
+        {'lap_num': 0, 'duration': 102.8, 'lap_time': 'Unknown', 'is_outlap': True, 'is_valid': False},
+        {'lap_num': 1, 'duration': 99.416, 'lap_time': 'Unknown', 'is_valid': True},
+        {'lap_num': 2, 'duration': 8.3, 'lap_time': 'Unknown', 'is_valid': True}
+    ]
+    location_handlers._override_with_official_laps(laps_single, df_single_valid, 'S2', 'Driver A')
+    assert laps_single[0]['is_valid'] is False
+    assert laps_single[1]['lap_num'] == 2
+    assert laps_single[1]['lap_time'] == '1:39.401'
+    assert laps_single[1]['is_valid'] is True
+    assert laps_single[2]['is_valid'] is False
+
 
 def test_compute_lap_segments() -> None:
     laps = [{
@@ -357,6 +374,10 @@ def test_detect_is_outlap() -> None:
 
     # 4. No distance data available
     assert location_handlers._detect_is_outlap({'dists': []}, lap1_normal) is False
+
+    # 5. Lap starting within 20m of S/F line (e.g. 15.3m) is not an outlap
+    lap0_near = {'dists': [15.3, 500.0, 1040.0]}
+    assert location_handlers._detect_is_outlap(lap0_near, lap1_normal) is False
 
 
 def test_parse_telemetry_csv_with_outlap(tmp_path: Path) -> None:

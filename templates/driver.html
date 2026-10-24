@@ -157,7 +157,7 @@
                     {% for entry in entries %}
                     <div class="history-item">
                         <div class="history-date">{{ entry.date }}</div>
-                        {% if entry.league == 'kartsim' %}
+                        {% if is_sim_league(entry.league) %}
                         <a href="{{ url_for('location.telemetry_view', league=entry.league, class_name=entry.class, date=entry.date, track=track_name) }}"
                             class="badge badge-purple history-time">
                         {% else %}

@@ -26,6 +26,7 @@ from flask import Blueprint, Response, request, abort, jsonify
 import auth
 import plots
 from database import db, config
+import aliases
 from race_tools import sanitize
 
 plots_blueprint = Blueprint('plots', __name__)
@@ -342,7 +343,7 @@ def _get_violin_plot_bytes(
     if cached is not None:
         return cached
 
-    load_names = hero_names if league == 'kartsim' else None
+    load_names = hero_names if aliases.is_sim_league(league) else None
     df = db.load(leagues=league, classes=class_name, date=date, track=track, driver_names=load_names)
     if df.empty:
         abort(404)
@@ -423,7 +424,7 @@ def _get_track_plot_bytes(
     if track_conditions and track_conditions != 'All Conditions':
         cond_tuple = tuple(track_conditions.split(','))
 
-    load_names = hero_names if league == 'kartsim' else None
+    load_names = hero_names if aliases.is_sim_league(league) else None
     df = db.load(
         leagues=league, classes=class_name, track=track,
         year=selected_year, track_conditions=cond_tuple,
@@ -480,7 +481,7 @@ def _get_gap_plot_bytes(
         league, class_name, date, track, session_id = parts
         session_ids.add(session_id)
 
-        load_names = hero_names if league == 'kartsim' else None
+        load_names = hero_names if aliases.is_sim_league(league) else None
         df = db.load(leagues=league, classes=class_name, date=date, track=track, driver_names=load_names)
         if df.empty:
             abort(404, description=f'Meeting data not found for session request: {param!r}')
@@ -545,7 +546,7 @@ def _get_combined_plot_bytes(
         league, class_name, date, track, session_id = parts
         session_ids.add(session_id)
 
-        load_names = hero_names if league == 'kartsim' else None
+        load_names = hero_names if aliases.is_sim_league(league) else None
         df = db.load(leagues=league, classes=class_name, date=date, track=track, driver_names=load_names)
         session_df = df[df['SessionID'] == session_id]
         if session_df.empty:

@@ -352,8 +352,8 @@ def _gallery_meeting(league: str, meeting_date: str) -> str:
     first_session = sessions[0] if sessions else None
     track_name = first_session.track_name if first_session else 'unknown'
 
-    meeting_class = selected_class or (available_classes[0] if available_classes else 'cadet')
-    if league == 'kartsim':
+    meeting_class = selected_class or (available_classes[0] if available_classes else aliases.get_default_class(league))
+    if aliases.is_sim_league(league):
         meeting_url = url_for(
             'location.telemetry_view',
             league=league,

@@ -738,16 +738,35 @@ def test_league_helpers() -> None:
     assert aliases.get_league_group('fat_pro') == 'fat'
     assert aliases.get_league_group('fat_world_finals') == 'fat_other'
     assert aliases.get_league_group('club100_north') == 'club100'
-    assert aliases.get_league_group('kartsim') == 'kartsim'
+    assert aliases.get_league_group('kartsim') == 'sim'
+    assert aliases.get_league_group('acevo') == 'sim'
     assert aliases.get_league_group('fekc') == 'other'
 
-    grouped = aliases.group_leagues(['fat_us_tx', 'fat_de', 'club100', 'fekc'])
+    assert aliases.get_league_name('acevo') == 'Assetto Corsa Evo'
+    assert aliases.get_league_color('acevo') == '#e74c3c'
+    assert aliases.is_sim_league('acevo') is True
+    assert aliases.is_sim_league('kartsim') is True
+    assert aliases.is_sim_league('club100') is False
+
+    assert aliases.get_default_class('acevo') == 'f1'
+    assert aliases.get_default_class('kartsim') == 'cadet'
+    assert aliases.get_default_class('club100') == 'cadet'
+    assert aliases.get_default_class(None) == 'cadet'
+
+    assert aliases.get_class_info('f1').name == 'F1'
+    assert aliases.get_class_info('f1').class_type == 'f1'
+    assert aliases.resolve_car_name('Ferrari SF25') == 'f1'
+    assert aliases.resolve_car_name('ferrari sf25') == 'f1'
+
+    grouped = aliases.group_leagues(['fat_us_tx', 'fat_de', 'club100', 'fekc', 'acevo'])
     group_map = dict(grouped)
     assert 'fat_us' in group_map
     assert 'fat_us_tx' in group_map['fat_us']
     assert 'fat_other' in group_map
     assert 'fat_de' in group_map['fat_other']
     assert 'club100' in group_map
+    assert 'sim' in group_map
+    assert 'acevo' in group_map['sim']
     assert 'other' in group_map
 
 
@@ -766,3 +785,20 @@ def test_kartsim_last_meeting_redirect_canonical_track() -> None:
         resp = client.get('/league/kartsim/last')
         assert resp.status_code == 302
         assert resp.headers['Location'] == '/telemetry/kartsim/cadet/2026-09-27/Whilton%20Mill'
+
+
+def test_acevo_last_meeting_redirect_canonical_track() -> None:
+    client = app.app.test_client()
+    mock_session = MagicMock()
+    mock_session.session_start_datetime = '2026-10-22 00:28'
+    mock_session.class_name = ['f1']
+    mock_session.date = '2026-10-22'
+    mock_session.track_name = 'Monza'
+
+    with patch('plot_handlers.get_hero_names', return_value=['Hero']), \
+         patch('app.db.find_sessions', return_value=[mock_session]), \
+         patch('app.db.get_track', return_value={'track_name': 'Monza'}), \
+         patch('auth.load_keys', return_value={'*': {'see_leagues': ['*'], 'see_telemetry': True}}):
+        resp = client.get('/league/acevo/last')
+        assert resp.status_code == 302
+        assert resp.headers['Location'] == '/telemetry/acevo/f1/2026-10-22/Monza'
