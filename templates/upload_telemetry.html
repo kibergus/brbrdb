@@ -1,0 +1,149 @@
+{% extends "layout.html" %}
+
+{% block title %}Upload Telemetry - {{ metadata.track }} - {{ metadata.session_name }} - BrBrDb{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/upload_telemetry.css') }}">
+{% endblock %}
+
+{% block breadcrumb %}
+<a href="{{ url_for('league_list') }}">Leagues</a> /
+<a href="{{ url_for('league_view', league=metadata.league) }}">{{ get_league_name(metadata.league) }}</a> /
+<a href="{{ url_for('class_view', league=metadata.league, class_name=metadata.class_name) }}">
+    {{ get_class_info(metadata.class_name).name }}
+</a> /
+{% if is_sim_league(metadata.league) %}
+<a href="{{ url_for('location.telemetry_view', league=metadata.league, class_name=metadata.class_name, date=metadata.date, track=metadata.track) }}">{{ metadata.date }} - {{ metadata.track }}</a> /
+{% else %}
+<a href="{{ url_for('meeting_view', league=metadata.league, class_name=metadata.class_name, date=metadata.date, track=metadata.track) }}">{{ metadata.date }} - {{ metadata.track }}</a> /
+{% endif %}
+<a href="{{ url_for('session_view', league=metadata.league, class_name=metadata.class_name, date=metadata.date, track=metadata.track, session_id=metadata.session_id) }}">{{ metadata.session_name }}</a> /
+<span>Upload Telemetry</span>
+{% endblock %}
+
+{% block content %}
+<div class="upload-container">
+    <div class="upload-card">
+        <div class="upload-header">
+            <div>
+                <h1 class="upload-header-title">Upload Telemetry</h1>
+                <p class="upload-header-subtitle">
+                    {{ metadata.track }} &bull; {{ metadata.date }}{% if metadata.time %} {{ metadata.time }}{% endif %} &bull; {{ metadata.session_name }}
+                </p>
+            </div>
+            <div>
+                {% if has_telemetry %}
+                <span class="badge badge-blue">Telemetry Available</span>
+                {% else %}
+                <span class="badge badge-grey">No Telemetry Yet</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <div id="uploadAlert" class="alert"></div>
+
+        <form id="telemetryUploadForm" method="POST" enctype="multipart/form-data" action="{{ url_for('upload.stream_upload') }}">
+            <!-- File Dropzone -->
+            <div id="uploadDropzone" class="dropzone-container">
+                <svg class="dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                <div class="dropzone-title">Choose a telemetry file or drag & drop here</div>
+                <p class="dropzone-desc">Supports GoPro telemetry CSV, RaceBox CSV, and RaceTools CSV exports</p>
+            </div>
+
+            <input type="file" id="telemetryFileInput" name="file" accept=".csv,.mp4,.lrv" style="display: none;">
+
+            <!-- Selected File Display -->
+            <div id="selectedFileInfo" class="selected-file-panel">
+                <div class="selected-file-meta">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                        <polyline points="13 2 13 9 20 9"></polyline>
+                    </svg>
+                    <div>
+                        <span id="selectedFileName" class="file-name-text">filename.csv</span>
+                        <span id="selectedFileSize" class="file-size-badge">0.0 MB</span>
+                    </div>
+                </div>
+                <button type="button" id="removeFileBtn" class="btn-remove-file">Change file</button>
+            </div>
+
+            <!-- Driver Name Input -->
+            <div class="form-group">
+                <label for="driverNameInput" class="form-label">Driver Name</label>
+                <input type="text" id="driverNameInput" name="driver_name" class="form-control"
+                    value="{{ hero_driver }}" list="sessionDriversList" required placeholder="e.g. Katia Guseinova">
+                <datalist id="sessionDriversList">
+                    {% for d in session_drivers %}
+                    <option value="{{ d }}"></option>
+                    {% endfor %}
+                </datalist>
+                <div class="form-helper">Defaults to the current hero driver. Autocomplete suggestions available from session results.</div>
+            </div>
+
+            <!-- Gyro Arm Length Input -->
+            <div class="form-group">
+                <label for="armLengthInput" class="form-label">Gyro Arm Length / Distance to Rear Axle (m)</label>
+                <input type="number" id="armLengthInput" name="distance_to_rear_axle" class="form-control"
+                    step="0.01" min="0" max="10"
+                    value="{{ default_arm_length if default_arm_length is not none else '' }}"
+                    placeholder="e.g. 1.50">
+                <div class="form-helper">Distance from camera to rear axle center in meters (e.g. 1.50m for Club 100 Cadet, 0.45m for FAT Cadet). Required when gyroscope channels are present.</div>
+                <div id="gyroHint" class="gyro-hint"></div>
+            </div>
+
+            <!-- Submit Button -->
+            <button type="submit" id="submitUploadBtn" class="btn-submit">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="17 8 12 3 7 8"></polyline>
+                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                Upload Telemetry
+            </button>
+
+            <!-- Progress Bar -->
+            <div id="uploadProgressContainer" class="progress-container">
+                <div class="progress-track">
+                    <div id="uploadProgressBar" class="progress-bar-fill"></div>
+                </div>
+                <div id="uploadProgressStatus" class="progress-status">Uploading...</div>
+            </div>
+        </form>
+
+        <!-- Success Display -->
+        <div id="uploadSuccessCard" class="success-card">
+            <svg class="success-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+            <h2 class="success-title">Telemetry Uploaded & Processed Successfully!</h2>
+            <p class="success-desc">GPS telemetry, derivative data, slip angles, and lap timings have been indexed.</p>
+            <div class="success-actions">
+                <a id="viewTelemetryBtn" href="{{ url_for('location.telemetry_view', league=metadata.league, class_name=metadata.class_name, date=metadata.date, track=metadata.track, session_id=metadata.session_id) }}" class="btn btn-primary" style="padding: 0.75rem 1.5rem; text-decoration: none; border-radius: 8px; font-weight: 600;">
+                    View Telemetry
+                </a>
+                <a id="returnSessionBtn" href="{{ url_for('session_view', league=metadata.league, class_name=metadata.class_name, date=metadata.date, track=metadata.track, session_id=metadata.session_id) }}" class="btn-secondary">
+                    Return to Session
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script type="module">
+    import { initTelemetryUpload } from "{{ url_for('static', filename='js/telemetry_upload.js') }}";
+    const config = {
+        uploadUrl: "{{ url_for('upload.stream_upload') }}",
+        telemetryUrl: "{{ url_for('location.telemetry_view', league=metadata.league, class_name=metadata.class_name, date=metadata.date, track=metadata.track, session_id=metadata.session_id) }}",
+        sessionUrl: "{{ url_for('session_view', league=metadata.league, class_name=metadata.class_name, date=metadata.date, track=metadata.track, session_id=metadata.session_id) }}",
+        sessionMeta: {{ metadata|tojson }},
+        heroDriver: {{ hero_driver|tojson }},
+        defaultArmLength: {{ default_arm_length|tojson }}
+    };
+    initTelemetryUpload(config);
+</script>
+{% endblock %}

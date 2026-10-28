@@ -99,7 +99,7 @@ export function toggleMobileSidebar(open) {
     } else {
         document.body.classList.remove('mobile-sidebar-open');
         setTimeout(() => {
-            if (typeof window !== 'undefined') {
+            if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
                 window.dispatchEvent(new Event('resize'));
                 if (state.map && window.google && window.google.maps) {
                     google.maps.event.trigger(state.map, 'resize');

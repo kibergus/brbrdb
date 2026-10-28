@@ -20,6 +20,8 @@ import math
 import datetime
 import time
 import logging
+import re
+from urllib.parse import unquote
 import zlib
 import brotli  # type: ignore[import-untyped]
 from typing import Any, Iterable
@@ -70,6 +72,7 @@ class CSVSessionMetadata:
     distance_to_rear_axle: float | None = None
     track_configuration: str | None = None
     origin: track_data.TrackOrigin | None = None
+    session_id: str | None = None
 
 
 def create_track_origin(
@@ -95,6 +98,22 @@ def create_track_origin(
     )
 
 
+def detect_distance_to_rear_axle(target: str | None) -> float | None:
+    """Auto-detect distance to rear axle (in meters) from a session path, league/class string, or URL.
+
+    - FAT Cadet: 0.45 m (if target contains 'fat[^/]*/cadet')
+    - Club 100 Cadet: 1.5 m (if target contains 'club100[^/]*/cade[td]')
+    """
+    if not target:
+        return None
+    decoded = unquote(str(target))
+    if re.search(r'fat[^/]*/cade[td]', decoded, re.IGNORECASE):
+        return 0.45
+    if re.search(r'club100[^/]*/cade[td]', decoded, re.IGNORECASE):
+        return 1.5
+    return None
+
+
 def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessionMetadata:
     """Parses list of CSV rows containing metadata (key, value) pairs
     and returns a standardized CSVSessionMetadata dataclass.
@@ -104,6 +123,7 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
     league = None
     class_name = None
     session_name = None
+    session_id = None
     session_start_datetime = None
     kart_number = None
     track_conditions = None
@@ -140,6 +160,11 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
             class_name = val
         elif key == 'session':
             session_name = val
+        elif key in ('session id', 'session_id'):
+            sanitized = sanitize.sanitize_filename(val)
+            if not sanitized or sanitized != val.strip().lower():
+                raise BadRequest(f'Invalid Session ID: {val!r}')
+            session_id = sanitized
         elif key == 'kart_number':
             kart_number = val
         elif key == 'conditions':
@@ -214,6 +239,7 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
         distance_to_rear_axle=distance_to_rear_axle,
         track_configuration=track_configuration,
         origin=origin,
+        session_id=session_id,
     )
 
 
@@ -1345,13 +1371,23 @@ def stream_upload() -> Any:
     meeting_dir = os.path.join(DATA_DIR, metadata.league, metadata.class_name, meeting_folder)
     os.makedirs(os.path.join(meeting_dir, 'telemetry'), exist_ok=True)
 
-    session_filename = f'{time_str}_{sanitize.sanitize_filename(metadata.session_name)}'
+    if metadata.session_id:
+        session_filename = sanitize.sanitize_filename(metadata.session_id)
+        if not session_filename or session_filename != metadata.session_id.strip().lower():
+            raise BadRequest(f'Invalid session_id: {metadata.session_id!r}')
+    else:
+        session_filename = f'{time_str}_{sanitize.sanitize_filename(metadata.session_name)}'
 
     meta_path = os.path.join(meeting_dir, f'{session_filename}_metadata.json')
     summary_path = os.path.join(meeting_dir, f'{session_filename}.csv')
     telemetry_path = os.path.join(
         meeting_dir, 'telemetry', f'{session_filename}_{sanitize.sanitize_filename(metadata.driver_name)}.csv'
     )
+
+    meeting_real = os.path.realpath(meeting_dir)
+    for p in (meta_path, summary_path, telemetry_path):
+        if not os.path.realpath(p).startswith(meeting_real + os.sep):
+            raise BadRequest('Invalid path traversal detected.')
 
     # Check if session already exists and has AlphaTiming data
     has_alphatiming = False

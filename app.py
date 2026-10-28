@@ -1418,6 +1418,49 @@ def session_view(league: str, class_name: str, date: str, track: str, session_id
     )
 
 
+@app.route('/session/<league>/<class_name>/<date>/<track>/<session_id>/upload_telemetry', methods=['GET'])
+def upload_telemetry(league: str, class_name: str, date: str, track: str, session_id: str) -> Any:
+    acl = auth.get_current_acl()
+    if not auth.can_see_telemetry(acl, league=league):
+        abort(403)
+
+    hero_names = plot_handlers.get_hero_names()
+    s_meta_list = db.find_sessions(leagues=league, classes=class_name, date=date, track=track, session_id=session_id)
+    if not s_meta_list:
+        abort(404)
+    s_meta = s_meta_list[0]
+
+    session_name = sanitize.strip_race_prefix(s_meta.session_name)
+    actual_track = s_meta.track_name
+    dt_str = str(s_meta.session_start_datetime or '')
+    time_part = dt_str.split(' ')[1] if ' ' in dt_str else ''
+
+    session_drivers = db.get_session_drivers(session_id, s_meta.meeting_folder)
+    hero_driver = hero_names[0] if hero_names else ''
+    default_arm_length = upload_handlers.detect_distance_to_rear_axle(f'{league}/{class_name}')
+    has_telemetry = db.has_telemetry(s_meta.meeting_dir, session_id)
+
+    session_metadata = {
+        'session_id': session_id,
+        'session_name': session_name,
+        'league': league,
+        'class_name': class_name,
+        'date': date,
+        'time': time_part,
+        'track': actual_track,
+        'has_telemetry': has_telemetry,
+    }
+
+    return render_template(
+        'upload_telemetry.html',
+        metadata=session_metadata,
+        hero_driver=hero_driver,
+        session_drivers=session_drivers,
+        default_arm_length=default_arm_length,
+        has_telemetry=has_telemetry,
+    )
+
+
 @app.route('/track_sessions/<league>/<class_name>/<track>')
 @app.route('/track_sessions/<league>/<class_name>/<track>/<track_conditions>')
 def track_sessions_view(league: str, class_name: str, track: str, track_conditions: str | None = None) -> str:

@@ -32,6 +32,8 @@ sys.path.insert(0, project_root)
 
 import race_db  # noqa: E402
 from utils import populate_db  # noqa: E402
+import database  # noqa: E402
+database.config.setdefault('secret_key', 'test_secret_key_for_testing')
 from tests.goldens_diff.golden_app import app as golden_app  # noqa: E402
 
 

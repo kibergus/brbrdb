@@ -1604,7 +1604,7 @@ def test_track_origin_to_gps_conversion() -> None:
 
 def test_process_telemetry_derivative_data_with_track_origin() -> None:
     session_info = upload_handlers.CSVSessionMetadata(
-        driver_name='Katia Guseinova',
+        driver_name='Driver A',
         track_name='Monza',
         league='acevo',
         class_name='f1',
