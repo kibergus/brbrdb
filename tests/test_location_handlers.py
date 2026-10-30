@@ -962,7 +962,7 @@ def test_telemetry_report_content_view() -> None:
         resp = client.get('/telemetry/report_content/missing_report')
         assert resp.status_code == 404
 
-    # Fragment wraps in full HTML document with telemetry_report.css
+    # Fragment wraps in full HTML document with inlined telemetry_report.css
     mock_meta: dict[str, Any] = {"title": "Fragment Report"}
     mock_state: dict[str, Any] = {}
     mock_body = "<div class='test-fragment'>Fragment Body</div>"
@@ -971,7 +971,9 @@ def test_telemetry_report_content_view() -> None:
         resp = client.get('/telemetry/report_content/sample_fragment')
         assert resp.status_code == 200
         html = resp.data.decode('utf-8')
-        assert "telemetry_report.css" in html
+        assert "<style>" in html
+        assert "body.report-iframe-body" in html
+        assert 'href="/static/css/telemetry_report.css"' not in html
         assert "<div class='test-fragment'>Fragment Body</div>" in html
         assert "katex.min.css" in html
         assert "katex.min.js" in html

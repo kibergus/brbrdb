@@ -1003,9 +1003,13 @@ def telemetry_report_content(report_name: str) -> Response:
             return html_doc[:m.start()] + content + html_doc[m.start():]
         return html_doc
 
+    css_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'css', 'telemetry_report.css')
+    with open(css_path, 'r', encoding='utf-8') as f:
+        css_content = f.read()
+    inline_css = f"  <style>\n{css_content}\n  </style>"
+
     if '<html' not in body.lower() or '<head' not in body.lower():
         title = meta.get('title', 'Telemetry Report')
-        css_url = url_for('static', filename='css/telemetry_report.css')
         body = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1015,7 +1019,7 @@ def telemetry_report_content(report_name: str) -> Response:
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{css_url}">
+{inline_css}
 {katex_assets}</head>
 <body class="report-iframe-body">
   {body}
@@ -1023,7 +1027,7 @@ def telemetry_report_content(report_name: str) -> Response:
 </body>
 </html>"""
     else:
-        if 'katex' not in body.lower():
+        if 'katex.min.css' not in body.lower():
             injected = _inject_before_tag(body, 'head', katex_assets)
             if injected != body:
                 body = injected
