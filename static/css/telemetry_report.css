@@ -726,4 +726,17 @@ body.report-iframe-body {
   transform: translateY(0);
 }
 
+/* KaTeX Formula Rendering */
+.katex {
+  color: inherit;
+  font-size: 1.05em;
+}
+
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5rem 0;
+  margin: 0.75rem 0;
+}
+
 

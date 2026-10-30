@@ -971,6 +971,38 @@ def telemetry_report_content(report_name: str) -> Response:
   });
 </script>
 """
+    katex_assets = r"""  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+    onload="renderKatexInReport()"></script>
+  <script>
+    function renderKatexInReport() {
+      if (typeof renderMathInElement === 'function' && document.body) {
+        renderMathInElement(document.body, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '\\[', right: '\\]', display: true },
+            { left: '$', right: '$', display: false },
+            { left: '\\(', right: '\\)', display: false }
+          ],
+          throwOnError: false
+        });
+      }
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', renderKatexInReport);
+    } else {
+      renderKatexInReport();
+    }
+  </script>
+"""
+
+    def _inject_before_tag(html_doc: str, tag: str, content: str) -> str:
+        m = re.search(rf'</{tag}\s*>', html_doc, re.IGNORECASE)
+        if m:
+            return html_doc[:m.start()] + content + html_doc[m.start():]
+        return html_doc
+
     if '<html' not in body.lower() or '<head' not in body.lower():
         title = meta.get('title', 'Telemetry Report')
         css_url = url_for('static', filename='css/telemetry_report.css')
@@ -984,16 +1016,21 @@ def telemetry_report_content(report_name: str) -> Response:
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{css_url}">
-</head>
+{katex_assets}</head>
 <body class="report-iframe-body">
   {body}
   {postmessage_script}
 </body>
 </html>"""
     else:
-        if '</body>' in body:
-            body = body.replace('</body>', f'{postmessage_script}</body>')
-        else:
+        if 'katex' not in body.lower():
+            injected = _inject_before_tag(body, 'head', katex_assets)
+            if injected != body:
+                body = injected
+            else:
+                body = _inject_before_tag(body, 'body', katex_assets)
+        body = _inject_before_tag(body, 'body', postmessage_script)
+        if 'telemetry_jump' not in body:
             body = body + postmessage_script
 
     return Response(body, mimetype='text/html')

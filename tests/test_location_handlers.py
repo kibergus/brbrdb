@@ -973,6 +973,19 @@ def test_telemetry_report_content_view() -> None:
         html = resp.data.decode('utf-8')
         assert "telemetry_report.css" in html
         assert "<div class='test-fragment'>Fragment Body</div>" in html
+        assert "katex.min.css" in html
+        assert "katex.min.js" in html
+        assert "renderMathInElement" in html
+        assert "window.parent.postMessage" in html
+
+    # Full HTML report gets KaTeX injected into <head>
+    mock_full_body = "<!DOCTYPE html><html><head><title>Full</title></head><body><div>Content</div></body></html>"
+    with patch('location_handlers.report_parser.load_report', return_value=(mock_meta, mock_state, mock_full_body)):
+        resp = client.get('/telemetry/report_content/sample_full')
+        assert resp.status_code == 200
+        html = resp.data.decode('utf-8')
+        assert "katex.min.css" in html
+        assert "renderMathInElement" in html
         assert "window.parent.postMessage" in html
 
 

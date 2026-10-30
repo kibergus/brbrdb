@@ -280,6 +280,14 @@ External analysis agents publish and iterate on reports using the following serv
 
 ---
 
+## LaTeX Formula & Math Rendering
+
+Telemetry reports automatically render LaTeX math using KaTeX with auto-render:
+- **Inline math**: Wrap formulas in single dollar signs `$ ... $` or `\( ... \)` (e.g. `$r = -0.84$`, `$V_{\min} = 46.8\text{ km/h}$`, `$\Delta t = +0.47\text{s}$`).
+- **Display math**: Wrap block equations in double dollar signs `$$ ... $$` or `\[ ... \]` (e.g. `$$a_c = \frac{v^2}{R}$$`).
+
+---
+
 ## Interactive Data Attributes & JavaScript API
 
 ### Data Attributes for HTML Elements

@@ -13,10 +13,17 @@
 # limitations under the License.
 # ==============================================================================
 
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pandas as pd
+import pytest
 import app
 import upload_handlers
+
+
+@pytest.fixture(autouse=True)
+def mock_upload_handlers_data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(upload_handlers, 'DATA_DIR', str(tmp_path))
 
 
 def test_detect_distance_to_rear_axle() -> None:
