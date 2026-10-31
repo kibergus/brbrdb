@@ -42,7 +42,7 @@ import auth
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = config['secret_key']
+app.secret_key = config.get('secret_key', 'dev_secret_key')
 app.register_blueprint(plot_handlers.plots_blueprint)
 app.register_blueprint(gallery_handlers.gallery_blueprint)
 app.register_blueprint(mcp_handlers.mcp_blueprint)

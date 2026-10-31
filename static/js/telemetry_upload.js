@@ -19,10 +19,20 @@
  * Client-side Telemetry Pre-processing and Upload Pipeline.
  *
  * Architecture supports:
- * 1. CsvTelemetryProcessor: GoPro / RaceBox / RaceTools CSV parsing and payload preparation.
- * 2. GoProVideoProcessor: Extensible scaffold for browser-based MP4/LRV GPMF extraction
+ * 1. RaceBox BLE Direct: Direct Web Bluetooth download from RaceBox Micro / Mini S,
+ *    live unpacking of 25Hz binary history, session segmentation, and streaming upload.
+ * 2. CsvTelemetryProcessor: GoPro / RaceBox / RaceTools CSV parsing and payload preparation.
+ * 3. GoProVideoProcessor: Extensible scaffold for browser-based MP4/LRV GPMF extraction
  *    using File.slice() without uploading heavy video files.
  */
+
+import {
+    RaceBoxBleClient,
+    pointsToCsvData,
+    findMatchingSessionIndex,
+    DEFAULT_AXIS_MAPPING,
+    AXIS_MAPPING_PRESETS
+} from './racebox_ble.js';
 
 export const GYROSCOPE_CHANNELS = ['Yaw Rate', 'Pitch Rate', 'Roll Rate'];
 
@@ -90,7 +100,7 @@ export function buildRaceToolsPayload(sessionMeta, driverName, dataText, distanc
         `Session,${sessionMeta.session_name}\n` +
         `Session ID,${sessionMeta.session_id}\n`;
 
-    if (distanceToRearAxle != null) {
+    if (distanceToRearAxle !== null && distanceToRearAxle !== undefined) {
         headerBlock += `Distance to rear axle,${distanceToRearAxle}\n`;
     }
     headerBlock += '\n';
@@ -172,8 +182,6 @@ export class CsvTelemetryProcessor extends BaseTelemetryProcessor {
 
 /**
  * Scaffold for direct GoPro video files (.mp4 / .lrv).
- * Planned extension: client-side GPMF demuxer using File.slice() so video files
- * are parsed locally in the browser without uploading multi-gigabyte files.
  */
 export class GoProVideoProcessor extends BaseTelemetryProcessor {
     static canProcess(file) {
@@ -183,12 +191,6 @@ export class GoProVideoProcessor extends BaseTelemetryProcessor {
 
     static async process(file, options, onProgress) {
         if (onProgress) onProgress(10, 'Inspecting GoPro video container...');
-        // Extensibility hook:
-        // 1. Demux MP4 boxes (ftyp, moov, trak, mdia, minf, stbl, stco/co64, stsz, stsc)
-        // 2. Locate gpmd track
-        // 3. Extract GPMF samples using File.slice()
-        // 4. Decode GPS5/GPS9, ACCL, GYRO packets
-        // 5. Build RaceTools CSV payload
         throw new Error(
             'Direct GoPro video (.mp4 / .lrv) in-browser telemetry extraction is being prepared. ' +
             'Please export telemetry to CSV first or use the GoPro CSV upload option.'
@@ -244,7 +246,136 @@ export function initTelemetryUpload(config) {
     const returnSessionBtn = document.getElementById('returnSessionBtn');
     const gyroHint = document.getElementById('gyroHint');
 
+    // RaceBox Direct BLE Elements
+    const raceboxCard = document.getElementById('raceboxCard');
+    const raceboxConnectBtn = document.getElementById('raceboxConnectBtn');
+    const raceboxUnsupportedNotice = document.getElementById('raceboxUnsupportedNotice');
+    const raceboxControlPanel = document.getElementById('raceboxControlPanel');
+    const raceboxPinToggle = document.getElementById('raceboxPinToggle');
+    const raceboxPinContainer = document.getElementById('raceboxPinContainer');
+    const raceboxPinInput = document.getElementById('raceboxPinInput');
+    const raceboxProgressPanel = document.getElementById('raceboxProgressPanel');
+    const raceboxProgressBar = document.getElementById('raceboxProgressBar');
+    const raceboxStatusText = document.getElementById('raceboxStatusText');
+    const raceboxProgressStats = document.getElementById('raceboxProgressStats');
+    const raceboxCancelBtn = document.getElementById('raceboxCancelBtn');
+    const raceboxSessionsPanel = document.getElementById('raceboxSessionsPanel');
+    const raceboxSessionsCountTitle = document.getElementById('raceboxSessionsCountTitle');
+    const raceboxSessionsList = document.getElementById('raceboxSessionsList');
+    const raceboxSessionActions = document.getElementById('raceboxSessionActions');
+    const raceboxUploadSelectedBtn = document.getElementById('raceboxUploadSelectedBtn');
+    const raceboxDownloadCsvBtn = document.getElementById('raceboxDownloadCsvBtn');
+    const raceboxRedoBtn = document.getElementById('raceboxRedoBtn');
+
+    // RaceBox Axis Mapping Elements
+    const raceboxOrientationPreset = document.getElementById('raceboxOrientationPreset');
+    const raceboxCustomAxesToggle = document.getElementById('raceboxCustomAxesToggle');
+    const raceboxCustomAxesGrid = document.getElementById('raceboxCustomAxesGrid');
+    const raceboxAxisLat = document.getElementById('raceboxAxisLat');
+    const raceboxAxisLon = document.getElementById('raceboxAxisLon');
+    const raceboxAxisVert = document.getElementById('raceboxAxisVert');
+    const raceboxAxisYaw = document.getElementById('raceboxAxisYaw');
+
     let selectedFile = null;
+    let raceboxClient = null;
+    let selectedRaceBoxSession = null;
+    let currentAxisMapping = { ...DEFAULT_AXIS_MAPPING };
+
+    // Restore axis mapping from localStorage if available
+    try {
+        const saved = localStorage.getItem('racebox_axis_mapping');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed && typeof parsed === 'object') {
+                currentAxisMapping = { ...DEFAULT_AXIS_MAPPING, ...parsed };
+            }
+        }
+    } catch {
+        // Ignore localStorage access errors
+    }
+
+    function syncAxisMappingUI() {
+        if (raceboxAxisLat) raceboxAxisLat.value = currentAxisMapping.lat;
+        if (raceboxAxisLon) raceboxAxisLon.value = currentAxisMapping.lon;
+        if (raceboxAxisVert) raceboxAxisVert.value = currentAxisMapping.vert;
+        if (raceboxAxisYaw) raceboxAxisYaw.value = currentAxisMapping.yaw;
+
+        let matchingPresetKey = 'custom';
+        for (const [key, p] of Object.entries(AXIS_MAPPING_PRESETS)) {
+            if (
+                p.mapping.lat === currentAxisMapping.lat &&
+                p.mapping.lon === currentAxisMapping.lon &&
+                p.mapping.vert === currentAxisMapping.vert &&
+                p.mapping.yaw === currentAxisMapping.yaw
+            ) {
+                matchingPresetKey = key;
+                break;
+            }
+        }
+        if (raceboxOrientationPreset) {
+            raceboxOrientationPreset.value = matchingPresetKey;
+        }
+    }
+
+    function saveAxisMapping() {
+        try {
+            localStorage.setItem('racebox_axis_mapping', JSON.stringify(currentAxisMapping));
+        } catch {
+            // Ignore localStorage error
+        }
+    }
+
+    syncAxisMappingUI();
+
+    if (raceboxCustomAxesToggle && raceboxCustomAxesGrid) {
+        raceboxCustomAxesToggle.addEventListener('click', () => {
+            const isHidden = raceboxCustomAxesGrid.style.display === 'none';
+            raceboxCustomAxesGrid.style.display = isHidden ? 'grid' : 'none';
+            raceboxCustomAxesToggle.textContent = isHidden ? 'Hide custom axes' : 'Customize axes';
+        });
+    }
+
+    if (raceboxOrientationPreset) {
+        raceboxOrientationPreset.addEventListener('change', () => {
+            const val = raceboxOrientationPreset.value;
+            if (val === 'custom') {
+                if (raceboxCustomAxesGrid) raceboxCustomAxesGrid.style.display = 'grid';
+                if (raceboxCustomAxesToggle) raceboxCustomAxesToggle.textContent = 'Hide custom axes';
+                return;
+            }
+            if (AXIS_MAPPING_PRESETS[val]) {
+                currentAxisMapping = {
+                    ...DEFAULT_AXIS_MAPPING,
+                    ...AXIS_MAPPING_PRESETS[val].mapping
+                };
+                syncAxisMappingUI();
+                saveAxisMapping();
+            }
+        });
+    }
+
+    [raceboxAxisLat, raceboxAxisLon, raceboxAxisVert, raceboxAxisYaw].forEach(sel => {
+        if (sel) {
+            sel.addEventListener('change', () => {
+                currentAxisMapping.lat = raceboxAxisLat ? raceboxAxisLat.value : currentAxisMapping.lat;
+                currentAxisMapping.lon = raceboxAxisLon ? raceboxAxisLon.value : currentAxisMapping.lon;
+                currentAxisMapping.vert = raceboxAxisVert ? raceboxAxisVert.value : currentAxisMapping.vert;
+                currentAxisMapping.yaw = raceboxAxisYaw ? raceboxAxisYaw.value : currentAxisMapping.yaw;
+                syncAxisMappingUI();
+                saveAxisMapping();
+            });
+        }
+    });
+
+    // Check Web Bluetooth support
+    if (raceboxCard) {
+        if (!RaceBoxBleClient.isSupported()) {
+            if (raceboxUnsupportedNotice) raceboxUnsupportedNotice.style.display = 'flex';
+            if (raceboxConnectBtn) raceboxConnectBtn.disabled = true;
+        } else {
+            if (raceboxUnsupportedNotice) raceboxUnsupportedNotice.style.display = 'none';
+        }
+    }
 
     function showAlert(message, type = 'error') {
         if (!alertBox) return;
@@ -268,7 +399,9 @@ export function initTelemetryUpload(config) {
 
     function setSelectedFile(file) {
         selectedFile = file;
+        selectedRaceBoxSession = null;
         hideAlert();
+
         if (file) {
             if (dropzone) dropzone.style.display = 'none';
             if (fileInfo) fileInfo.style.display = 'flex';
@@ -301,6 +434,335 @@ export function initTelemetryUpload(config) {
         }
     }
 
+    function setSelectedRaceBoxSession(session) {
+        selectedRaceBoxSession = session;
+        selectedFile = null;
+        hideAlert();
+
+        if (session) {
+            if (dropzone) dropzone.style.display = 'none';
+            if (fileInfo) fileInfo.style.display = 'flex';
+            if (fileNameSpan) {
+                fileNameSpan.textContent = `RaceBox Session: ${session.startTimeFormatted || session.startTimeIso} (${session.durationFormatted})`;
+            }
+            if (fileSizeSpan) {
+                fileSizeSpan.textContent = `${session.pointsCount.toLocaleString()} pts (25Hz)`;
+            }
+            if (gyroHint) {
+                gyroHint.style.display = 'block';
+                gyroHint.textContent = 'ℹ RaceBox 25Hz telemetry includes gyroscope channels (Yaw, Pitch, Roll). Gyro Arm Length is configured.';
+            }
+            if (raceboxSessionActions) {
+                raceboxSessionActions.style.display = 'flex';
+            }
+        }
+    }
+
+    function renderSessionsList(sessions) {
+        if (!raceboxSessionsList) return;
+        raceboxSessionsList.innerHTML = '';
+
+        if (!sessions || sessions.length === 0) {
+            raceboxSessionsList.innerHTML = '<div class="racebox-empty-sessions">No driving sessions found in device memory.</div>';
+            return;
+        }
+
+        const bestIdx = findMatchingSessionIndex(
+            sessions,
+            config.sessionMeta?.date,
+            config.sessionMeta?.time
+        );
+
+        sessions.forEach((s, idx) => {
+            const isBestMatch = (idx === bestIdx);
+            const isSelected = (selectedRaceBoxSession && selectedRaceBoxSession.id === s.id) || (!selectedRaceBoxSession && isBestMatch);
+
+            const item = document.createElement('div');
+            item.className = `racebox-session-item ${isSelected ? 'selected' : ''}`;
+            item.dataset.idx = String(idx);
+
+            item.innerHTML = `
+                <div class="racebox-session-radio">
+                    <input type="radio" name="racebox_session_choice" value="${idx}" ${isSelected ? 'checked' : ''}>
+                </div>
+                <div class="racebox-session-details">
+                    <div class="racebox-session-title-line">
+                        <span class="racebox-session-time">${s.startTimeFormatted || s.startTimeIso}</span>
+                        ${isBestMatch ? '<span class="badge badge-match">⭐ Recommended Match</span>' : ''}
+                    </div>
+                    <div class="racebox-session-meta-line">
+                        <span>Duration: <strong>${s.durationFormatted}</strong></span> &bull;
+                        <span>Points: <strong>${s.pointsCount.toLocaleString()}</strong> (25 Hz)</span> &bull;
+                        <span>Max Speed: <strong>${s.maxSpeedKmh.toFixed(1)} km/h</strong></span>
+                    </div>
+                </div>
+            `;
+
+            item.addEventListener('click', () => {
+                const radio = item.querySelector('input[type="radio"]');
+                if (radio) radio.checked = true;
+                raceboxSessionsList.querySelectorAll('.racebox-session-item').forEach(el => el.classList.remove('selected'));
+                item.classList.add('selected');
+                setSelectedRaceBoxSession(s);
+            });
+
+            raceboxSessionsList.appendChild(item);
+        });
+
+        // Set default selection
+        const defaultSession = sessions[bestIdx] || sessions[0];
+        setSelectedRaceBoxSession(defaultSession);
+    }
+
+    // PIN toggle
+    if (raceboxPinToggle && raceboxPinContainer) {
+        raceboxPinToggle.addEventListener('click', () => {
+            const isHidden = raceboxPinContainer.style.display === 'none';
+            raceboxPinContainer.style.display = isHidden ? 'block' : 'none';
+            if (isHidden && raceboxPinInput) {
+                raceboxPinInput.focus();
+            }
+        });
+    }
+
+    // Connect & Download from RaceBox Micro
+    if (raceboxConnectBtn) {
+        raceboxConnectBtn.addEventListener('click', async () => {
+            hideAlert();
+            if (!RaceBoxBleClient.isSupported()) {
+                showAlert('Web Bluetooth is not supported in this browser. Please use Chrome on Android, Linux, macOS, or Windows.', 'error');
+                return;
+            }
+
+            try {
+                if (!raceboxClient) {
+                    raceboxClient = new RaceBoxBleClient();
+                }
+
+                await raceboxClient.requestDevice();
+
+                if (raceboxControlPanel) raceboxControlPanel.style.display = 'none';
+                if (raceboxSessionsPanel) raceboxSessionsPanel.style.display = 'none';
+                if (raceboxProgressPanel) raceboxProgressPanel.style.display = 'block';
+                if (raceboxProgressBar) raceboxProgressBar.style.width = '0%';
+                if (raceboxStatusText) raceboxStatusText.textContent = 'Connecting to RaceBox Micro...';
+                if (raceboxProgressStats) raceboxProgressStats.textContent = '';
+
+                const pin = (raceboxPinInput ? raceboxPinInput.value : '').trim();
+                const sessions = await raceboxClient.startDownload({
+                    pin,
+                    onStatus: (msg) => {
+                        if (raceboxStatusText) raceboxStatusText.textContent = msg;
+                    },
+                    onProgress: (p) => {
+                        if (raceboxProgressBar && p.percent !== null) {
+                            raceboxProgressBar.style.width = `${p.percent}%`;
+                        }
+                        if (raceboxProgressStats) {
+                            const exp = p.expected > 0 ? ` / ${p.expected.toLocaleString()}` : '';
+                            const pct = p.percent !== null ? ` (${p.percent}%)` : '';
+                            raceboxProgressStats.textContent = `Downloaded ${p.current.toLocaleString()}${exp} records${pct}`;
+                        }
+                    }
+                });
+
+                if (raceboxProgressPanel) raceboxProgressPanel.style.display = 'none';
+
+                if (!sessions || sessions.length === 0) {
+                    showAlert('Download complete, but no driving sessions were found in RaceBox memory.', 'error');
+                    if (raceboxControlPanel) raceboxControlPanel.style.display = 'block';
+                    return;
+                }
+
+                if (raceboxSessionsCountTitle) {
+                    raceboxSessionsCountTitle.textContent = `${sessions.length} session${sessions.length > 1 ? 's' : ''} downloaded from RaceBox`;
+                }
+                if (raceboxSessionsPanel) raceboxSessionsPanel.style.display = 'block';
+                renderSessionsList(sessions);
+
+            } catch (err) {
+                if (raceboxProgressPanel) raceboxProgressPanel.style.display = 'none';
+                if (raceboxControlPanel) raceboxControlPanel.style.display = 'block';
+                showAlert(err.message || 'Failed to download from RaceBox.', 'error');
+            }
+        });
+    }
+
+    // Cancel download
+    if (raceboxCancelBtn) {
+        raceboxCancelBtn.addEventListener('click', async () => {
+            if (raceboxClient) {
+                await raceboxClient.cancel();
+            }
+            if (raceboxProgressPanel) raceboxProgressPanel.style.display = 'none';
+            if (raceboxControlPanel) raceboxControlPanel.style.display = 'block';
+        });
+    }
+
+    // Redo / Download again
+    if (raceboxRedoBtn) {
+        raceboxRedoBtn.addEventListener('click', () => {
+            if (raceboxSessionsPanel) raceboxSessionsPanel.style.display = 'none';
+            if (raceboxControlPanel) raceboxControlPanel.style.display = 'block';
+        });
+    }
+
+    // Save CSV Locally
+    if (raceboxDownloadCsvBtn) {
+        raceboxDownloadCsvBtn.addEventListener('click', () => {
+            if (!selectedRaceBoxSession) {
+                showAlert('Please select a RaceBox session to save.', 'error');
+                return;
+            }
+
+            const driverName = (driverInput ? driverInput.value : '').trim() || config.heroDriver || 'Driver';
+            let armLength = null;
+            if (armLengthInput && armLengthInput.value.trim() !== '') {
+                armLength = parseFloat(armLengthInput.value) || null;
+            }
+
+            const dataText = pointsToCsvData(selectedRaceBoxSession.points, currentAxisMapping);
+            const payload = buildRaceToolsPayload(
+                config.sessionMeta,
+                driverName,
+                dataText,
+                armLength
+            );
+
+            const blob = new Blob([payload], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const safeTrack = (config.sessionMeta?.track || 'track').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const safeSession = (config.sessionMeta?.session_name || 'session').replace(/[^a-zA-Z0-9_-]/g, '_');
+            a.href = url;
+            a.download = `RaceBox_${safeTrack}_${safeSession}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+    }
+
+    // Unified Upload Execution
+    async function executeTelemetryUpload() {
+        hideAlert();
+
+        if (!selectedFile && !selectedRaceBoxSession) {
+            showAlert('Please select a telemetry CSV file or download a session from RaceBox.', 'error');
+            return;
+        }
+
+        const driverName = (driverInput ? driverInput.value : '').trim();
+        if (!driverName) {
+            showAlert('Driver name is required.', 'error');
+            if (driverInput) driverInput.focus();
+            return;
+        }
+
+        let armLength = null;
+        if (armLengthInput && armLengthInput.value.trim() !== '') {
+            const parsed = parseFloat(armLengthInput.value);
+            if (isNaN(parsed) || parsed < 0) {
+                showAlert('Please enter a valid positive number for gyro arm length.', 'error');
+                armLengthInput.focus();
+                return;
+            }
+            armLength = parsed;
+        }
+
+        try {
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Processing...';
+            }
+            if (raceboxUploadSelectedBtn) {
+                raceboxUploadSelectedBtn.disabled = true;
+                raceboxUploadSelectedBtn.textContent = 'Uploading...';
+            }
+
+            updateProgress(5, 'Pre-processing telemetry locally...');
+
+            let payload;
+            if (selectedRaceBoxSession) {
+                updateProgress(30, 'Formatting RaceBox 25Hz telemetry into RaceTools format...');
+                const dataText = pointsToCsvData(selectedRaceBoxSession.points, currentAxisMapping);
+                payload = buildRaceToolsPayload(
+                    config.sessionMeta,
+                    driverName,
+                    dataText,
+                    armLength
+                );
+            } else {
+                payload = await TelemetryProcessor.process(
+                    selectedFile,
+                    {
+                        sessionMeta: config.sessionMeta,
+                        driverName,
+                        distanceToRearAxle: armLength
+                    },
+                    (percent, status) => {
+                        updateProgress(Math.min(percent, 70), status);
+                    }
+                );
+            }
+
+            updateProgress(75, 'Uploading telemetry to server...');
+
+            const uploadUrl = config.uploadUrl || (uploadForm ? uploadForm.action : '') || '/api/upload/stream';
+            const response = await fetch(uploadUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'text/csv; charset=utf-8',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: payload
+            });
+
+            updateProgress(90, 'Processing derivative data and lap detection...');
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                throw new Error(errData.message || errData.error || `Server responded with status ${response.status}`);
+            }
+
+            const result = await response.json();
+            updateProgress(100, 'Upload complete!');
+
+            if (uploadForm) uploadForm.style.display = 'none';
+            if (raceboxCard) raceboxCard.style.display = 'none';
+            const divider = document.querySelector('.divider-text');
+            if (divider) divider.style.display = 'none';
+
+            if (successCard) {
+                successCard.style.display = 'block';
+                const telUrl = result.telemetry_url || config.telemetryUrl;
+                const sessUrl = result.session_url || config.sessionUrl;
+                if (viewTelemetryBtn && telUrl) {
+                    viewTelemetryBtn.href = telUrl;
+                }
+                if (returnSessionBtn && sessUrl) {
+                    returnSessionBtn.href = sessUrl;
+                }
+            }
+        } catch (err) {
+            showAlert(err.message || 'An error occurred during upload.', 'error');
+            if (progressContainer) progressContainer.style.display = 'none';
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Upload Telemetry';
+            }
+            if (raceboxUploadSelectedBtn) {
+                raceboxUploadSelectedBtn.disabled = false;
+                raceboxUploadSelectedBtn.textContent = 'Upload Selected Session';
+            }
+        }
+    }
+
+    if (raceboxUploadSelectedBtn) {
+        raceboxUploadSelectedBtn.addEventListener('click', executeTelemetryUpload);
+    }
+
+    // Drag and drop / file input bindings
     if (dropzone && fileInput) {
         dropzone.addEventListener('click', () => fileInput.click());
 
@@ -334,101 +796,16 @@ export function initTelemetryUpload(config) {
     }
 
     if (removeFileBtn) {
-        removeFileBtn.addEventListener('click', () => setSelectedFile(null));
+        removeFileBtn.addEventListener('click', () => {
+            setSelectedFile(null);
+            selectedRaceBoxSession = null;
+        });
     }
 
     if (uploadForm) {
-        uploadForm.addEventListener('submit', async (e) => {
+        uploadForm.addEventListener('submit', (e) => {
             e.preventDefault();
-            hideAlert();
-
-            if (!selectedFile) {
-                showAlert('Please select a telemetry CSV file to upload.', 'error');
-                return;
-            }
-
-            const driverName = (driverInput ? driverInput.value : '').trim();
-            if (!driverName) {
-                showAlert('Driver name is required.', 'error');
-                if (driverInput) driverInput.focus();
-                return;
-            }
-
-            let armLength = null;
-            if (armLengthInput && armLengthInput.value.trim() !== '') {
-                const parsed = parseFloat(armLengthInput.value);
-                if (isNaN(parsed) || parsed < 0) {
-                    showAlert('Please enter a valid positive number for gyro arm length.', 'error');
-                    armLengthInput.focus();
-                    return;
-                }
-                armLength = parsed;
-            }
-
-            try {
-                if (submitBtn) {
-                    submitBtn.disabled = true;
-                    submitBtn.textContent = 'Processing...';
-                }
-
-                updateProgress(5, 'Pre-processing telemetry locally...');
-
-                // Run client-side pre-processing pipeline
-                const payload = await TelemetryProcessor.process(
-                    selectedFile,
-                    {
-                        sessionMeta: config.sessionMeta,
-                        driverName,
-                        distanceToRearAxle: armLength
-                    },
-                    (percent, status) => {
-                        updateProgress(Math.min(percent, 70), status);
-                    }
-                );
-
-                updateProgress(75, 'Uploading telemetry to server...');
-
-                // Upload directly as CSV to /api/upload/stream
-                const uploadUrl = config.uploadUrl || (uploadForm ? uploadForm.action : '') || '/api/upload/stream';
-                const response = await fetch(uploadUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'text/csv; charset=utf-8',
-                        'X-Requested-With': 'XMLHttpRequest'
-                    },
-                    body: payload
-                });
-
-                updateProgress(90, 'Processing derivative data and lap detection...');
-
-                if (!response.ok) {
-                    const errData = await response.json().catch(() => ({}));
-                    throw new Error(errData.message || errData.error || `Server responded with status ${response.status}`);
-                }
-
-                const result = await response.json();
-                updateProgress(100, 'Upload complete!');
-
-                if (uploadForm) uploadForm.style.display = 'none';
-                if (successCard) {
-                    successCard.style.display = 'block';
-                    const telUrl = result.telemetry_url || config.telemetryUrl;
-                    const sessUrl = result.session_url || config.sessionUrl;
-                    if (viewTelemetryBtn && telUrl) {
-                        viewTelemetryBtn.href = telUrl;
-                    }
-                    if (returnSessionBtn && sessUrl) {
-                        returnSessionBtn.href = sessUrl;
-                    }
-                }
-            } catch (err) {
-                showAlert(err.message || 'An error occurred during upload.', 'error');
-                if (progressContainer) progressContainer.style.display = 'none';
-                if (submitBtn) {
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = 'Upload Telemetry';
-                }
-            }
+            executeTelemetryUpload();
         });
     }
 }

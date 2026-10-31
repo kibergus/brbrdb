@@ -23,6 +23,7 @@ import {
     CsvTelemetryProcessor,
     TelemetryProcessor
 } from './telemetry_upload.js';
+import { pointsToCsvData } from './racebox_ble.js';
 
 describe('telemetry_upload.js', () => {
     const testSessionMeta = {
@@ -165,6 +166,40 @@ describe('telemetry_upload.js', () => {
             await expect(
                 TelemetryProcessor.process(mockFile, {})
             ).rejects.toThrow(/Unsupported file type/);
+        });
+    });
+
+    describe('RaceBox integration', () => {
+        it('builds RaceTools payload from pointsToCsvData correctly', () => {
+            const points = [
+                {
+                    timestampMs: 1000,
+                    dateTime: new Date(Date.UTC(2026, 8, 13, 10, 31, 0)),
+                    latitude: 51.05,
+                    longitude: -0.15,
+                    altitudeM: 45.0,
+                    speedMs: 15.2,
+                    gForceX: 0.15,
+                    gForceY: -0.25,
+                    gForceZ: 0.98,
+                    gForceLat: 0.15,
+                    gForceLon: -0.25,
+                    gForceVert: 0.98,
+                    yawRateDegS: -15.0,
+                    pitchRateDegS: 10.0,
+                    rollRateDegS: 5.0
+                }
+            ];
+            const dataText = pointsToCsvData(points);
+            const payload = buildRaceToolsPayload(testSessionMeta, 'Test Driver', dataText, 1.5);
+
+            expect(payload).toContain('Format,RaceTools CSV');
+            expect(payload).toContain('Session ID,practice_1');
+            expect(payload).toContain('Distance to rear axle,1.5');
+            expect(payload).toContain('GForceLat,GForceLon,GForceVert');
+            expect(payload).not.toContain('GForceX');
+            expect(payload).toContain('Yaw Rate');
+            expect(payload).toContain('-15.000');
         });
     });
 });

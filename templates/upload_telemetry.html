@@ -42,6 +42,164 @@
 
         <div id="uploadAlert" class="alert"></div>
 
+        <!-- RaceBox Micro BLE Direct Section -->
+        <div class="racebox-card" id="raceboxCard">
+            <div class="racebox-header">
+                <div class="racebox-icon-wrap">
+                    <svg class="racebox-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"></polyline>
+                    </svg>
+                </div>
+                <div class="racebox-title-wrap">
+                    <div class="racebox-title">RaceBox Micro Direct Download</div>
+                    <div class="racebox-subtitle">Download recorded sessions over Bluetooth LE from Android or Chrome and upload directly</div>
+                </div>
+                <div class="racebox-badge-wrap">
+                    <span class="badge badge-bluetooth">Web Bluetooth</span>
+                </div>
+            </div>
+
+            <!-- Notice for browsers without Web Bluetooth -->
+            <div id="raceboxUnsupportedNotice" class="racebox-unsupported-notice" style="display: none;">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+                <span>Direct Bluetooth download requires Web Bluetooth (supported in Google Chrome &amp; Microsoft Edge on Android, Linux, Windows, and macOS). On iOS/Firefox, please export a CSV file and use the file upload below.</span>
+            </div>
+
+            <!-- Controls: Connect Button & Optional PIN -->
+            <div id="raceboxControlPanel" class="racebox-controls">
+                <div class="racebox-action-row">
+                    <button type="button" id="raceboxConnectBtn" class="btn-racebox-connect">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5"></polyline>
+                        </svg>
+                        Download from RaceBox Micro
+                    </button>
+                    <button type="button" id="raceboxPinToggle" class="btn-pin-toggle">Optional PIN</button>
+                </div>
+                <div id="raceboxPinContainer" class="racebox-pin-container" style="display: none;">
+                    <label for="raceboxPinInput" class="form-helper">Device Security PIN (if configured):</label>
+                    <input type="password" id="raceboxPinInput" class="form-control pin-input" maxlength="16" placeholder="PIN code">
+                </div>
+            </div>
+
+            <!-- Mounting Orientation & Axis Mapping -->
+            <div class="racebox-orientation-section">
+                <div class="racebox-orientation-header">
+                    <span class="racebox-orientation-title">Mounting Orientation &amp; Axis Mapping</span>
+                    <button type="button" id="raceboxCustomAxesToggle" class="btn-axes-toggle">Customize axes</button>
+                </div>
+                <div class="racebox-orientation-row">
+                    <div class="racebox-orientation-col">
+                        <label for="raceboxOrientationPreset" class="form-helper">Mounting Preset:</label>
+                        <select id="raceboxOrientationPreset" class="form-control select-preset">
+                            <option value="default">Default: Horizontal (Facing Forward)</option>
+                            <option value="cw90">Sideways: 90° Clockwise (Facing Right)</option>
+                            <option value="ccw90">Sideways: 90° Counter-Clockwise (Facing Left)</option>
+                            <option value="swap_xy">Sideways: Swap Lat &amp; Lon (Lat = +Y, Lon = +X)</option>
+                            <option value="swap_xy_inv">Sideways: Swap Lat &amp; Lon (Lat = -Y, Lon = +X)</option>
+                            <option value="vertical_right">Vertical: Mounted on Right Sidepod</option>
+                            <option value="vertical_left">Vertical: Mounted on Left Sidepod</option>
+                            <option value="backward">Horizontal (Facing Backward)</option>
+                            <option value="custom">Custom Axis Mapping...</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="raceboxCustomAxesGrid" class="racebox-axes-grid" style="display: none;">
+                    <div class="axis-field">
+                        <label for="raceboxAxisLat" class="axis-label">Lateral G (GForceLat)</label>
+                        <select id="raceboxAxisLat" class="form-control axis-select">
+                            <option value="+x">+X (Device Right)</option>
+                            <option value="-x">-X (Device Left)</option>
+                            <option value="+y">+Y (Device Forward)</option>
+                            <option value="-y">-Y (Device Backward)</option>
+                            <option value="+z">+Z (Device Up)</option>
+                            <option value="-z">-Z (Device Down)</option>
+                        </select>
+                    </div>
+                    <div class="axis-field">
+                        <label for="raceboxAxisLon" class="axis-label">Longitudinal G (GForceLon)</label>
+                        <select id="raceboxAxisLon" class="form-control axis-select">
+                            <option value="+y">+Y (Device Forward)</option>
+                            <option value="-y">-Y (Device Backward)</option>
+                            <option value="+x">+X (Device Right)</option>
+                            <option value="-x">-X (Device Left)</option>
+                            <option value="+z">+Z (Device Up)</option>
+                            <option value="-z">-Z (Device Down)</option>
+                        </select>
+                    </div>
+                    <div class="axis-field">
+                        <label for="raceboxAxisVert" class="axis-label">Vertical G (GForceVert)</label>
+                        <select id="raceboxAxisVert" class="form-control axis-select">
+                            <option value="+z">+Z (Device Up)</option>
+                            <option value="-z">-Z (Device Down)</option>
+                            <option value="+x">+X (Device Right)</option>
+                            <option value="-x">-X (Device Left)</option>
+                            <option value="+y">+Y (Device Forward)</option>
+                            <option value="-y">-Y (Device Backward)</option>
+                        </select>
+                    </div>
+                    <div class="axis-field">
+                        <label for="raceboxAxisYaw" class="axis-label">Yaw Rate (Rotation)</label>
+                        <select id="raceboxAxisYaw" class="form-control axis-select">
+                            <option value="+z">+Z (Yaw)</option>
+                            <option value="-z">-Z (Inverted Yaw)</option>
+                            <option value="+x">+X (Rot X)</option>
+                            <option value="-x">-X (-Rot X)</option>
+                            <option value="+y">+Y (Rot Y)</option>
+                            <option value="-y">-Y (-Rot Y)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Download Progress Panel -->
+            <div id="raceboxProgressPanel" class="racebox-progress-panel" style="display: none;">
+                <div class="racebox-progress-header">
+                    <span id="raceboxStatusText" class="racebox-status-text">Connecting to RaceBox Micro...</span>
+                    <button type="button" id="raceboxCancelBtn" class="btn-racebox-cancel">Cancel</button>
+                </div>
+                <div class="progress-track">
+                    <div id="raceboxProgressBar" class="progress-bar-fill"></div>
+                </div>
+                <div id="raceboxProgressStats" class="racebox-progress-stats"></div>
+            </div>
+
+            <!-- Downloaded Sessions Panel -->
+            <div id="raceboxSessionsPanel" class="racebox-sessions-panel" style="display: none;">
+                <div class="racebox-sessions-header">
+                    <h3 class="racebox-sessions-title" id="raceboxSessionsCountTitle">Sessions on RaceBox</h3>
+                    <button type="button" id="raceboxRedoBtn" class="btn-link">Download again</button>
+                </div>
+                <div id="raceboxSessionsList" class="racebox-sessions-list"></div>
+                <div id="raceboxSessionActions" class="racebox-session-actions" style="display: none;">
+                    <button type="button" id="raceboxUploadSelectedBtn" class="btn-racebox-upload">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        Upload Selected Session
+                    </button>
+                    <button type="button" id="raceboxDownloadCsvBtn" class="btn-secondary">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        Save CSV File
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="divider-text">
+            <span>OR UPLOAD A FILE</span>
+        </div>
+
         <form id="telemetryUploadForm" method="POST" enctype="multipart/form-data" action="{{ url_for('upload.stream_upload') }}">
             <!-- File Dropzone -->
             <div id="uploadDropzone" class="dropzone-container">

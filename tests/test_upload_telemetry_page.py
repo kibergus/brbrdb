@@ -81,6 +81,9 @@ def test_upload_telemetry_page_acl_get() -> None:
         assert 'Test Driver' in html
         assert '1.5' in html  # Auto-detected arm length for club100_south/cadet_slw
         assert '/api/upload/stream' in html
+        assert 'RaceBox Micro Direct Download' in html
+        assert 'raceboxConnectBtn' in html
+        assert 'Web Bluetooth' in html
 
 
 def test_session_view_shows_upload_button() -> None:
@@ -234,3 +237,55 @@ def test_stream_upload_rejects_malicious_session_id() -> None:
             assert resp.status_code == 400
             data = resp.get_json()
             assert 'Invalid Session ID' in data['error'] or 'Invalid path' in data['error']
+
+
+def test_stream_upload_racebox_channels() -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'has_tel_key': {
+            'upload_sessions': {
+                'leagues': ['club100_south'],
+                'drivers': ['Test Driver'],
+            },
+            'see_leagues': ['*'],
+        },
+    }
+
+    csv_payload = (
+        'Format,RaceTools CSV\n'
+        'Track name,Lydd\n'
+        'Date,2026-09-13\n'
+        'Time,10:31:00\n'
+        'Driver name,Test Driver\n'
+        'League,club100_south\n'
+        'Class,cadet_slw\n'
+        'Session,Practice 1\n'
+        'Session ID,practice_1\n'
+        'Distance to rear axle,1.5\n'
+        '\n'
+        'Record,Time,Latitude,Longitude,Altitude,Speed,GForceLat,GForceLon,'
+        'GForceVert,Yaw Rate,Pitch Rate,Roll Rate,Lap,Lap Distance\n'
+        '1,10:31:00.000,51.0500000,-0.1500000,45.00,15.200,0.150,-0.250,0.980,-15.000,10.000,5.000,1,0.00\n'
+        '2,10:31:00.040,51.0500100,-0.1500010,45.02,15.250,0.155,-0.245,0.982,-14.800,9.900,5.050,1,0.61\n'
+    )
+
+    with (
+        patch('auth.load_keys', return_value=mock_keys),
+        patch('upload_handlers.process_telemetry_derivative_data', return_value=(
+            pd.DataFrame([{'Time': 0.0, 'Speed': 15.2, 'Yaw Rate': -15.0}]),
+            {'session_id': 'practice_1'},
+            pd.DataFrame([{'Name': 'Test Driver', 'LapTimeSeconds': 60.0}])
+        )),
+        patch('upload_handlers.populate_db.populate_single_session', return_value='2026_09_13_Lydd_practice_1'),
+        patch('upload_handlers.invalidate_plot_cache'),
+    ):
+        client.set_cookie('auth_key', 'has_tel_key')
+        resp = client.post(
+            '/api/upload/stream',
+            data=csv_payload,
+            content_type='text/csv; charset=utf-8',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert 'imported successfully' in data['message']
