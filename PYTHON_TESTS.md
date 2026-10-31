@@ -1,37 +1,66 @@
-# Python Test Coverage Improvement Plan
+# Python Test Coverage Status & Backlog
 
-This document identifies functions across the project that can be tested using standard unit tests without the need for mocking external dependencies (I/O, databases, or network).
+This document tracks unit test coverage for pure helper functions across Python modules that do not require external I/O, database, or network mocks.
 
-## `karting/analysis` Application
+---
 
-### `aliases.py`
-- `get_consolidated_class(raw_class_name: str) -> str`: Tests class name simplification.
-- `get_league_name(league_id: str) -> str`: Tests league ID to display name mapping.
-- `get_league_color(league_id: str) -> str`: Tests color mapping.
-- `get_league_group(league_id: str) -> str`: Tests league categorization.
-- `group_leagues(leagues: list[str]) -> list[tuple[str, list[str]]]`: Tests grouping and sorting logic.
-- `get_class_name(class_id: str) -> str`: Tests class ID to display name mapping.
-- `get_class_info(class_id: str) -> ClassInfo`: Tests class metadata retrieval.
-- `get_video_source_name(source_id: str) -> str | None`: Tests video source mapping.
+## 1. Status Overview
 
-### `plot_config.py`
-- `get_ymin(laps: pd.Series) -> float`: Tests robust minimum calculation with glitch filtering.
-- `get_yrange(league: str, class_name: str, laps: pd.Series | None = None) -> float`: Tests y-axis range selection logic including overrides and 'auto' mode.
+| Module | Status | Notes |
+| :--- | :---: | :--- |
+| `aliases.py` | ❌ **Yet to be Added** | 8 pure dictionary/mapping functions currently have 0% test coverage. |
+| `plot_config.py` | ❌ **Yet to be Added** | `get_ymin` and `get_yrange` have 0% test coverage. |
+| `plots.py` (helpers) | ❌ **Yet to be Added** | Axis formatting, aspect ratio, and title generation helpers unverified. |
+| `video_transcoder.py` | ❌ **Yet to be Added** | Cache path hash resolver unverified. |
+| `race_db.py` (helpers) | ⚠️ **Partially Implemented** | `_to_list`, path traversal, and `RaceMetadata` dates tested; class/pos helpers remain. |
 
-### `plots.py`
-- `_is_hero(driver_name: str, hero_names: list[str] | None) -> bool`: Tests hero driver identification.
-- `_format_time(x: float, pos: int | None = None) -> str`: Tests time formatting for plot axes.
-- `_format_time_full(x: float, pos: int | None = None) -> str`: Tests precise time formatting.
-- `_get_figsize(width: float, height: float, aspect: str | None) -> tuple[float, float]`: Tests aspect ratio calculations.
-- `_get_plot_title(sample_row: pd.Series, suffix: str = '', session_names: list[str] | None = None) -> str`: Tests complex title generation logic (highly valuable for testing).
+---
 
-### `video_transcoder.py`
-- `_get_cache_path(filename: str, video_cache_dir: str) -> str`: Tests unique cache path generation based on filename hash.
+## 2. Implemented Items (Summary)
 
-### `race_db.py`
-- `_to_list(x: str | Iterable[str] | None) -> list[str]`: Tests input normalization.
-- `_match_class(class_name: str, classes_filter: list[str], consolidated_classes_filter: list[str]) -> bool`: Tests class filtering logic.
-- `_normalize_pos(v: str | int | float) -> int | str`: Tests position normalization (handling DNS/DNF).
-- `_check_for_dir_traversal(items: TraversalInput) -> None`: Tests security validation for path traversal.
-- `RaceMetadata.date` (property): Tests date extraction from datetime string.
-- `RaceMetadata.time` (property): Tests time extraction and formatting.
+- **`race_db.py`**:
+  - `_to_list(x)`: Tested in `tests/test_race_db.py`.
+  - `check_for_dir_traversal(items)`: Tested across paths in `tests/test_race_db_security.py`.
+  - `RaceMetadata.date` & `RaceMetadata.time`: Tested in `tests/test_race_db.py`.
+
+---
+
+## 3. Items Yet to be Added (Backlog)
+
+### `aliases.py` — High Priority (No Current Coverage)
+All functions are pure lookup/string transformations ideal for parameterized tests:
+- `get_consolidated_class(raw_class_name: str) -> str`: Class name alias mapping.
+- `get_league_name(league_id: str) -> str`: League identifier to display label.
+- `get_league_color(league_id: str) -> str`: Hex color mapping with fallbacks.
+- `get_league_group(league_id: str) -> str`: League classification grouping.
+- `group_leagues(leagues: list[str]) -> list[tuple[str, list[str]]]`: Grouping & ordering logic.
+- `get_class_name(class_id: str) -> str`: Class ID to display label.
+- `get_class_info(class_id: str) -> ClassInfo`: Class dataclass metadata retrieval.
+- `get_video_source_name(source_id: str) -> str | None`: Video provider mapping.
+
+---
+
+### `plot_config.py` — High Priority (No Current Coverage)
+- `get_ymin(laps: pd.Series) -> float`: Robust minimum calculation with glitch filtering (ignoring aberrant sub-lap spikes).
+- `get_yrange(league: str, class_name: str, laps: pd.Series | None = None) -> float`: Dynamic and configured Y-axis range selection, testing `'auto'` mode and league/class overrides.
+
+---
+
+### `plots.py` Helper Functions — Medium Priority
+While major plot renderers are smoke-tested in `test_plots.py`, these internal pure helpers lack direct unit testing:
+- `_is_hero(driver_name: str, hero_names: list[str] | None) -> bool`: Hero driver check with case normalization and null handling.
+- `_format_time(x: float, pos: int | None = None) -> str`: Axis tick time formatting.
+- `_format_time_full(x: float, pos: int | None = None) -> str`: Millisecond-precision lap time formatting.
+- `_get_figsize(width: float, height: float, aspect: str | None) -> tuple[float, float]`: Aspect ratio sizing calculations.
+- `_get_plot_title(sample_row: pd.Series, suffix: str = '', session_names: list[str] | None = None) -> str`: Complex multi-session plot title generator.
+
+---
+
+### `video_transcoder.py` — Low Priority
+- `_get_cache_path(filename: str, video_cache_dir: str) -> str`: Deterministic cache path hashing based on source filename.
+
+---
+
+### `race_db.py` Pure Helpers — Low Priority
+- `_match_class(class_name: str, classes_filter: list[str], consolidated_classes_filter: list[str]) -> bool`: Multi-tier class filtering with alias consolidation.
+- `_normalize_pos(v: str | int | float) -> int | str`: String preservation for `DNS`/`DNF`/`DSQ` and numeric parsing.
