@@ -899,7 +899,7 @@ def process_telemetry_derivative_data(
     n_records = len(records)
 
     speeds_ms = np.array([safe_float(r.get('Speed'), 0.0) for r in records], dtype=float)
-    
+
     has_quat = any(k in df_telemetry.columns for k in ('Ori Quat X', 'q_x', 'Ori Quat W'))
     has_toe = any(k in df_telemetry.columns for k in ('Toe FL', 'toe_fl'))
 

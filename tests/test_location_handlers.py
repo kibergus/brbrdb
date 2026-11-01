@@ -459,43 +459,24 @@ Time,Latitude,Longitude,Record,Lap,Steering Wheel Angle (deg)
     _, _, reconstructed = _decode_channel_payload(response.data)
     assert np.allclose(reconstructed, [12.5, 14.2], atol=1e-5)
 
-    # Test exact column matching
+    # Test 'Speed' column matching
     csv_speed_content = """Format,RaceTools CSV
-Driver name,Alexey
-
-Time,Latitude,Longitude,Record,Lap,Speed (m/s)
-2026-06-10T17:02:32.427Z,51.86439811,-1.68407354,1,1,10.0
-2026-06-10T17:02:32.436Z,51.86439811,-1.68407354,2,1,20.0
-"""
-    test_file.write_text(csv_speed_content)
-    url_speed = (
-        '/api/telemetry/channel?league=kartsim&class_name=X30'
-        '&date=2026-05-10&track=Rowrah&session_id=S1_hero_a.csv&channel=Speed (m/s)'
-    )
-    response_speed = client.get(url_speed)
-    assert response_speed.status_code == 200
-
-    _, _, reconstructed_speed = _decode_channel_payload(response_speed.data)
-    assert np.allclose(reconstructed_speed, [36.0, 72.0], atol=1e-5)
-
-    # Test 'Speed' column matching (when column in CSV is named 'Speed')
-    csv_speed_no_units_content = """Format,RaceTools CSV
 Driver name,Alexey
 
 Time,Latitude,Longitude,Record,Lap,Speed
 2026-06-10T17:02:32.427Z,51.86439811,-1.68407354,1,1,10.0
 2026-06-10T17:02:32.436Z,51.86439811,-1.68407354,2,1,20.0
 """
-    test_file.write_text(csv_speed_no_units_content)
-    url_speed_no_units = (
+    test_file.write_text(csv_speed_content)
+    url_speed = (
         '/api/telemetry/channel?league=kartsim&class_name=X30'
         '&date=2026-05-10&track=Rowrah&session_id=S1_hero_a.csv&channel=Speed'
     )
-    response_speed_no_units = client.get(url_speed_no_units)
-    assert response_speed_no_units.status_code == 200
+    response_speed = client.get(url_speed)
+    assert response_speed.status_code == 200
 
-    _, _, reconstructed_speed_no_units = _decode_channel_payload(response_speed_no_units.data)
-    assert np.allclose(reconstructed_speed_no_units, [36.0, 72.0], atol=1e-5)
+    _, _, reconstructed_speed = _decode_channel_payload(response_speed.data)
+    assert np.allclose(reconstructed_speed, [36.0, 72.0], atol=1e-5)
 
     # Test NaN / missing values
     csv_nan_content = """Format,RaceTools CSV

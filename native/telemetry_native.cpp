@@ -272,7 +272,7 @@ std::string process_telemetry_channel(
 
     bool is_time = (channel_name == "Time");
     std::string ch_lower = to_lower(channel_name);
-    bool is_speed = (ch_lower == "speed" || ch_lower == "speed (m/s)");
+    bool is_speed = (ch_lower == "speed");
 
     std::vector<double> values;
     values.reserve(200000);
