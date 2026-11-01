@@ -13,14 +13,14 @@
 # limitations under the License.
 # ==============================================================================
 
-import os
-import tempfile
+import time
 from flask import Flask
 from plot_handlers import PlotCache, make_plot_response
 
 
 def test_plot_cache_targeted_invalidation() -> None:
     cache = PlotCache(maxsize=10)
+    cache.invalidate(None)
 
     # Set entries with session IDs
     cache.set('key1', b'data1', session_ids=['sess_A', 'sess_B'])
@@ -49,6 +49,7 @@ def test_plot_cache_targeted_invalidation() -> None:
 
 def test_plot_cache_prefix_suffix_invalidation() -> None:
     cache = PlotCache(maxsize=10)
+    cache.invalidate(None)
 
     # 1. Entry tagged with short session ID, invalidated with full db_session_id
     cache.set('short_id_plot', b'plot_data_1', session_ids=['11_44_bambino_r2r_bambino_practice_4'])
@@ -69,45 +70,41 @@ def test_plot_cache_prefix_suffix_invalidation() -> None:
 
 
 def test_plot_cache_cross_worker_shared_db() -> None:
-    with tempfile.NamedTemporaryFile(suffix='.sqlite3', delete=False) as tf:
-        shared_db_path = tf.name
+    worker1_cache = PlotCache(maxsize=10)
+    worker2_cache = PlotCache(maxsize=10)
+    worker1_cache.invalidate(None)
 
-    try:
-        worker1_cache = PlotCache(maxsize=10, cache_path=shared_db_path)
-        worker2_cache = PlotCache(maxsize=10, cache_path=shared_db_path)
+    # Worker 1 caches a generated plot
+    worker1_cache.set('violin_plot_bambino', b'violin_png_bytes', session_ids=['11_44_practice_4'])
 
-        # Worker 1 caches a generated plot
-        worker1_cache.set('violin_plot_bambino', b'violin_png_bytes', session_ids=['11_44_practice_4'])
+    # Worker 2 reads from the shared cache (cache hit)
+    assert worker2_cache.get('violin_plot_bambino') == b'violin_png_bytes'
 
-        # Worker 2 reads from the shared cache (cache hit)
-        assert worker2_cache.get('violin_plot_bambino') == b'violin_png_bytes'
+    # Worker 2 receives an upload and invalidates the session
+    worker2_cache.invalidate(['2026_10_11_Shenington_11_44_practice_4'])
 
-        # Worker 2 receives an upload and invalidates the session
-        worker2_cache.invalidate(['2026_10_11_Shenington_11_44_practice_4'])
+    # Both Worker 1 and Worker 2 now see the cache entry invalidated
+    assert worker1_cache.get('violin_plot_bambino') is None
+    assert worker2_cache.get('violin_plot_bambino') is None
 
-        # Both Worker 1 and Worker 2 now see the cache entry invalidated
-        assert worker1_cache.get('violin_plot_bambino') is None
-        assert worker2_cache.get('violin_plot_bambino') is None
-
-        worker1_cache.close()
-        worker2_cache.close()
-    finally:
-        if os.path.exists(shared_db_path):
-            os.remove(shared_db_path)
-        for ext in ('-wal', '-shm'):
-            if os.path.exists(shared_db_path + ext):
-                os.remove(shared_db_path + ext)
+    worker1_cache.close()
+    worker2_cache.close()
 
 
 def test_plot_cache_lru_eviction() -> None:
     cache = PlotCache(maxsize=3)
+    cache.invalidate(None)
 
     cache.set('item1', b'val1')
+    time.sleep(0.01)
     cache.set('item2', b'val2')
+    time.sleep(0.01)
     cache.set('item3', b'val3')
+    time.sleep(0.01)
 
     # Access item1 to make item2 the least recently used
     assert cache.get('item1') == b'val1'
+    time.sleep(0.01)
 
     # Insert item4 -> should trigger LRU eviction of item2
     cache.set('item4', b'val4')

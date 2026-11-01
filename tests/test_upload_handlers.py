@@ -19,6 +19,7 @@ import json
 import io
 import math
 import datetime
+from typing import Any
 import gzip
 import brotli  # type: ignore[import-untyped]
 from unittest.mock import patch, PropertyMock
@@ -2399,4 +2400,3 @@ def test_files_upload_supersedes_stale_partial_session(tmp_path: Any) -> None:
 
         # Verify plot cache was invalidated for old session
         mock_invalidate.assert_any_call(['2026_05_10_rowrah_14_01_practice', '14_01_practice'])
-

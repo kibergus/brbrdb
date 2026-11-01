@@ -132,6 +132,8 @@ def create_schema(conn: Any, drop_first: bool = False) -> None:
     with conn.cursor() as cur:
         if drop_first:
             print('Dropping existing tables...')
+            cur.execute('DROP TABLE IF EXISTS plot_cache_session_tags CASCADE;')
+            cur.execute('DROP TABLE IF EXISTS plot_cache CASCADE;')
             cur.execute('DROP TABLE IF EXISTS photo_drivers CASCADE;')
             cur.execute('DROP TABLE IF EXISTS photos CASCADE;')
             cur.execute('DROP TABLE IF EXISTS videos CASCADE;')
@@ -236,6 +238,26 @@ def create_schema(conn: Any, drop_first: bool = False) -> None:
                 driver_id INTEGER NOT NULL REFERENCES drivers (id) ON DELETE CASCADE,
                 PRIMARY KEY (photo_id, driver_id)
             );
+        ''')
+
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS plot_cache (
+                key_hash TEXT PRIMARY KEY,
+                value BYTEA NOT NULL,
+                last_accessed DOUBLE PRECISION NOT NULL
+            );
+        ''')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_plot_cache_last_accessed ON plot_cache (last_accessed);')
+        cur.execute('''
+            CREATE TABLE IF NOT EXISTS plot_cache_session_tags (
+                key_hash TEXT NOT NULL REFERENCES plot_cache(key_hash) ON DELETE CASCADE,
+                session_id TEXT NOT NULL,
+                PRIMARY KEY (key_hash, session_id)
+            );
+        ''')
+        cur.execute('''
+            CREATE INDEX IF NOT EXISTS idx_plot_cache_tags_session_id
+            ON plot_cache_session_tags (session_id);
         ''')
 
         cur.execute('CREATE INDEX IF NOT EXISTS idx_results_driver ON session_results (driver_id, session_id);')

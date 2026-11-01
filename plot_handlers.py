@@ -14,18 +14,15 @@
 # ==============================================================================
 
 import hashlib
-import os
 import pickle
-import sqlite3
-import tempfile
-import threading
 import time
 from typing import TypedDict, Any, Sequence, Iterable, Hashable, Set
 import pandas as pd
 from flask import Blueprint, Response, request, abort, jsonify
+import psycopg2
 import auth
 import plots
-from database import db, config
+from database import db
 import aliases
 from race_tools import sanitize
 
@@ -39,141 +36,77 @@ class SessionPlotInfo(TypedDict):
 
 
 class PlotCache:
-    """Persistent SQLite-backed plot cache supporting cross-worker sharing and targeted invalidation."""
+    """Persistent PostgreSQL-backed plot cache supporting cross-worker sharing and targeted invalidation."""
 
-    def __init__(self, maxsize: int = 128, cache_path: str | None = None) -> None:
+    def __init__(self, maxsize: int = 4096, db: Any | None = None, **kwargs: Any) -> None:
         self.maxsize = maxsize
-        self._local = threading.local()
-        if cache_path is None:
-            temp_f = tempfile.NamedTemporaryFile(suffix='.sqlite3', delete=False)
-            temp_f.close()
-            self.cache_path = temp_f.name
-            self._is_temp = True
-        else:
-            self.cache_path = cache_path
-            self._is_temp = False
-        self._init_db()
+        self._db = db
 
-    def _get_conn(self) -> sqlite3.Connection:
-        current_pid = os.getpid()
-        conn = getattr(self._local, 'conn', None)
-        conn_pid = getattr(self._local, 'pid', None)
-        if conn is None or conn_pid != current_pid:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            conn = sqlite3.connect(self.cache_path, timeout=30.0)
-            conn.execute('PRAGMA journal_mode = WAL;')
-            conn.execute('PRAGMA synchronous = NORMAL;')
-            conn.execute('PRAGMA busy_timeout = 30000;')
-            conn.execute('PRAGMA foreign_keys = ON;')
-            self._local.conn = conn
-            self._local.pid = current_pid
-        return conn
-
-    def _create_tables(self) -> None:
-        conn = self._get_conn()
-        with conn:
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS cache_entries (
-                    key_hash TEXT PRIMARY KEY,
-                    value BLOB NOT NULL,
-                    last_accessed REAL NOT NULL
-                );
-            ''')
-            conn.execute('''
-                CREATE INDEX IF NOT EXISTS idx_entries_accessed ON cache_entries(last_accessed);
-            ''')
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS cache_session_tags (
-                    key_hash TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    PRIMARY KEY (key_hash, session_id),
-                    FOREIGN KEY (key_hash) REFERENCES cache_entries(key_hash) ON DELETE CASCADE
-                );
-            ''')
-            conn.execute('''
-                CREATE INDEX IF NOT EXISTS idx_tags_session_id ON cache_session_tags(session_id);
-            ''')
-
-    def _init_db(self) -> None:
-        dir_name = os.path.dirname(self.cache_path)
-        if dir_name:
-            os.makedirs(dir_name, exist_ok=True)
-        try:
-            self._create_tables()
-        except sqlite3.DatabaseError:
-            try:
-                os.remove(self.cache_path)
-            except OSError:
-                pass
-            self._create_tables()
+    def _get_conn(self) -> Any:
+        return self._db.conn if self._db is not None else db.conn
 
     def get(self, key: Hashable) -> Any | None:
         key_hash = hashlib.sha256(pickle.dumps(key)).hexdigest()
         conn = self._get_conn()
         with conn:
-            row = conn.execute(
-                'SELECT value FROM cache_entries WHERE key_hash = ?', (key_hash,)
-            ).fetchone()
-            if row is not None:
-                conn.execute(
-                    'UPDATE cache_entries SET last_accessed = ? WHERE key_hash = ?',
-                    (time.time(), key_hash)
+            with conn.cursor() as cur:
+                cur.execute(
+                    'SELECT value FROM plot_cache WHERE key_hash = %s', (key_hash,)
                 )
-                try:
-                    return pickle.loads(row[0])
-                except Exception:
-                    conn.execute('DELETE FROM cache_entries WHERE key_hash = ?', (key_hash,))
-                    conn.execute('DELETE FROM cache_session_tags WHERE key_hash = ?', (key_hash,))
-                    return None
+                row = cur.fetchone()
+                if row is not None:
+                    cur.execute(
+                        'UPDATE plot_cache SET last_accessed = %s WHERE key_hash = %s',
+                        (time.time(), key_hash)
+                    )
+                    val_bytes = bytes(row[0])
+                    try:
+                        return pickle.loads(val_bytes)
+                    except Exception:
+                        cur.execute('DELETE FROM plot_cache WHERE key_hash = %s', (key_hash,))
+                        return None
         return None
 
     def set(self, key: Hashable, val: Any, session_ids: Iterable[str] | None = None) -> None:
         key_hash = hashlib.sha256(pickle.dumps(key)).hexdigest()
         val_blob = pickle.dumps(val, protocol=pickle.HIGHEST_PROTOCOL)
-        s_ids = {str(s) for s in session_ids} if session_ids else set()
+        s_ids = {str(s).strip() for s in session_ids if s and str(s).strip()} if session_ids else set()
         now = time.time()
 
         conn = self._get_conn()
         with conn:
-            row = conn.execute('SELECT 1 FROM cache_entries WHERE key_hash = ?', (key_hash,)).fetchone()
-            if row is None:
-                count_row = conn.execute('SELECT COUNT(*) FROM cache_entries').fetchone()
-                count = count_row[0] if count_row else 0
-                if count >= self.maxsize:
-                    to_delete = count - self.maxsize + 1
-                    old_keys = conn.execute('''
-                        SELECT key_hash FROM cache_entries
-                        ORDER BY last_accessed ASC
-                        LIMIT ?
-                    ''', (to_delete,)).fetchall()
-                    if old_keys:
-                        conn.executemany(
-                            'DELETE FROM cache_entries WHERE key_hash = ?',
-                            old_keys
-                        )
-                        conn.executemany(
-                            'DELETE FROM cache_session_tags WHERE key_hash = ?',
-                            old_keys
-                        )
+            with conn.cursor() as cur:
+                cur.execute('SELECT 1 FROM plot_cache WHERE key_hash = %s', (key_hash,))
+                if cur.fetchone() is None:
+                    cur.execute('SELECT COUNT(*) FROM plot_cache')
+                    count_row = cur.fetchone()
+                    count = count_row[0] if count_row else 0
+                    if count >= self.maxsize:
+                        to_delete = count - self.maxsize + 1
+                        cur.execute('''
+                            DELETE FROM plot_cache
+                            WHERE key_hash IN (
+                                SELECT key_hash FROM plot_cache
+                                ORDER BY last_accessed ASC
+                                LIMIT %s
+                            )
+                        ''', (to_delete,))
 
-            conn.execute('''
-                INSERT INTO cache_entries (key_hash, value, last_accessed)
-                VALUES (?, ?, ?)
-                ON CONFLICT(key_hash) DO UPDATE SET
-                    value = excluded.value,
-                    last_accessed = excluded.last_accessed
-            ''', (key_hash, val_blob, now))
+                cur.execute('''
+                    INSERT INTO plot_cache (key_hash, value, last_accessed)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (key_hash) DO UPDATE SET
+                        value = EXCLUDED.value,
+                        last_accessed = EXCLUDED.last_accessed
+                ''', (key_hash, psycopg2.Binary(val_blob), now))
 
-            conn.execute('DELETE FROM cache_session_tags WHERE key_hash = ?', (key_hash,))
-            if s_ids:
-                conn.executemany(
-                    'INSERT OR IGNORE INTO cache_session_tags (key_hash, session_id) VALUES (?, ?)',
-                    [(key_hash, s_id) for s_id in s_ids]
-                )
+                cur.execute('DELETE FROM plot_cache_session_tags WHERE key_hash = %s', (key_hash,))
+                if s_ids:
+                    cur.executemany(
+                        '''INSERT INTO plot_cache_session_tags (key_hash, session_id)
+                           VALUES (%s, %s) ON CONFLICT DO NOTHING''',
+                        [(key_hash, s_id) for s_id in s_ids]
+                    )
 
     def invalidate(self, session_ids: str | Sequence[str] | Set[str] | None = None) -> None:
         """Invalidate cached entries. If session_ids is None, clears all entries.
@@ -181,75 +114,50 @@ class PlotCache:
         (matching exact ID, or session filename suffix / db session ID prefix).
         """
         conn = self._get_conn()
-        if session_ids is None:
-            with conn:
-                conn.execute('DELETE FROM cache_entries')
-                conn.execute('DELETE FROM cache_session_tags')
-            return
-
-        if isinstance(session_ids, str):
-            raw_targets = {session_ids}
-        else:
-            raw_targets = set(session_ids)
-
-        target_ids = {str(t).strip() for t in raw_targets if t and str(t).strip()}
-        if not target_ids:
-            return
-
         with conn:
-            # 1. Untagged entries (entries with no session_ids attached)
-            cursor = conn.execute('''
-                SELECT key_hash FROM cache_entries
-                WHERE key_hash NOT IN (SELECT DISTINCT key_hash FROM cache_session_tags)
-            ''')
-            keys_to_del = {row[0] for row in cursor.fetchall()}
+            with conn.cursor() as cur:
+                if session_ids is None:
+                    cur.execute('DELETE FROM plot_cache')
+                    return
 
-            # 2. Tagged entries matching target_ids
-            cursor = conn.execute('SELECT key_hash, session_id FROM cache_session_tags')
-            for k_hash, s_id in cursor.fetchall():
-                for t_id in target_ids:
-                    if s_id == t_id or t_id.endswith(f'_{s_id}') or s_id.endswith(f'_{t_id}'):
-                        keys_to_del.add(k_hash)
-                        break
+                if isinstance(session_ids, str):
+                    raw_targets = {session_ids}
+                else:
+                    raw_targets = set(session_ids)
 
-            if keys_to_del:
-                conn.executemany(
-                    'DELETE FROM cache_entries WHERE key_hash = ?',
-                    [(k,) for k in keys_to_del]
-                )
-                conn.executemany(
-                    'DELETE FROM cache_session_tags WHERE key_hash = ?',
-                    [(k,) for k in keys_to_del]
-                )
+                target_ids = {str(t).strip() for t in raw_targets if t and str(t).strip()}
+                if not target_ids:
+                    return
+
+                # 1. Untagged entries (entries with no session_ids attached)
+                cur.execute('''
+                    SELECT key_hash FROM plot_cache
+                    WHERE key_hash NOT IN (SELECT DISTINCT key_hash FROM plot_cache_session_tags)
+                ''')
+                keys_to_del = {row[0] for row in cur.fetchall()}
+
+                # 2. Tagged entries matching target_ids
+                cur.execute('SELECT key_hash, session_id FROM plot_cache_session_tags')
+                for k_hash, s_id in cur.fetchall():
+                    for t_id in target_ids:
+                        if s_id == t_id or t_id.endswith(f'_{s_id}') or s_id.endswith(f'_{t_id}'):
+                            keys_to_del.add(k_hash)
+                            break
+
+                if keys_to_del:
+                    cur.execute(
+                        'DELETE FROM plot_cache WHERE key_hash = ANY(%s)',
+                        (list(keys_to_del),)
+                    )
 
     def close(self) -> None:
-        conn = getattr(self._local, 'conn', None)
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-            self._local.conn = None
-        if getattr(self, '_is_temp', False) and hasattr(self, 'cache_path'):
-            try:
-                if os.path.exists(self.cache_path):
-                    os.remove(self.cache_path)
-                for ext in ('-wal', '-shm'):
-                    wal_path = self.cache_path + ext
-                    if os.path.exists(wal_path):
-                        os.remove(wal_path)
-            except OSError:
-                pass
+        pass
 
     def __del__(self) -> None:
         self.close()
 
 
-PLOT_CACHE_PATH = (
-    config.get('plot_cache_path')
-    or os.path.join(tempfile.gettempdir(), 'brbrdb_plot_cache.sqlite3')
-)
-plot_cache = PlotCache(maxsize=256, cache_path=PLOT_CACHE_PATH)
+plot_cache = PlotCache(maxsize=4096)
 
 
 def invalidate_plot_cache(session_ids: str | Sequence[str] | set[str] | None = None) -> None:
