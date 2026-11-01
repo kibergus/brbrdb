@@ -1791,10 +1791,10 @@ def files_upload() -> Any:
                 """
                 SELECT session_id FROM sessions
                 WHERE meeting_id = %s
-                  AND (alphatiming_url = %s OR alphatiming_url LIKE %s || '/%')
+                  AND (alphatiming_url = %s OR alphatiming_url LIKE %s)
                   AND session_id != %s
                 """,
-                (meeting_rel, base_alpha_url, base_alpha_url, db_session_id)
+                (meeting_rel, base_alpha_url, f'{base_alpha_url}/%', db_session_id)
             )
             stale_session_ids = [row[0] for row in cur.fetchall()]
 
