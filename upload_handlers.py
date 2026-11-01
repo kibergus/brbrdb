@@ -1782,6 +1782,37 @@ def files_upload() -> Any:
     db_session_id = populate_db.populate_single_session(meta_path, db.conn, DATA_DIR)
     invalidate_plot_cache([db_session_id, session_filename])
 
+    # Supersede any stale sessions in the same meeting sharing the same AlphaTiming URL
+    raw_alpha_url = meta.get('alphatiming_url') or ''
+    base_alpha_url = re.sub(r'/(?:result|replay|laptimes)/?$', '', raw_alpha_url.strip()).rstrip('/')
+    if base_alpha_url:
+        meeting_rel = os.path.relpath(meeting_dir, DATA_DIR)
+        with db.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT session_id FROM sessions
+                WHERE meeting_id = %s
+                  AND (alphatiming_url = %s OR alphatiming_url LIKE %s || '/%')
+                  AND session_id != %s
+                """,
+                (meeting_rel, base_alpha_url, base_alpha_url, db_session_id)
+            )
+            stale_session_ids = [row[0] for row in cur.fetchall()]
+
+        for old_id in stale_session_ids:
+            prefix = f'{meeting_folder}_'
+            old_filename = old_id[len(prefix):] if old_id.startswith(prefix) else old_id
+            for ext in ('.csv', '_metadata.json', '_penalties.csv'):
+                p = os.path.join(meeting_dir, f'{old_filename}{ext}')
+                if os.path.exists(p):
+                    os.remove(p)
+
+            with db.conn.cursor() as cur:
+                cur.execute('DELETE FROM sessions WHERE session_id = %s', (old_id,))
+            db.conn.commit()
+
+            invalidate_plot_cache([old_id, old_filename])
+
     return jsonify({
         'message': 'Files uploaded and session imported successfully.',
         'session_id': db_session_id

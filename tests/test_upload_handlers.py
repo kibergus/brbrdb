@@ -21,7 +21,7 @@ import math
 import datetime
 import gzip
 import brotli  # type: ignore[import-untyped]
-from unittest.mock import patch
+from unittest.mock import patch, PropertyMock
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -2306,3 +2306,97 @@ def test_process_telemetry_derivative_data_filters_outlier_coordinates() -> None
     # Remaining rows should have valid coordinates
     assert df_telemetry['Latitude'].iloc[1] != ''
     assert df_telemetry['Longitude'].iloc[1] != ''
+
+
+def test_files_upload_supersedes_stale_partial_session(tmp_path: Any) -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['*']
+            }
+        }
+    }
+
+    # Setup temporary directory for meeting files
+    meeting_dir = tmp_path / 'kartsim' / 'cadet' / '2026_05_10_rowrah'
+    meeting_dir.mkdir(parents=True, exist_ok=True)
+
+    old_csv = meeting_dir / '14_01_practice.csv'
+    old_meta = meeting_dir / '14_01_practice_metadata.json'
+    old_csv.write_text('old results')
+    old_meta.write_text(json.dumps({'session_name': 'Practice'}))
+
+    deleted_sessions: list[str] = []
+
+    class DummyCursor:
+        def execute(self, query: str, params: Any = None) -> None:
+            if 'DELETE FROM sessions' in query and params:
+                deleted_sessions.append(params[0])
+
+        def fetchall(self) -> list[tuple[str]]:
+            # Return old session_id when queried
+            return [('2026_05_10_rowrah_14_01_practice',)]
+
+        def fetchone(self) -> None:
+            return None
+
+        def __enter__(self) -> 'DummyCursor':
+            return self
+
+        def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+            pass
+
+    class DummyConn:
+        def cursor(self) -> DummyCursor:
+            return DummyCursor()
+
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            pass
+
+    dummy_conn = DummyConn()
+
+    with (patch('auth.load_keys', return_value=mock_keys),
+          patch('upload_handlers.DATA_DIR', str(tmp_path)),
+          patch.object(upload_handlers.db.__class__, 'conn', new_callable=PropertyMock, return_value=dummy_conn),
+          patch('upload_handlers.db.load', return_value=pd.DataFrame()),
+          patch('upload_handlers.populate_db.populate_single_session', return_value='2026_05_10_rowrah_14_02_practice'),
+          patch('upload_handlers.invalidate_plot_cache') as mock_invalidate):
+
+        metadata = {
+            'league': 'kartsim',
+            'class_name': 'cadet',
+            'track_name': 'Rowrah',
+            'session_name': 'Practice',
+            'session_start_datetime': '2026-05-10 14:02',
+            'alphatiming_url': 'https://www.alpharacehub.com/club100/e/422748/s/878863/result',
+        }
+        results_csv = 'Pos,Positions Gained,No,Name,Laps,Time\n1,0,10,Driver A,5,5:00.000\n'
+        data = {
+            'metadata': (io.BytesIO(json.dumps(metadata).encode('utf-8')), 'metadata.json'),
+            'results': (io.BytesIO(results_csv.encode('utf-8')), 'results.csv'),
+        }
+
+        resp = client.post(
+            '/api/upload/files',
+            data=data,
+            content_type='multipart/form-data',
+            headers={'X-API-Key': 'test_key'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp.status_code == 200
+
+        # Verify old files on disk were deleted
+        assert not old_csv.exists()
+        assert not old_meta.exists()
+
+        # Verify old session was deleted in DB
+        assert '2026_05_10_rowrah_14_01_practice' in deleted_sessions
+
+        # Verify plot cache was invalidated for old session
+        mock_invalidate.assert_any_call(['2026_05_10_rowrah_14_01_practice', '14_01_practice'])
+
