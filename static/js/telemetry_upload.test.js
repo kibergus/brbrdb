@@ -20,6 +20,7 @@ import {
     hasGyroscopeChannels,
     extractTelemetryData,
     buildRaceToolsPayload,
+    mergeRaceBoxSessions,
     CsvTelemetryProcessor,
     TelemetryProcessor
 } from './telemetry_upload.js';
@@ -200,6 +201,57 @@ describe('telemetry_upload.js', () => {
             expect(payload).not.toContain('GForceX');
             expect(payload).toContain('Yaw Rate');
             expect(payload).toContain('-15.000');
+        });
+    });
+
+    describe('mergeRaceBoxSessions', () => {
+        it('returns empty array when sessionsList is empty or null', () => {
+            expect(mergeRaceBoxSessions([])).toEqual([]);
+            expect(mergeRaceBoxSessions(null)).toEqual([]);
+        });
+
+        it('merges multiple sessions in chronological order and deduplicates identical timestamps', () => {
+            const session1 = {
+                id: 's1',
+                points: [
+                    { timestampMs: 1000, latitude: 51.1 },
+                    { timestampMs: 1040, latitude: 51.2 }
+                ]
+            };
+            const session2 = {
+                id: 's2',
+                points: [
+                    { timestampMs: 2000, latitude: 51.3 },
+                    { timestampMs: 2040, latitude: 51.4 }
+                ]
+            };
+            // Test passing in reverse order to ensure chronological sorting
+            const merged = mergeRaceBoxSessions([session2, session1]);
+            expect(merged.length).toBe(4);
+            expect(merged[0].timestampMs).toBe(1000);
+            expect(merged[1].timestampMs).toBe(1040);
+            expect(merged[2].timestampMs).toBe(2000);
+            expect(merged[3].timestampMs).toBe(2040);
+        });
+
+        it('deduplicates overlapping points with exact same timestampMs', () => {
+            const session1 = {
+                id: 's1',
+                points: [
+                    { timestampMs: 1000, latitude: 51.1 },
+                    { timestampMs: 1040, latitude: 51.2 }
+                ]
+            };
+            const session2 = {
+                id: 's2',
+                points: [
+                    { timestampMs: 1040, latitude: 51.2 },
+                    { timestampMs: 1080, latitude: 51.3 }
+                ]
+            };
+            const merged = mergeRaceBoxSessions([session1, session2]);
+            expect(merged.length).toBe(3);
+            expect(merged.map(p => p.timestampMs)).toEqual([1000, 1040, 1080]);
         });
     });
 });

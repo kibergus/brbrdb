@@ -37,6 +37,33 @@ import {
 export const GYROSCOPE_CHANNELS = ['Yaw Rate', 'Pitch Rate', 'Roll Rate'];
 
 /**
+ * Merges telemetry points across multiple RaceBox sessions into a single
+ * chronologically sorted array, deduplicating any points with identical timestamps.
+ * @param {Array<Object>} sessionsList - List of RaceBox session objects
+ * @returns {Array<Object>} Combined sorted points array
+ */
+export function mergeRaceBoxSessions(sessionsList) {
+    if (!sessionsList || sessionsList.length === 0) return [];
+    const sorted = [...sessionsList].sort((a, b) => {
+        const tA = (a.points && a.points[0]) ? a.points[0].timestampMs : 0;
+        const tB = (b.points && b.points[0]) ? b.points[0].timestampMs : 0;
+        return tA - tB;
+    });
+    const allPoints = sorted.flatMap(s => s.points || []);
+    allPoints.sort((a, b) => a.timestampMs - b.timestampMs);
+
+    const deduped = [];
+    let lastTs = null;
+    for (const pt of allPoints) {
+        if (pt.timestampMs !== lastTs) {
+            deduped.push(pt);
+            lastTs = pt.timestampMs;
+        }
+    }
+    return deduped;
+}
+
+/**
  * Checks whether the given CSV header line contains gyroscope channels.
  * @param {string} headerLine - CSV header row string
  * @returns {boolean} True if gyro channels are detected
@@ -278,7 +305,7 @@ export function initTelemetryUpload(config) {
 
     let selectedFile = null;
     let raceboxClient = null;
-    let selectedRaceBoxSession = null;
+    let selectedRaceBoxSessions = [];
     let currentAxisMapping = { ...DEFAULT_AXIS_MAPPING };
 
     // Restore axis mapping from localStorage if available
@@ -399,7 +426,7 @@ export function initTelemetryUpload(config) {
 
     function setSelectedFile(file) {
         selectedFile = file;
-        selectedRaceBoxSession = null;
+        selectedRaceBoxSessions = [];
         hideAlert();
 
         if (file) {
@@ -434,20 +461,36 @@ export function initTelemetryUpload(config) {
         }
     }
 
-    function setSelectedRaceBoxSession(session) {
-        selectedRaceBoxSession = session;
+    function setSelectedRaceBoxSessions(sessionsList) {
+        selectedRaceBoxSessions = sessionsList || [];
         selectedFile = null;
         hideAlert();
 
-        if (session) {
+        if (selectedRaceBoxSessions.length > 0) {
             if (dropzone) dropzone.style.display = 'none';
             if (fileInfo) fileInfo.style.display = 'flex';
-            if (fileNameSpan) {
-                fileNameSpan.textContent = `RaceBox Session: ${session.startTimeFormatted || session.startTimeIso} (${session.durationFormatted})`;
+
+            const totalPoints = selectedRaceBoxSessions.reduce(
+                (acc, s) => acc + (s.pointsCount || (s.points ? s.points.length : 0)),
+                0
+            );
+            if (selectedRaceBoxSessions.length === 1) {
+                const session = selectedRaceBoxSessions[0];
+                if (fileNameSpan) {
+                    fileNameSpan.textContent = `RaceBox Session: ${session.startTimeFormatted || session.startTimeIso} (${session.durationFormatted})`;
+                }
+                if (fileSizeSpan) {
+                    fileSizeSpan.textContent = `${(session.pointsCount || totalPoints).toLocaleString()} pts (25Hz)`;
+                }
+            } else {
+                if (fileNameSpan) {
+                    fileNameSpan.textContent = `RaceBox: ${selectedRaceBoxSessions.length} recordings selected`;
+                }
+                if (fileSizeSpan) {
+                    fileSizeSpan.textContent = `${totalPoints.toLocaleString()} total pts (25Hz)`;
+                }
             }
-            if (fileSizeSpan) {
-                fileSizeSpan.textContent = `${session.pointsCount.toLocaleString()} pts (25Hz)`;
-            }
+
             if (gyroHint) {
                 gyroHint.style.display = 'block';
                 gyroHint.textContent = 'ℹ RaceBox 25Hz telemetry includes gyroscope channels (Yaw, Pitch, Roll). Gyro Arm Length is configured.';
@@ -455,6 +498,20 @@ export function initTelemetryUpload(config) {
             if (raceboxSessionActions) {
                 raceboxSessionActions.style.display = 'flex';
             }
+            if (raceboxUploadSelectedBtn) {
+                const label = selectedRaceBoxSessions.length > 1
+                    ? `Upload ${selectedRaceBoxSessions.length} Selected Recordings`
+                    : 'Upload Selected Recording';
+                const svg = raceboxUploadSelectedBtn.querySelector('svg');
+                raceboxUploadSelectedBtn.innerHTML = '';
+                if (svg) raceboxUploadSelectedBtn.appendChild(svg);
+                raceboxUploadSelectedBtn.appendChild(document.createTextNode(' ' + label));
+            }
+        } else {
+            if (dropzone) dropzone.style.display = 'block';
+            if (fileInfo) fileInfo.style.display = 'none';
+            if (gyroHint) gyroHint.style.display = 'none';
+            if (raceboxSessionActions) raceboxSessionActions.style.display = 'none';
         }
     }
 
@@ -473,17 +530,23 @@ export function initTelemetryUpload(config) {
             config.sessionMeta?.time
         );
 
+        const selectedIds = new Set(selectedRaceBoxSessions.map(s => s.id));
+        if (selectedIds.size === 0) {
+            const defaultSession = (bestIdx >= 0 && sessions[bestIdx]) ? sessions[bestIdx] : sessions[0];
+            if (defaultSession) selectedIds.add(defaultSession.id);
+        }
+
         sessions.forEach((s, idx) => {
             const isBestMatch = (idx === bestIdx);
-            const isSelected = (selectedRaceBoxSession && selectedRaceBoxSession.id === s.id) || (!selectedRaceBoxSession && isBestMatch);
+            const isSelected = selectedIds.has(s.id);
 
             const item = document.createElement('div');
             item.className = `racebox-session-item ${isSelected ? 'selected' : ''}`;
             item.dataset.idx = String(idx);
 
             item.innerHTML = `
-                <div class="racebox-session-radio">
-                    <input type="radio" name="racebox_session_choice" value="${idx}" ${isSelected ? 'checked' : ''}>
+                <div class="racebox-session-checkbox">
+                    <input type="checkbox" name="racebox_session_choice" value="${idx}" ${isSelected ? 'checked' : ''}>
                 </div>
                 <div class="racebox-session-details">
                     <div class="racebox-session-title-line">
@@ -498,20 +561,47 @@ export function initTelemetryUpload(config) {
                 </div>
             `;
 
-            item.addEventListener('click', () => {
-                const radio = item.querySelector('input[type="radio"]');
-                if (radio) radio.checked = true;
-                raceboxSessionsList.querySelectorAll('.racebox-session-item').forEach(el => el.classList.remove('selected'));
-                item.classList.add('selected');
-                setSelectedRaceBoxSession(s);
+            const checkbox = item.querySelector('input[type="checkbox"]');
+
+            const toggle = () => {
+                if (selectedIds.has(s.id)) {
+                    selectedIds.delete(s.id);
+                    checkbox.checked = false;
+                    item.classList.remove('selected');
+                } else {
+                    selectedIds.add(s.id);
+                    checkbox.checked = true;
+                    item.classList.add('selected');
+                }
+                const active = sessions.filter(sess => selectedIds.has(sess.id));
+                setSelectedRaceBoxSessions(active);
+            };
+
+            checkbox.addEventListener('change', (e) => {
+                e.stopPropagation();
+                if (checkbox.checked) {
+                    selectedIds.add(s.id);
+                    item.classList.add('selected');
+                } else {
+                    selectedIds.delete(s.id);
+                    item.classList.remove('selected');
+                }
+                const active = sessions.filter(sess => selectedIds.has(sess.id));
+                setSelectedRaceBoxSessions(active);
+            });
+
+            item.addEventListener('click', (e) => {
+                if (e.target !== checkbox) {
+                    toggle();
+                }
             });
 
             raceboxSessionsList.appendChild(item);
         });
 
         // Set default selection
-        const defaultSession = sessions[bestIdx] || sessions[0];
-        setSelectedRaceBoxSession(defaultSession);
+        const initialActive = sessions.filter(sess => selectedIds.has(sess.id));
+        setSelectedRaceBoxSessions(initialActive);
     }
 
     // PIN toggle
@@ -610,8 +700,8 @@ export function initTelemetryUpload(config) {
     // Save CSV Locally
     if (raceboxDownloadCsvBtn) {
         raceboxDownloadCsvBtn.addEventListener('click', () => {
-            if (!selectedRaceBoxSession) {
-                showAlert('Please select a RaceBox session to save.', 'error');
+            if (!selectedRaceBoxSessions || selectedRaceBoxSessions.length === 0) {
+                showAlert('Please select at least one RaceBox recording to save.', 'error');
                 return;
             }
 
@@ -621,7 +711,8 @@ export function initTelemetryUpload(config) {
                 armLength = parseFloat(armLengthInput.value) || null;
             }
 
-            const dataText = pointsToCsvData(selectedRaceBoxSession.points, currentAxisMapping);
+            const allPoints = mergeRaceBoxSessions(selectedRaceBoxSessions);
+            const dataText = pointsToCsvData(allPoints, currentAxisMapping);
             const payload = buildRaceToolsPayload(
                 config.sessionMeta,
                 driverName,
@@ -647,8 +738,8 @@ export function initTelemetryUpload(config) {
     async function executeTelemetryUpload() {
         hideAlert();
 
-        if (!selectedFile && !selectedRaceBoxSession) {
-            showAlert('Please select a telemetry CSV file or download a session from RaceBox.', 'error');
+        if (!selectedFile && (!selectedRaceBoxSessions || selectedRaceBoxSessions.length === 0)) {
+            showAlert('Please select a telemetry CSV file or select at least one RaceBox recording.', 'error');
             return;
         }
 
@@ -683,9 +774,13 @@ export function initTelemetryUpload(config) {
             updateProgress(5, 'Pre-processing telemetry locally...');
 
             let payload;
-            if (selectedRaceBoxSession) {
-                updateProgress(30, 'Formatting RaceBox 25Hz telemetry into RaceTools format...');
-                const dataText = pointsToCsvData(selectedRaceBoxSession.points, currentAxisMapping);
+            if (selectedRaceBoxSessions && selectedRaceBoxSessions.length > 0) {
+                const countMsg = selectedRaceBoxSessions.length > 1
+                    ? `Formatting ${selectedRaceBoxSessions.length} RaceBox recordings into single continuous telemetry...`
+                    : 'Formatting RaceBox 25Hz telemetry into RaceTools format...';
+                updateProgress(30, countMsg);
+                const allPoints = mergeRaceBoxSessions(selectedRaceBoxSessions);
+                const dataText = pointsToCsvData(allPoints, currentAxisMapping);
                 payload = buildRaceToolsPayload(
                     config.sessionMeta,
                     driverName,
@@ -753,7 +848,13 @@ export function initTelemetryUpload(config) {
             }
             if (raceboxUploadSelectedBtn) {
                 raceboxUploadSelectedBtn.disabled = false;
-                raceboxUploadSelectedBtn.textContent = 'Upload Selected Session';
+                const label = selectedRaceBoxSessions.length > 1
+                    ? `Upload ${selectedRaceBoxSessions.length} Selected Recordings`
+                    : 'Upload Selected Recording';
+                const svg = raceboxUploadSelectedBtn.querySelector('svg');
+                raceboxUploadSelectedBtn.innerHTML = '';
+                if (svg) raceboxUploadSelectedBtn.appendChild(svg);
+                raceboxUploadSelectedBtn.appendChild(document.createTextNode(' ' + label));
             }
         }
     }
@@ -798,7 +899,12 @@ export function initTelemetryUpload(config) {
     if (removeFileBtn) {
         removeFileBtn.addEventListener('click', () => {
             setSelectedFile(null);
-            selectedRaceBoxSession = null;
+            selectedRaceBoxSessions = [];
+            if (raceboxSessionsList) {
+                raceboxSessionsList.querySelectorAll('.racebox-session-item').forEach(el => el.classList.remove('selected'));
+                raceboxSessionsList.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.checked = false; });
+            }
+            setSelectedRaceBoxSessions([]);
         });
     }
 

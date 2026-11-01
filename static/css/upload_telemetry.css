@@ -630,7 +630,9 @@
     box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.25);
 }
 
-.racebox-session-radio input[type="radio"] {
+.racebox-session-radio input[type="radio"],
+.racebox-session-radio input[type="checkbox"],
+.racebox-session-checkbox input[type="checkbox"] {
     cursor: pointer;
     width: 18px;
     height: 18px;

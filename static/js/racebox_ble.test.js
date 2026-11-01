@@ -332,8 +332,8 @@ describe('racebox_ble.js', () => {
             expect(csv).toContain('Record,Time,Latitude,Longitude,Altitude,Speed,GForceLat,GForceLon,GForceVert,Yaw Rate,Pitch Rate,Roll Rate,Lap,Lap Distance');
             const lines = csv.split('\n');
             expect(lines.length).toBe(3);
-            expect(lines[1]).toBe('1,11:02:15.000,51.5000000,-0.1234567,45.00,25.000,0.150,-0.250,0.980,-15.000,10.000,5.000,1,0.00');
-            expect(lines[2]).toBe('2,11:02:15.040,51.5000100,-0.1234560,45.10,25.200,0.160,-0.240,0.990,-14.800,10.100,5.100,1,0.00');
+            expect(lines[1]).toBe('1,2026-09-12T11:02:15.000Z,51.5000000,-0.1234567,45.00,25.000,0.150,-0.250,0.980,-15.000,10.000,5.000,1,0.00');
+            expect(lines[2]).toBe('2,2026-09-12T11:02:15.040Z,51.5000100,-0.1234560,45.10,25.200,0.160,-0.240,0.990,-14.800,10.100,5.100,1,0.00');
         });
 
         it('supports sideways mounting orientation with axis mapping', () => {
@@ -358,7 +358,7 @@ describe('racebox_ble.js', () => {
             const csv = pointsToCsvData(points, { lat: '+y', lon: '-x', vert: '+z', yaw: '+z' });
             const lines = csv.split('\n');
             // GForceLat should be +Y (-0.250), GForceLon should be -X (-0.150), GForceVert should be +Z (0.980)
-            expect(lines[1]).toContain('1,11:02:15.000,51.5000000,-0.1200000,45.00,25.000,-0.250,-0.150,0.980,-15.000,10.000,5.000,1,0.00');
+            expect(lines[1]).toContain('1,2026-09-12T11:02:15.000Z,51.5000000,-0.1200000,45.00,25.000,-0.250,-0.150,0.980,-15.000,10.000,5.000,1,0.00');
         });
     });
 

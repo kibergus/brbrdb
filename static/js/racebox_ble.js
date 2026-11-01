@@ -435,11 +435,7 @@ export function pointsToCsvData(points, axisMapping = DEFAULT_AXIS_MAPPING) {
         const p = points[i];
         let timeStr;
         if (p.dateTime) {
-            const hh = String(p.dateTime.getUTCHours()).padStart(2, '0');
-            const mm = String(p.dateTime.getUTCMinutes()).padStart(2, '0');
-            const ss = String(p.dateTime.getUTCSeconds()).padStart(2, '0');
-            const sss = String(p.dateTime.getUTCMilliseconds()).padStart(3, '0');
-            timeStr = `${hh}:${mm}:${ss}.${sss}`;
+            timeStr = p.dateTime.toISOString();
         } else {
             const relSec = Math.max(0, (p.timestampMs - startTimeMs) / 1000.0);
             timeStr = relSec.toFixed(3);
