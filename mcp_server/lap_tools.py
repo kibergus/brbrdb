@@ -78,11 +78,7 @@ def _load_all_telemetry_laps(
 
             location_handlers._compute_lap_segments(laps, sector_ends, turns_def)
 
-            speed_col = None
-            for candidate in ['Speed (km/h)', 'Speed', 'Speed (m/s)']:
-                if candidate in columns:
-                    speed_col = candidate
-                    break
+            speed_col = 'Speed' if 'Speed' in columns else None
 
             steering_col = None
             for candidate in ['Steering Wheel Angle (deg)', 'Steering', 'SteeringWheelAngle']:
@@ -139,7 +135,7 @@ def _load_all_telemetry_laps(
                 ch_lap = raw_channel_data.get(l_num, {})
 
                 sp_vals = ch_lap.get(speed_col, []) if speed_col else []
-                if speed_col and speed_col.lower() == 'speed (m/s)' and sp_vals:
+                if speed_col and sp_vals:
                     sp_vals = [v * 3.6 if (v is not None and not np.isnan(v)) else np.nan for v in sp_vals]
 
                 st_vals = ch_lap.get(steering_col, []) if steering_col else []

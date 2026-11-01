@@ -1628,6 +1628,9 @@ def test_process_telemetry_derivative_data_with_track_origin() -> None:
         assert metadata_json.get('track_origin_lon') == 9.28624
         assert metadata_json.get('track_origin_heading') == 0.0
 
+        assert df_telemetry['Speed'].iloc[0] == '50.00000'
+        assert df_telemetry['Speed'].iloc[1] == '52.00000'
+
         lat_0 = float(df_telemetry['Latitude'].iloc[0])
         lon_0 = float(df_telemetry['Longitude'].iloc[0])
         assert lat_0 < 45.61389

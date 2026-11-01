@@ -206,6 +206,8 @@ def interpolate_lap_channels(
         for ch in channels:
             if ch != 'Delta Time':
                 c_vals = np.array(raw_lap_data[l_num][ch])[sort_order]
+                if ch == 'Speed':
+                    c_vals = c_vals * 3.6
                 interp_lap_data[l_num][ch] = np.interp(dists_grid, l_dist, c_vals)
 
     if 'Delta Time' in channels:
@@ -549,10 +551,7 @@ def render_trajectory_plot(
                     x_val, y_val = _latlon_to_mercator(x_val, y_val)
 
                 speed_val = float(row[speed_idx]) if speed_idx != -1 else 0.0
-                if speed_val <= 50.0 and speed_val > 0.0:
-                    speed_kmh = speed_val * 3.6
-                else:
-                    speed_kmh = speed_val
+                speed_kmh = speed_val * 3.6
 
                 throttle_val = float(row[throttle_idx]) if throttle_idx != -1 else 0.0
                 brake_val = float(row[brake_idx]) if brake_idx != -1 else 0.0

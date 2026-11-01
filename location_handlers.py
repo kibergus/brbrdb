@@ -116,10 +116,7 @@ def parse_telemetry_csv(csv_path: str, track_data: dict | None = None) -> tuple[
             if dist_col in header:
                 dist_col_indices.append(header.index(dist_col))
 
-        speed_col_indices = []
-        for speed_col in ['Speed (km/h)', 'Speed', 'Speed (m/s)', 'Speed (mph)', 'GPS_Speed', 'GPS Speed']:
-            if speed_col in header:
-                speed_col_indices.append(header.index(speed_col))
+        speed_col_indices = [header.index('Speed')] if 'Speed' in header else []
 
         ref_lat, ref_lon, max_dist_m = upload_handlers.get_track_coordinate_reference(track_data, [], [])
         if ref_lat is None and lat_idx >= 0 and lon_idx >= 0:
