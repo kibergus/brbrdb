@@ -17,8 +17,8 @@
 
 .upload-container {
     max-width: 800px;
-    margin: 2rem auto;
-    padding: 0 1rem;
+    margin: 0 auto;
+    padding: 0;
 }
 
 .upload-card {
@@ -28,6 +28,85 @@
     padding: 2rem;
     box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2);
     margin-bottom: 2rem;
+}
+
+/* Upload Method Tabs */
+.upload-tabs-nav {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1.75rem;
+    border-bottom: 1px solid var(--border-color, #334155);
+    padding-bottom: 0.75rem;
+}
+
+.upload-tab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.25rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color, #334155);
+    border-radius: 10px;
+    color: var(--text-secondary, #94a3b8);
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    user-select: none;
+}
+
+.upload-tab-btn .tab-icon {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+
+.upload-tab-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-primary, #f8fafc);
+    border-color: rgba(56, 189, 248, 0.4);
+}
+
+.upload-tab-btn.active {
+    background: rgba(56, 189, 248, 0.12);
+    color: var(--accent, #38bdf8);
+    border-color: var(--accent, #38bdf8);
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.15);
+}
+
+.upload-tab-btn .tab-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.15rem 0.45rem;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-secondary, #94a3b8);
+}
+
+.upload-tab-btn.active .tab-badge {
+    background: rgba(56, 189, 248, 0.2);
+    color: var(--accent, #38bdf8);
+}
+
+.upload-tab-pane {
+    display: none;
+}
+
+.upload-tab-pane.active {
+    display: block;
+    animation: uploadFadeIn 0.2s ease;
+}
+
+@keyframes uploadFadeIn {
+    from { opacity: 0; transform: translateY(3px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.upload-common-fields {
+    margin-top: 1.5rem;
 }
 
 .upload-header {
@@ -742,4 +821,107 @@
     font-weight: 700;
     letter-spacing: 0.08em;
 }
+
+/* Mobile Responsive Layout */
+@media (max-width: 768px) {
+    .upload-container {
+        margin: 0;
+        padding: 0;
+        max-width: 100%;
+    }
+
+    .upload-card {
+        margin-left: -1rem;
+        margin-right: -1rem;
+        border-radius: 0;
+        border-left: none;
+        border-right: none;
+        padding: 1.25rem 1rem;
+        box-shadow: none;
+        margin-bottom: 1rem;
+    }
+
+    .upload-header {
+        padding-bottom: 1rem;
+        margin-bottom: 1.25rem;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+    }
+
+    .upload-tabs-nav {
+        gap: 0.35rem;
+        margin-bottom: 1.25rem;
+        padding-bottom: 0.5rem;
+    }
+
+    .upload-tab-btn {
+        flex: 1;
+        justify-content: center;
+        padding: 0.65rem 0.5rem;
+        font-size: 0.85rem;
+        gap: 0.35rem;
+    }
+
+    .upload-tab-btn .tab-badge {
+        display: none;
+    }
+
+    .racebox-card {
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 1.25rem;
+    }
+
+    .racebox-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+    }
+
+    .racebox-badge-wrap {
+        margin-left: 0;
+    }
+
+    .dropzone-container {
+        padding: 1.75rem 1rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .dropzone-icon {
+        width: 36px;
+        height: 36px;
+        margin-bottom: 0.75rem;
+    }
+
+    .dropzone-title {
+        font-size: 1rem;
+    }
+
+    .racebox-action-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .btn-racebox-connect {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .btn-pin-toggle {
+        align-self: flex-start;
+    }
+
+    .racebox-session-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .btn-racebox-upload,
+    .btn-submit {
+        width: 100%;
+        justify-content: center;
+    }
+}
+
 

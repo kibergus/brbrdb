@@ -308,6 +308,74 @@ export function initTelemetryUpload(config) {
     let selectedRaceBoxSessions = [];
     let currentAxisMapping = { ...DEFAULT_AXIS_MAPPING };
 
+    // Tab Navigation
+    const tabButtons = document.querySelectorAll('.upload-tab-btn');
+    const tabPanes = document.querySelectorAll('.upload-tab-pane');
+    let activeTab = 'racebox';
+
+    function switchTab(tabName) {
+        activeTab = tabName;
+        tabButtons.forEach(btn => {
+            const isActive = btn.dataset.tab === tabName;
+            btn.classList.toggle('active', isActive);
+            btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+        tabPanes.forEach(pane => {
+            const isActive = pane.dataset.tabPane === tabName;
+            pane.classList.toggle('active', isActive);
+            pane.style.display = isActive ? 'block' : 'none';
+        });
+
+        if (tabName === 'file') {
+            if (submitBtn) submitBtn.style.display = 'inline-flex';
+            if (raceboxSessionActions) raceboxSessionActions.style.display = 'none';
+            if (selectedFile) {
+                if (CsvTelemetryProcessor.canProcess(selectedFile)) {
+                    const slice = selectedFile.slice(0, 16384);
+                    slice.text().then(chunk => {
+                        const { headerLine } = extractTelemetryData(chunk);
+                        if (headerLine && hasGyroscopeChannels(headerLine)) {
+                            if (gyroHint) {
+                                gyroHint.style.display = 'block';
+                                gyroHint.textContent = 'ℹ Gyroscope channels detected in file. Please ensure Gyro Arm Length is set.';
+                            }
+                        } else if (gyroHint) {
+                            gyroHint.style.display = 'none';
+                        }
+                    }).catch(() => {});
+                }
+            } else if (gyroHint) {
+                gyroHint.style.display = 'none';
+            }
+        } else {
+            if (submitBtn) submitBtn.style.display = 'none';
+            if (raceboxSessionActions) {
+                raceboxSessionActions.style.display = (selectedRaceBoxSessions && selectedRaceBoxSessions.length > 0) ? 'flex' : 'none';
+            }
+            if (selectedRaceBoxSessions && selectedRaceBoxSessions.length > 0) {
+                if (gyroHint) {
+                    gyroHint.style.display = 'block';
+                    gyroHint.textContent = 'ℹ RaceBox 25Hz telemetry includes gyroscope channels (Yaw, Pitch, Roll). Gyro Arm Length is configured.';
+                }
+            } else if (gyroHint) {
+                gyroHint.style.display = 'none';
+            }
+        }
+        hideAlert();
+    }
+
+    tabButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            switchTab(btn.dataset.tab);
+        });
+    });
+
+    if (!('bluetooth' in navigator)) {
+        switchTab('file');
+    } else {
+        switchTab('racebox');
+    }
+
     // Restore axis mapping from localStorage if available
     try {
         const saved = localStorage.getItem('racebox_axis_mapping');
@@ -467,35 +535,11 @@ export function initTelemetryUpload(config) {
         hideAlert();
 
         if (selectedRaceBoxSessions.length > 0) {
-            if (dropzone) dropzone.style.display = 'none';
-            if (fileInfo) fileInfo.style.display = 'flex';
-
-            const totalPoints = selectedRaceBoxSessions.reduce(
-                (acc, s) => acc + (s.pointsCount || (s.points ? s.points.length : 0)),
-                0
-            );
-            if (selectedRaceBoxSessions.length === 1) {
-                const session = selectedRaceBoxSessions[0];
-                if (fileNameSpan) {
-                    fileNameSpan.textContent = `RaceBox Session: ${session.startTimeFormatted || session.startTimeIso} (${session.durationFormatted})`;
-                }
-                if (fileSizeSpan) {
-                    fileSizeSpan.textContent = `${(session.pointsCount || totalPoints).toLocaleString()} pts (25Hz)`;
-                }
-            } else {
-                if (fileNameSpan) {
-                    fileNameSpan.textContent = `RaceBox: ${selectedRaceBoxSessions.length} recordings selected`;
-                }
-                if (fileSizeSpan) {
-                    fileSizeSpan.textContent = `${totalPoints.toLocaleString()} total pts (25Hz)`;
-                }
-            }
-
-            if (gyroHint) {
+            if (activeTab === 'racebox' && gyroHint) {
                 gyroHint.style.display = 'block';
                 gyroHint.textContent = 'ℹ RaceBox 25Hz telemetry includes gyroscope channels (Yaw, Pitch, Roll). Gyro Arm Length is configured.';
             }
-            if (raceboxSessionActions) {
+            if (activeTab === 'racebox' && raceboxSessionActions) {
                 raceboxSessionActions.style.display = 'flex';
             }
             if (raceboxUploadSelectedBtn) {
@@ -508,9 +552,7 @@ export function initTelemetryUpload(config) {
                 raceboxUploadSelectedBtn.appendChild(document.createTextNode(' ' + label));
             }
         } else {
-            if (dropzone) dropzone.style.display = 'block';
-            if (fileInfo) fileInfo.style.display = 'none';
-            if (gyroHint) gyroHint.style.display = 'none';
+            if (activeTab === 'racebox' && gyroHint) gyroHint.style.display = 'none';
             if (raceboxSessionActions) raceboxSessionActions.style.display = 'none';
         }
     }
@@ -738,8 +780,13 @@ export function initTelemetryUpload(config) {
     async function executeTelemetryUpload() {
         hideAlert();
 
-        if (!selectedFile && (!selectedRaceBoxSessions || selectedRaceBoxSessions.length === 0)) {
-            showAlert('Please select a telemetry CSV file or select at least one RaceBox recording.', 'error');
+        if (activeTab === 'file' && !selectedFile) {
+            showAlert('Please select a telemetry CSV file to upload.', 'error');
+            return;
+        }
+
+        if (activeTab === 'racebox' && (!selectedRaceBoxSessions || selectedRaceBoxSessions.length === 0)) {
+            showAlert('Please select at least one RaceBox recording to upload.', 'error');
             return;
         }
 
@@ -774,7 +821,7 @@ export function initTelemetryUpload(config) {
             updateProgress(5, 'Pre-processing telemetry locally...');
 
             let payload;
-            if (selectedRaceBoxSessions && selectedRaceBoxSessions.length > 0) {
+            if (activeTab === 'racebox') {
                 const countMsg = selectedRaceBoxSessions.length > 1
                     ? `Formatting ${selectedRaceBoxSessions.length} RaceBox recordings into single continuous telemetry...`
                     : 'Formatting RaceBox 25Hz telemetry into RaceTools format...';
@@ -825,6 +872,10 @@ export function initTelemetryUpload(config) {
 
             if (uploadForm) uploadForm.style.display = 'none';
             if (raceboxCard) raceboxCard.style.display = 'none';
+            const uploadTabsNav = document.querySelector('.upload-tabs-nav');
+            if (uploadTabsNav) uploadTabsNav.style.display = 'none';
+            const commonFields = document.querySelector('.upload-common-fields');
+            if (commonFields) commonFields.style.display = 'none';
             const divider = document.querySelector('.divider-text');
             if (divider) divider.style.display = 'none';
 

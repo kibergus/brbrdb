@@ -84,6 +84,25 @@ def test_upload_telemetry_page_acl_get() -> None:
         assert 'RaceBox Micro Direct Download' in html
         assert 'raceboxConnectBtn' in html
         assert 'Web Bluetooth' in html
+        assert 'tabBtnRacebox' in html
+        assert 'tabBtnFile' in html
+
+    # 3. When has_telemetry=False, "No Telemetry Yet" badge is dropped
+    with patch('auth.load_keys', return_value=mock_keys), \
+         patch('app.db.find_sessions', return_value=[mock_session]), \
+         patch('app.db.has_telemetry', return_value=False), \
+         patch('app.db.get_session_drivers', return_value=['Test Driver']), \
+         patch('app.plot_handlers.get_hero_names', return_value=['Test Driver']):
+
+        client.set_cookie('auth_key', 'has_tel_key')
+        resp_no_tel = client.get(
+            '/session/club100_south/cadet_slw/2026-09-13/Lydd/practice_1/upload_telemetry',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_no_tel.status_code == 200
+        html_no_tel = resp_no_tel.get_data(as_text=True)
+        assert 'No Telemetry Yet' not in html_no_tel
+        assert 'Telemetry Available' not in html_no_tel
 
 
 def test_session_view_shows_upload_button() -> None:
@@ -116,6 +135,7 @@ def test_session_view_shows_upload_button() -> None:
     mock_session.session_start_datetime = '2026-09-13 10:31:00'
     mock_session.track_name = 'Lydd'
 
+    # Case A: When has_telemetry is True -> telemetry pill + round icon button
     with patch('auth.load_keys', return_value=mock_keys), \
          patch('app.db.find_sessions', return_value=[mock_session]), \
          patch('app.db.has_telemetry', return_value=True), \
@@ -133,7 +153,27 @@ def test_session_view_shows_upload_button() -> None:
         html = resp.get_data(as_text=True)
         assert 'Telemetry' in html
         assert 'upload-telemetry-btn' in html
+        assert 'upload-telemetry-btn-pill' not in html
         assert '/session/club100_south/cadet_slw/2026-09-13/Lydd/practice_1/upload_telemetry' in html
+
+    # Case B: When has_telemetry is False -> "<upload icon> Telemetry" pill button
+    with patch('auth.load_keys', return_value=mock_keys), \
+         patch('app.db.find_sessions', return_value=[mock_session]), \
+         patch('app.db.has_telemetry', return_value=False), \
+         patch('app.db.load', return_value=mock_df), \
+         patch('app.db.load_penalties', return_value=pd.DataFrame()), \
+         patch('app.db.get_overlapping_videos', return_value=[]), \
+         patch('app.plot_handlers.get_hero_names', return_value=['Test Driver']):
+
+        client.set_cookie('auth_key', 'has_tel_key')
+        resp_no_tel = client.get(
+            '/session/club100_south/cadet_slw/2026-09-13/Lydd/practice_1',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_no_tel.status_code == 200
+        html_no_tel = resp_no_tel.get_data(as_text=True)
+        assert 'upload-telemetry-btn upload-telemetry-btn-pill' in html_no_tel
+        assert 'Telemetry' in html_no_tel
 
 
 def test_upload_telemetry_post_stream_endpoint() -> None:

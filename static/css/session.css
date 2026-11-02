@@ -390,3 +390,14 @@ tr.has-penalty td {
     box-shadow: 0 4px 12px rgba(56, 189, 248, 0.25);
 }
 
+.upload-telemetry-btn.upload-telemetry-btn-pill {
+    width: auto;
+    height: 32px;
+    padding: 0 0.85rem;
+    border-radius: 9999px;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+

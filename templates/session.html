@@ -107,7 +107,6 @@
                         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
                     </svg>
                 </a>
-                {% endif %}
                 <a href="{{ url_for('upload_telemetry', league=metadata.league, class_name=metadata.class, date=metadata.date, track=metadata.track, session_id=metadata.session_id) }}"
                     class="upload-telemetry-btn"
                     title="Upload Telemetry"
@@ -118,6 +117,19 @@
                         <line x1="12" y1="3" x2="12" y2="15"></line>
                     </svg>
                 </a>
+                {% else %}
+                <a href="{{ url_for('upload_telemetry', league=metadata.league, class_name=metadata.class, date=metadata.date, track=metadata.track, session_id=metadata.session_id) }}"
+                    class="upload-telemetry-btn upload-telemetry-btn-pill"
+                    title="Upload Telemetry"
+                    aria-label="Upload Telemetry">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    <span>Telemetry</span>
+                </a>
+                {% endif %}
             </div>
             {% endif %}
         </div>
