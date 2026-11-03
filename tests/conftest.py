@@ -182,6 +182,10 @@ def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
         print('The following golden plot verification tests failed:')
         for nodeid in failed_goldens:
             print(f'  - {nodeid}')
+
+        if not sys.stdin.isatty():
+            return
+
         print('\nLaunching the Golden Plot Verification Dashboard on http://127.0.0.1:5002/ ...')
         print('Please visit the page to review the 3-panel diff and accept changes.')
         print('Press Ctrl+C in this terminal to stop the server once you are done.')

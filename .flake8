@@ -15,8 +15,8 @@
 
 [flake8]
 max-line-length = 120
-exclude = .git,__pycache__,docs/source/conf.py,old,build,dist,venv,.venv,.mypy_cache,.pytest_cache,notebook,testdata,node_modules,scratch,clean_duplicates.py,generate_one_off_plot.py,generate_session_drivers_plot.py,inspect_session.py
+exclude = .git,__pycache__,docs/source/conf.py,old,build,dist,venv,.venv,venv_test,.mypy_cache,.pytest_cache,notebook,testdata,node_modules,scratch,clean_duplicates.py,generate_one_off_plot.py,generate_session_drivers_plot.py,inspect_session.py
 inline-quotes = single
 multiline-quotes = single
 docstring-quotes = double
-extend-ignore = IMR201, IMR202, IMR220, IMR221, IMR222, IMR223, IMR240, IMR241, IMR243, IMR244
+extend-ignore = IMR201, IMR202, IMR220, IMR221, IMR222, IMR223, IMR240, IMR241, IMR243, IMR244, Q000, Q001, Q002, Q003

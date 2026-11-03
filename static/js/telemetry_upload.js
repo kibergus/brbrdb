@@ -36,6 +36,261 @@ import {
 
 export const GYROSCOPE_CHANNELS = ['Yaw Rate', 'Pitch Rate', 'Roll Rate'];
 
+export const BRT1_CHUNK_TYPES = {
+    MAGIC: 0x01,
+    METADATA: 0x02,
+    BASELINE: 0x03,
+    DELTA: 0x04
+};
+
+export const DEFAULT_BRT1_CHANNELS = [
+    { name: 'Time', scale: 0.001 },
+    { name: 'Latitude', scale: 1e-7 },
+    { name: 'Longitude', scale: 1e-7 },
+    { name: 'Speed', scale: 0.01 },
+    { name: 'Throttle', scale: 0.1 },
+    { name: 'Brake', scale: 0.1 },
+    { name: 'Steering Angle', scale: 0.05 },
+    { name: 'GForceLat', scale: 0.001 },
+    { name: 'GForceLon', scale: 0.001 },
+    { name: 'GForceVert', scale: 0.001 },
+    { name: 'Yaw Rate', scale: 0.001 },
+    { name: 'Pitch Rate', scale: 0.001 },
+    { name: 'Roll Rate', scale: 0.001 },
+    { name: 'Lap', scale: 1.0 }
+];
+
+/**
+ * Encodes a single BRT1 chunk with 3-byte header: uint16_le length, uint8 type, and payload.
+ * @param {number} chunkType - 1-byte chunk type
+ * @param {Uint8Array} payload - Chunk payload bytes
+ * @returns {Uint8Array} Framed chunk bytes
+ */
+export function encodeBrt1Chunk(chunkType, payload) {
+    const payloadLen = payload ? payload.length : 0;
+    if (payloadLen > 65535) {
+        throw new Error(`Chunk payload size ${payloadLen} exceeds 65535 bytes limit.`);
+    }
+    const chunk = new Uint8Array(3 + payloadLen);
+    const view = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    view.setUint16(0, payloadLen, true);
+    view.setUint8(2, chunkType);
+    if (payloadLen > 0) {
+        chunk.set(payload, 3);
+    }
+    return chunk;
+}
+
+/**
+ * Encodes metadata, channels, and records into a BRT1 binary stream payload.
+ * @param {Object} metadata - Session metadata dictionary mapping canonical CSV header keys
+ * @param {Array<{name: string, scale: number}>} channels - Channel specifications with quantization scales
+ * @param {Array<Object>} records - Telemetry records with channel names as keys
+ * @returns {Uint8Array} Complete BRT1 stream payload
+ */
+export function encodeBrt1Stream(metadata, channels, records) {
+    const chunks = [];
+
+    // 1. Magic chunk (0x01)
+    const magicPayload = new TextEncoder().encode('BRT1');
+    chunks.push(encodeBrt1Chunk(BRT1_CHUNK_TYPES.MAGIC, magicPayload));
+
+    // 2. Metadata JSON chunk (0x02)
+    const metaPayload = new TextEncoder().encode(JSON.stringify({ metadata, channels }));
+    chunks.push(encodeBrt1Chunk(BRT1_CHUNK_TYPES.METADATA, metaPayload));
+
+    if (!records || records.length === 0) {
+        return concatUint8Arrays(chunks);
+    }
+
+    const M = channels.length;
+    const scales = channels.map(c => Number(c.scale));
+    const channelNames = channels.map(c => c.name);
+
+    let prevValues = new Float64Array(M);
+
+    function extractChannelValue(rec, colName) {
+        const v = rec[colName];
+        if (v === null || v === undefined || v === '') return NaN;
+        const num = Number(v);
+        return isNaN(num) ? NaN : num;
+    }
+
+    // First sample as Baseline / Keyframe (0x03)
+    const firstPayload = new Uint8Array(M * 8);
+    const firstView = new DataView(firstPayload.buffer, firstPayload.byteOffset, firstPayload.byteLength);
+    for (let j = 0; j < M; j++) {
+        const val = extractChannelValue(records[0], channelNames[j]);
+        firstView.setFloat64(j * 8, isNaN(val) ? NaN : val, true);
+        prevValues[j] = val;
+    }
+    chunks.push(encodeBrt1Chunk(BRT1_CHUNK_TYPES.BASELINE, firstPayload));
+
+    // Subsequent samples
+    for (let i = 1; i < records.length; i++) {
+        const rec = records[i];
+        const currValues = new Float64Array(M);
+        let needKeyframe = false;
+
+        for (let j = 0; j < M; j++) {
+            const val = extractChannelValue(rec, channelNames[j]);
+            currValues[j] = val;
+            if (isNaN(prevValues[j]) && !isNaN(val)) {
+                needKeyframe = true;
+            }
+        }
+
+        if (needKeyframe) {
+            const kfPayload = new Uint8Array(M * 8);
+            const kfView = new DataView(kfPayload.buffer, kfPayload.byteOffset, kfPayload.byteLength);
+            for (let j = 0; j < M; j++) {
+                kfView.setFloat64(j * 8, isNaN(currValues[j]) ? NaN : currValues[j], true);
+            }
+            chunks.push(encodeBrt1Chunk(BRT1_CHUNK_TYPES.BASELINE, kfPayload));
+            prevValues = currValues;
+        } else {
+            const deltaPayload = new Uint8Array(M * 2);
+            const deltaView = new DataView(deltaPayload.buffer, deltaPayload.byteOffset, deltaPayload.byteLength);
+            for (let j = 0; j < M; j++) {
+                const cVal = currValues[j];
+                const pVal = prevValues[j];
+                if (isNaN(cVal)) {
+                    deltaView.setInt16(j * 2, -32768, true);
+                } else {
+                    const base = isNaN(pVal) ? 0 : pVal;
+                    let d = Math.round((cVal - base) / scales[j]);
+                    d = Math.max(-32767, Math.min(32767, d));
+                    deltaView.setInt16(j * 2, d, true);
+                    currValues[j] = base + d * scales[j];
+                }
+            }
+            chunks.push(encodeBrt1Chunk(BRT1_CHUNK_TYPES.DELTA, deltaPayload));
+            prevValues = currValues;
+        }
+    }
+
+    return concatUint8Arrays(chunks);
+}
+
+/**
+ * Helper to concatenate an array of Uint8Arrays.
+ * @param {Array<Uint8Array>} arrays
+ * @returns {Uint8Array}
+ */
+function concatUint8Arrays(arrays) {
+    let totalLen = 0;
+    for (const arr of arrays) {
+        totalLen += arr.length;
+    }
+    const result = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const arr of arrays) {
+        result.set(arr, offset);
+        offset += arr.length;
+    }
+    return result;
+}
+
+/**
+ * Decodes a BRT1 binary stream into metadata, channels, and records.
+ * @param {ArrayBuffer|Uint8Array} bufferOrUint8Array
+ * @returns {{ metadata: Object, channels: Array<Object>, records: Array<Object> }}
+ */
+export function decodeBrt1Stream(bufferOrUint8Array) {
+    const uint8 = bufferOrUint8Array instanceof Uint8Array
+        ? bufferOrUint8Array
+        : new Uint8Array(bufferOrUint8Array);
+
+    if (uint8.length < 7) {
+        throw new Error('Truncated BRT1 stream: less than minimum 7 bytes.');
+    }
+
+    const view = new DataView(uint8.buffer, uint8.byteOffset, uint8.byteLength);
+
+    let offset = 0;
+    let metadata = null;
+    let channels = null;
+    let channelNames = [];
+    let channelScales = [];
+    let M = 0;
+    let currentValues = null;
+    const records = [];
+
+    while (offset + 3 <= uint8.length) {
+        const chunkLen = view.getUint16(offset, true);
+        const chunkType = view.getUint8(offset + 2);
+        offset += 3;
+
+        if (offset + chunkLen > uint8.length) {
+            throw new Error(`Truncated chunk payload: expected ${chunkLen} bytes.`);
+        }
+
+        const payloadStart = uint8.byteOffset + offset;
+
+        if (chunkType === BRT1_CHUNK_TYPES.MAGIC) {
+            const magicStr = new TextDecoder().decode(uint8.subarray(offset, offset + chunkLen));
+            if (magicStr !== 'BRT1') {
+                throw new Error(`Invalid BRT1 magic: ${magicStr}`);
+            }
+        } else if (chunkType === BRT1_CHUNK_TYPES.METADATA) {
+            const jsonStr = new TextDecoder().decode(uint8.subarray(offset, offset + chunkLen));
+            const parsed = JSON.parse(jsonStr);
+            metadata = parsed.metadata || {};
+            channels = parsed.channels || [];
+            channelNames = channels.map(c => c.name);
+            channelScales = channels.map(c => Number(c.scale));
+            M = channels.length;
+            currentValues = new Float64Array(M).fill(NaN);
+        } else if (chunkType === BRT1_CHUNK_TYPES.BASELINE) {
+            if (!channels) throw new Error('Baseline chunk received before metadata.');
+            if (chunkLen !== M * 8) throw new Error(`Invalid baseline chunk size ${chunkLen}, expected ${M * 8}.`);
+            const chunkView = new DataView(uint8.buffer, payloadStart, chunkLen);
+            for (let j = 0; j < M; j++) {
+                currentValues[j] = chunkView.getFloat64(j * 8, true);
+            }
+            const rec = {};
+            for (let j = 0; j < M; j++) {
+                rec[channelNames[j]] = isNaN(currentValues[j]) ? null : currentValues[j];
+            }
+            records.push(rec);
+        } else if (chunkType === BRT1_CHUNK_TYPES.DELTA) {
+            if (!channels) throw new Error('Delta chunk received before metadata.');
+            const sampleSize = M * 2;
+            if (chunkLen % sampleSize !== 0) throw new Error(`Invalid delta chunk size ${chunkLen}.`);
+            const numSamples = chunkLen / sampleSize;
+            const chunkView = new DataView(uint8.buffer, payloadStart, chunkLen);
+            for (let s = 0; s < numSamples; s++) {
+                const sampleOffset = s * sampleSize;
+                for (let j = 0; j < M; j++) {
+                    const delta = chunkView.getInt16(sampleOffset + j * 2, true);
+                    if (delta === -32768) {
+                        currentValues[j] = NaN;
+                    } else if (isNaN(currentValues[j])) {
+                        currentValues[j] = delta * channelScales[j];
+                    } else {
+                        currentValues[j] += delta * channelScales[j];
+                    }
+                }
+                const rec = {};
+                for (let j = 0; j < M; j++) {
+                    rec[channelNames[j]] = isNaN(currentValues[j]) ? null : currentValues[j];
+                }
+                records.push(rec);
+            }
+        } else {
+            throw new Error(`Unknown BRT1 chunk type: 0x${chunkType.toString(16)}`);
+        }
+
+        offset += chunkLen;
+    }
+
+    if (offset < uint8.length) {
+        throw new Error('Truncated chunk header at end of stream.');
+    }
+
+    return { metadata, channels, records };
+}
+
 /**
  * Merges telemetry points across multiple RaceBox sessions into a single
  * chronologically sorted array, deduplicating any points with identical timestamps.
@@ -850,11 +1105,13 @@ export function initTelemetryUpload(config) {
 
             updateProgress(75, 'Uploading telemetry to server...');
 
+            const isBinary = payload instanceof ArrayBuffer || payload instanceof Uint8Array;
+            const contentType = isBinary ? 'application/octet-stream' : 'text/csv; charset=utf-8';
             const uploadUrl = config.uploadUrl || (uploadForm ? uploadForm.action : '') || '/api/upload/stream';
             const response = await fetch(uploadUrl, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'text/csv; charset=utf-8',
+                    'Content-Type': contentType,
                     'X-Requested-With': 'XMLHttpRequest'
                 },
                 body: payload

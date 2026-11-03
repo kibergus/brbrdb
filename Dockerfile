@@ -48,6 +48,4 @@ RUN python setup.py build_ext --inplace
 # Expose port 5000 internally
 EXPOSE 5000
 
-# Run the application with gunicorn for production
-# Bind to 0.0.0.0 so it's accessible from outside the container
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--timeout", "600", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "8", "--timeout", "600", "app:app"]

@@ -427,4 +427,8 @@ def edit_report(
 
 
 if __name__ == "__main__":
-    mcp.run()
+    import sys
+    from typing import Literal, cast
+    t_arg = sys.argv[1] if len(sys.argv) > 1 else "stdio"
+    transport = cast(Literal["stdio", "sse", "streamable-http"], t_arg)
+    mcp.run(transport=transport)

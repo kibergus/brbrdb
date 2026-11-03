@@ -22,7 +22,12 @@ import {
     buildRaceToolsPayload,
     mergeRaceBoxSessions,
     CsvTelemetryProcessor,
-    TelemetryProcessor
+    TelemetryProcessor,
+    BRT1_CHUNK_TYPES,
+    DEFAULT_BRT1_CHANNELS,
+    encodeBrt1Chunk,
+    encodeBrt1Stream,
+    decodeBrt1Stream
 } from './telemetry_upload.js';
 import { pointsToCsvData } from './racebox_ble.js';
 
@@ -254,4 +259,106 @@ describe('telemetry_upload.js', () => {
             expect(merged.map(p => p.timestampMs)).toEqual([1000, 1040, 1080]);
         });
     });
+
+    describe('BRT1 Protocol (telemetry_upload.js)', () => {
+        it('exports correct chunk types and default channels', () => {
+            expect(BRT1_CHUNK_TYPES.MAGIC).toBe(0x01);
+            expect(BRT1_CHUNK_TYPES.METADATA).toBe(0x02);
+            expect(BRT1_CHUNK_TYPES.BASELINE).toBe(0x03);
+            expect(BRT1_CHUNK_TYPES.DELTA).toBe(0x04);
+
+            expect(DEFAULT_BRT1_CHANNELS.length).toBeGreaterThan(5);
+            const timeChan = DEFAULT_BRT1_CHANNELS.find(c => c.name === 'Time');
+            expect(timeChan).toBeDefined();
+            expect(timeChan.scale).toBe(0.001);
+        });
+
+        it('correctly frames chunks with encodeBrt1Chunk', () => {
+            const payload = new Uint8Array([0x42, 0x52, 0x54, 0x31]); // 'BRT1'
+            const chunk = encodeBrt1Chunk(BRT1_CHUNK_TYPES.MAGIC, payload);
+
+            expect(chunk.length).toBe(7);
+            expect(chunk[0]).toBe(4); // length low byte
+            expect(chunk[1]).toBe(0); // length high byte
+            expect(chunk[2]).toBe(0x01); // type magic
+            expect(chunk[3]).toBe(0x42);
+            expect(chunk[4]).toBe(0x52);
+            expect(chunk[5]).toBe(0x54);
+            expect(chunk[6]).toBe(0x31);
+        });
+
+        it('encodes and decodes BRT1 telemetry stream in round-trip', () => {
+            const channels = [
+                { name: 'Time', scale: 0.001 },
+                { name: 'Latitude', scale: 1e-7 },
+                { name: 'Longitude', scale: 1e-7 },
+                { name: 'Speed', scale: 0.01 },
+                { name: 'Lap', scale: 1.0 }
+            ];
+
+            const records = [
+                { Time: 0.0, Latitude: 51.5000000, Longitude: -0.1000000, Speed: 10.0, Lap: 1 },
+                { Time: 0.010, Latitude: 51.5000100, Longitude: -0.1000050, Speed: 10.2, Lap: 1 },
+                { Time: 0.020, Latitude: 51.5000200, Longitude: -0.1000100, Speed: 10.5, Lap: 1 }
+            ];
+
+            const streamBytes = encodeBrt1Stream(testSessionMeta, channels, records);
+            expect(streamBytes.length).toBeGreaterThan(0);
+
+            // First 7 bytes must be Magic chunk
+            expect(streamBytes.slice(0, 7)).toEqual(new Uint8Array([4, 0, 1, 0x42, 0x52, 0x54, 0x31]));
+
+            const decoded = decodeBrt1Stream(streamBytes);
+            expect(decoded.metadata.track).toBe('Lydd');
+            expect(decoded.channels.length).toBe(5);
+            expect(decoded.records.length).toBe(3);
+
+            // Sample 0 (Baseline)
+            expect(decoded.records[0].Time).toBeCloseTo(0.0, 3);
+            expect(decoded.records[0].Latitude).toBeCloseTo(51.5000000, 7);
+            expect(decoded.records[0].Speed).toBeCloseTo(10.0, 2);
+            expect(decoded.records[0].Lap).toBe(1);
+
+            // Sample 1 (Delta)
+            expect(decoded.records[1].Time).toBeCloseTo(0.010, 3);
+            expect(decoded.records[1].Latitude).toBeCloseTo(51.5000100, 7);
+            expect(decoded.records[1].Speed).toBeCloseTo(10.2, 2);
+
+            // Sample 2 (Delta)
+            expect(decoded.records[2].Time).toBeCloseTo(0.020, 3);
+            expect(decoded.records[2].Latitude).toBeCloseTo(51.5000200, 7);
+            expect(decoded.records[2].Speed).toBeCloseTo(10.5, 2);
+        });
+
+        it('handles NaN values and keyframe recovery', () => {
+            const channels = [
+                { name: 'Time', scale: 0.001 },
+                { name: 'Speed', scale: 0.01 }
+            ];
+
+            const records = [
+                { Time: 0.0, Speed: 10.0 },
+                { Time: 0.01, Speed: null }, // NaN
+                { Time: 0.02, Speed: 12.0 }  // Recovery from NaN requires keyframe
+            ];
+
+            const streamBytes = encodeBrt1Stream(testSessionMeta, channels, records);
+            const decoded = decodeBrt1Stream(streamBytes);
+
+            expect(decoded.records.length).toBe(3);
+            expect(decoded.records[0].Speed).toBeCloseTo(10.0, 2);
+            expect(decoded.records[1].Speed).toBeNull();
+            expect(decoded.records[2].Speed).toBeCloseTo(12.0, 2);
+        });
+
+        it('throws error on corrupted chunk payload or truncated data', () => {
+            // Only 2 bytes (cannot even read header)
+            expect(() => decodeBrt1Stream(new Uint8Array([4, 0]))).toThrow(/Truncated BRT1 stream/);
+
+            // Valid magic chunk, followed by metadata chunk claiming 10 bytes payload, but only 1 byte provided
+            const truncatedPayload = new Uint8Array([4, 0, 1, 0x42, 0x52, 0x54, 0x31, 10, 0, 2, 0x7b]);
+            expect(() => decodeBrt1Stream(truncatedPayload)).toThrow(/Truncated chunk payload/);
+        });
+    });
 });
+

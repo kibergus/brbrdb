@@ -24,13 +24,18 @@ import gzip
 import brotli  # type: ignore[import-untyped]
 from unittest.mock import patch, PropertyMock
 from pathlib import Path
+import struct
 import numpy as np
 import pandas as pd
 import pytest
 from werkzeug.exceptions import BadRequest, NotFound
 import app
 import upload_handlers
-from upload_handlers import CSVSessionMetadata, StreamingLineReader
+from upload_handlers import (
+    CSVSessionMetadata,
+    StreamingByteReader,
+    parse_json_metadata,
+)
 from race_tools import assetto_corsa, rfactor
 from database import db, config
 
@@ -281,7 +286,7 @@ def test_streaming_line_reader() -> None:
     expected_lines = ['Track name,Rowrah\n', 'Date,2026-05-10\n', 'Time,14:30:00\n', 'No newline at end']
 
     # 1. Uncompressed
-    reader_raw = StreamingLineReader(io.BytesIO(test_text.encode('utf-8')))
+    reader_raw = StreamingByteReader(io.BytesIO(test_text.encode('utf-8')))
     lines_raw = []
     while (line := reader_raw.readline()) is not None:
         lines_raw.append(line)
@@ -289,7 +294,7 @@ def test_streaming_line_reader() -> None:
 
     # 2. Gzip
     gz_data = gzip.compress(test_text.encode('utf-8'))
-    reader_gz = StreamingLineReader(io.BytesIO(gz_data), content_encoding='gzip')
+    reader_gz = StreamingByteReader(io.BytesIO(gz_data), content_encoding='gzip')
     lines_gz = []
     while (line := reader_gz.readline()) is not None:
         lines_gz.append(line)
@@ -297,13 +302,13 @@ def test_streaming_line_reader() -> None:
 
     # 3. Brotli ('br' and 'brotli')
     br_data = brotli.compress(test_text.encode('utf-8'))
-    reader_br = StreamingLineReader(io.BytesIO(br_data), content_encoding='br')
+    reader_br = StreamingByteReader(io.BytesIO(br_data), content_encoding='br')
     lines_br = []
     while (line := reader_br.readline()) is not None:
         lines_br.append(line)
     assert lines_br == expected_lines
 
-    reader_brotli = StreamingLineReader(io.BytesIO(br_data), content_encoding='brotli')
+    reader_brotli = StreamingByteReader(io.BytesIO(br_data), content_encoding='brotli')
     lines_brotli = []
     while (line := reader_brotli.readline()) is not None:
         lines_brotli.append(line)
@@ -324,13 +329,13 @@ def test_streaming_line_reader() -> None:
             self.pos += read_len
             return chunk
 
-    reader_chunked_gz = StreamingLineReader(SmallChunkStream(gz_data, 7), content_encoding='gzip')
+    reader_chunked_gz = StreamingByteReader(SmallChunkStream(gz_data, 7), content_encoding='gzip')
     lines_chunked_gz = []
     while (line := reader_chunked_gz.readline()) is not None:
         lines_chunked_gz.append(line)
     assert lines_chunked_gz == expected_lines
 
-    reader_chunked_br = StreamingLineReader(SmallChunkStream(br_data, 7), content_encoding='br')
+    reader_chunked_br = StreamingByteReader(SmallChunkStream(br_data, 7), content_encoding='br')
     lines_chunked_br = []
     while (line := reader_chunked_br.readline()) is not None:
         lines_chunked_br.append(line)
@@ -338,17 +343,17 @@ def test_streaming_line_reader() -> None:
 
     # 5. Unsupported Content-Encoding
     with pytest.raises(BadRequest) as exc_info:
-        StreamingLineReader(io.BytesIO(b'abc'), content_encoding='zstd')
+        StreamingByteReader(io.BytesIO(b'abc'), content_encoding='zstd')
     assert 'Unsupported Content-Encoding' in str(exc_info.value)
 
     # 6. Corrupted gzip data
-    reader_corrupted_gz = StreamingLineReader(io.BytesIO(b'not a gzip stream'), content_encoding='gzip')
+    reader_corrupted_gz = StreamingByteReader(io.BytesIO(b'not a gzip stream'), content_encoding='gzip')
     with pytest.raises(BadRequest) as exc_info:
         reader_corrupted_gz.readline()
     assert 'Decompression error' in str(exc_info.value)
 
     # 7. Truncated brotli stream
-    reader_truncated_br = StreamingLineReader(io.BytesIO(br_data[:len(br_data) // 2]), content_encoding='br')
+    reader_truncated_br = StreamingByteReader(io.BytesIO(br_data[:len(br_data) // 2]), content_encoding='br')
     with pytest.raises(BadRequest) as exc_info:
         while reader_truncated_br.readline() is not None:
             pass
@@ -356,14 +361,14 @@ def test_streaming_line_reader() -> None:
 
     # 8. Decompressed size exceeds limit
     with patch('upload_handlers.MAX_METADATA_SIZE', 10):
-        reader_limit = StreamingLineReader(io.BytesIO(gz_data), content_encoding='gzip')
+        reader_limit = StreamingByteReader(io.BytesIO(gz_data), content_encoding='gzip')
         with pytest.raises(BadRequest) as exc_info:
             reader_limit.readline()
         assert 'exceeds maximum size limit' in str(exc_info.value)
 
     # 9. Invalid UTF-8 bytes
     invalid_utf8_gz = gzip.compress(b'\xff\xfe\xfd\n')
-    reader_bad_utf8 = StreamingLineReader(io.BytesIO(invalid_utf8_gz), content_encoding='gzip')
+    reader_bad_utf8 = StreamingByteReader(io.BytesIO(invalid_utf8_gz), content_encoding='gzip')
     with pytest.raises(BadRequest) as exc_info:
         reader_bad_utf8.readline()
     assert 'Invalid UTF-8 encoding' in str(exc_info.value)
@@ -1036,12 +1041,12 @@ def test_is_lap_valid_llandow_session() -> None:
 
     db._track_mappings = None
     track_data = db.get_track(session_info.track_name)
-    assert track_data is not None, f"Track data for '{session_info.track_name}' should exist"
+    assert track_data is not None, f'Track data for {session_info.track_name!r} should exist'
     turns = track_data.get('turns', [])
     lap_length = float(track_data.get('lap_length', 1000.0))
 
     lap_numbers = sorted(df_telemetry['Lap'].astype(int).unique())
-    assert len(lap_numbers) >= 14, f"Expected at least 14 laps, got {len(lap_numbers)}"
+    assert len(lap_numbers) >= 14, f'Expected at least 14 laps, got {len(lap_numbers)}'
 
     validity = {}
     for lap_num in lap_numbers:
@@ -1054,12 +1059,12 @@ def test_is_lap_valid_llandow_session() -> None:
 
     # Full laps 2..13 must be valid
     for lap_num in range(2, 14):
-        assert validity[lap_num] is True, f"Lap {lap_num} should be valid"
+        assert validity[lap_num] is True, f'Lap {lap_num} should be valid'
 
     # Laps 14 and 15 (if present) are cutthrough / carpark laps and must NOT be valid
-    assert validity[14] is False, "Lap 14 (cutthrough shortcut) should be invalid"
+    assert validity[14] is False, 'Lap 14 (cutthrough shortcut) should be invalid'
     if 15 in validity:
-        assert validity[15] is False, "Lap 15 (carpark section) should be invalid"
+        assert validity[15] is False, 'Lap 15 (carpark section) should be invalid'
 
 
 def test_stream_upload_preserves_alphatiming_session(tmp_path: Path) -> None:
@@ -2403,3 +2408,384 @@ def test_files_upload_supersedes_stale_partial_session(tmp_path: Any) -> None:
 
         # Verify plot cache was invalidated for old session
         mock_invalidate.assert_any_call(['2026_05_10_rowrah_14_01_practice', '14_01_practice'])
+
+
+def test_streaming_byte_reader_methods() -> None:
+    raw_data = b'ABCDEFGHIJ0123456789'
+    reader = StreamingByteReader(io.BytesIO(raw_data))
+
+    # Peek does not consume
+    assert reader.peek(4) == b'ABCD'
+    assert reader.peek(4) == b'ABCD'
+    assert reader.peek(10) == b'ABCDEFGHIJ'
+
+    # Read exact consumes
+    assert reader.read_exact(4) == b'ABCD'
+    assert reader.peek(4) == b'EFGH'
+    assert reader.read_exact(6) == b'EFGHIJ'
+    assert reader.read_exact(10) == b'0123456789'
+
+    # Clean EOF returns empty bytes
+    assert reader.read_exact(5) == b''
+    assert reader.peek(5) == b''
+
+    # Test read_chunk and read_chunks
+    chunk1 = encode_brt1_chunk(0x01, b'BRT1')
+    chunk2 = encode_brt1_chunk(0x02, b'{}')
+    chunk_reader = StreamingByteReader(io.BytesIO(chunk1 + chunk2))
+    assert chunk_reader.read_chunk() == (0x01, b'BRT1')
+    assert chunk_reader.read_chunk() == (0x02, b'{}')
+    assert chunk_reader.read_chunk() is None
+
+    chunks_list = list(StreamingByteReader(io.BytesIO(chunk1 + chunk2)).read_chunks())
+    assert chunks_list == [(0x01, b'BRT1'), (0x02, b'{}')]
+
+    # Truncated chunk header
+    with pytest.raises(BadRequest, match='Truncated BRT1 chunk header'):
+        StreamingByteReader(io.BytesIO(b'\x04\x00')).read_chunk()
+
+    # Truncated chunk payload
+    with pytest.raises(BadRequest, match='Truncated BRT1 chunk payload'):
+        StreamingByteReader(io.BytesIO(b'\x05\x00\x01AB')).read_chunk()
+
+
+def encode_brt1_chunk(chunk_type: int, payload: bytes) -> bytes:
+    """Test helper: pack a single chunk with BRT1 framing."""
+    return struct.pack('<HB', len(payload), chunk_type) + payload
+
+
+def encode_brt1_stream(
+    metadata: dict[str, Any],
+    channels: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+) -> bytes:
+    """Test helper: encode metadata, channels, and records into a BRT1 binary payload."""
+    buf = bytearray()
+    buf.extend(encode_brt1_chunk(0x01, b'BRT1'))
+    meta_payload = json.dumps({'metadata': metadata, 'channels': channels}).encode('utf-8')
+    buf.extend(encode_brt1_chunk(0x02, meta_payload))
+
+    if not records:
+        return bytes(buf)
+
+    M = len(channels)
+    channel_names = [c['name'] for c in channels]
+    scales = [float(c['scale']) for c in channels]
+
+    def get_record_val(r: dict[str, Any], col_name: str) -> float:
+        v = r.get(col_name)
+        if v is None:
+            return math.nan
+        return float(v)
+
+    first_vals = [get_record_val(records[0], name) for name in channel_names]
+    buf.extend(encode_brt1_chunk(0x03, struct.pack(f'<{M}d', *first_vals)))
+    prev_values = list(first_vals)
+
+    for i in range(1, len(records)):
+        r = records[i]
+        curr_vals = [get_record_val(r, name) for name in channel_names]
+
+        need_keyframe = any(
+            math.isnan(prev_values[j]) and not math.isnan(curr_vals[j])
+            for j in range(M)
+        )
+
+        if need_keyframe:
+            buf.extend(encode_brt1_chunk(0x03, struct.pack(f'<{M}d', *curr_vals)))
+            prev_values = list(curr_vals)
+        else:
+            deltas = []
+            for j in range(M):
+                c_val = curr_vals[j]
+                p_val = prev_values[j]
+                if math.isnan(c_val):
+                    deltas.append(-32768)
+                else:
+                    if math.isnan(p_val):
+                        d = int(round(c_val / scales[j]))
+                    else:
+                        d = int(round((c_val - p_val) / scales[j]))
+                    d = max(-32767, min(32767, d))
+                    deltas.append(d)
+                    curr_vals[j] = (0.0 if math.isnan(p_val) else p_val) + d * scales[j]
+            buf.extend(encode_brt1_chunk(0x04, struct.pack(f'<{M}h', *deltas)))
+            prev_values = list(curr_vals)
+
+    return bytes(buf)
+
+
+def test_brt1_encode_and_parse_json_metadata() -> None:
+    meta_dict = {
+        'Track name': 'Rowrah',
+        'Date': '2026-05-10',
+        'Time': '14:30:00',
+        'Driver name': 'Driver A',
+        'League': 'kartsim',
+        'Class': 'cadet',
+        'Session': 'Practice',
+        'kart_number': '12',
+        'Distance to rear axle': 1.5,
+        'Conditions': 'Dry',
+        'Temperature': '18.0',
+        'Weather': 'Sunny',
+        'Session ID': 'practice_1'
+    }
+    parsed = parse_json_metadata(meta_dict)
+    assert parsed.track_name == 'Rowrah'
+    assert parsed.driver_name == 'Driver A'
+    assert parsed.session_id == 'practice_1'
+    assert parsed.distance_to_rear_axle == 1.5
+
+    # Test that non-canonical field names (e.g. driver_name, class_name) are rejected
+    with pytest.raises(BadRequest, match='Driver name is missing'):
+        bad_meta = dict(meta_dict)
+        del bad_meta['Driver name']
+        bad_meta['driver_name'] = 'Driver A'
+        parse_json_metadata(bad_meta)
+
+    with pytest.raises(BadRequest, match='Class is missing'):
+        bad_meta = dict(meta_dict)
+        del bad_meta['Class']
+        bad_meta['class_name'] = 'cadet'
+        parse_json_metadata(bad_meta)
+
+    # Test chunk encoding
+    chunk = encode_brt1_chunk(0x01, b'BRT1')
+    assert len(chunk) == 7
+    assert chunk[:3] == b'\x04\x00\x01'
+    assert chunk[3:] == b'BRT1'
+
+
+def test_brt1_stream_upload_flow(tmp_path: Path) -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['kartsim']
+            }
+        }
+    }
+
+    meta = {
+        'Track name': 'Rowrah',
+        'Date': '2026-05-10',
+        'Time': '14:30:00',
+        'Driver name': 'Driver A',
+        'League': 'kartsim',
+        'Class': 'cadet',
+        'Session': 'Practice',
+        'Session ID': 'practice_brt1'
+    }
+    channels = [
+        {'name': 'Time', 'scale': 0.001},
+        {'name': 'Latitude', 'scale': 1e-7},
+        {'name': 'Longitude', 'scale': 1e-7},
+        {'name': 'Speed', 'scale': 0.01},
+        {'name': 'Lap', 'scale': 1.0}
+    ]
+    records = [
+        {'Time': 0.0, 'Latitude': 54.1230000, 'Longitude': -3.1230000, 'Speed': 10.0, 'Lap': 1},
+        {'Time': 0.01, 'Latitude': 54.1230100, 'Longitude': -3.1230050, 'Speed': 10.2, 'Lap': 1},
+        {'Time': 0.02, 'Latitude': 54.1230200, 'Longitude': -3.1230100, 'Speed': 10.5, 'Lap': 1}
+    ]
+
+    brt1_bytes = encode_brt1_stream(meta, channels, records)
+
+    with patch('auth.load_keys', return_value=mock_keys):
+        patch_path = 'upload_handlers.populate_db.populate_single_session'
+        with patch(patch_path, return_value='session_brt1_123') as mock_populate:
+            with patch('upload_handlers.db.get_track', return_value={}) as mock_get_track:
+                response = client.post(
+                    '/api/upload/stream',
+                    data=brt1_bytes,
+                    headers={
+                        'X-API-Key': 'test_key',
+                        'Content-Type': 'application/octet-stream'
+                    },
+                    environ_base={'REMOTE_ADDR': '192.168.1.100'}
+                )
+                assert response.status_code == 200
+                assert response.get_json() == {
+                    'message': 'Session completed and imported successfully.',
+                    'session_id': 'session_brt1_123'
+                }
+                mock_populate.assert_called_once()
+                mock_get_track.assert_called()
+
+
+def test_brt1_stream_upload_compressed(tmp_path: Path) -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['kartsim']
+            }
+        }
+    }
+
+    meta = {
+        'Track name': 'Rowrah',
+        'Date': '2026-05-10',
+        'Time': '14:30:00',
+        'Driver name': 'Driver A',
+        'League': 'kartsim',
+        'Class': 'cadet',
+        'Session': 'Practice'
+    }
+    channels = [
+        {'name': 'Time', 'scale': 0.001},
+        {'name': 'Latitude', 'scale': 1e-7},
+        {'name': 'Longitude', 'scale': 1e-7},
+        {'name': 'Speed', 'scale': 0.01},
+        {'name': 'Lap', 'scale': 1.0}
+    ]
+    records = [
+        {'Time': 0.0, 'Latitude': 54.123, 'Longitude': -3.123, 'Speed': 10.0, 'Lap': 1},
+        {'Time': 0.01, 'Latitude': 54.12301, 'Longitude': -3.12301, 'Speed': 10.2, 'Lap': 1}
+    ]
+
+    brt1_bytes = encode_brt1_stream(meta, channels, records)
+
+    # 1. Gzip compression
+    gz_data = gzip.compress(brt1_bytes)
+    with patch('auth.load_keys', return_value=mock_keys):
+        patch_path = 'upload_handlers.populate_db.populate_single_session'
+        with patch(patch_path, return_value='session_gz_123'):
+            with patch('upload_handlers.db.get_track', return_value={}):
+                response = client.post(
+                    '/api/upload/stream',
+                    data=gz_data,
+                    headers={
+                        'X-API-Key': 'test_key',
+                        'Content-Encoding': 'gzip'
+                    },
+                    environ_base={'REMOTE_ADDR': '192.168.1.100'}
+                )
+                assert response.status_code == 200
+
+    # 2. Brotli compression
+    br_data = brotli.compress(brt1_bytes)
+    with patch('auth.load_keys', return_value=mock_keys):
+        patch_path = 'upload_handlers.populate_db.populate_single_session'
+        with patch(patch_path, return_value='session_br_123'):
+            with patch('upload_handlers.db.get_track', return_value={}):
+                response = client.post(
+                    '/api/upload/stream',
+                    data=br_data,
+                    headers={
+                        'X-API-Key': 'test_key',
+                        'Content-Encoding': 'br'
+                    },
+                    environ_base={'REMOTE_ADDR': '192.168.1.100'}
+                )
+                assert response.status_code == 200
+
+
+def test_brt1_stream_upload_nan_and_keyframes(tmp_path: Path) -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['kartsim']
+            }
+        }
+    }
+
+    meta = {
+        'Track name': 'Rowrah',
+        'Date': '2026-05-10',
+        'Time': '14:30:00',
+        'Driver name': 'Driver A',
+        'League': 'kartsim',
+        'Class': 'cadet',
+        'Session': 'Practice'
+    }
+    channels = [
+        {'name': 'Time', 'scale': 0.001},
+        {'name': 'Latitude', 'scale': 1e-7},
+        {'name': 'Longitude', 'scale': 1e-7},
+        {'name': 'Speed', 'scale': 0.01},
+        {'name': 'Lap', 'scale': 1.0}
+    ]
+    records = [
+        {'Time': 0.0, 'Latitude': 54.123, 'Longitude': -3.123, 'Speed': 10.0, 'Lap': 1},
+        {'Time': 0.01, 'Latitude': math.nan, 'Longitude': math.nan, 'Speed': 10.2, 'Lap': 1},
+        {'Time': 0.02, 'Latitude': 54.124, 'Longitude': -3.124, 'Speed': 10.5, 'Lap': 1}
+    ]
+
+    brt1_bytes = encode_brt1_stream(meta, channels, records)
+
+    with patch('auth.load_keys', return_value=mock_keys):
+        patch_path = 'upload_handlers.populate_db.populate_single_session'
+        with patch(patch_path, return_value='session_kf_123'):
+            with patch('upload_handlers.db.get_track', return_value={}):
+                response = client.post(
+                    '/api/upload/stream',
+                    data=brt1_bytes,
+                    headers={'X-API-Key': 'test_key'},
+                    environ_base={'REMOTE_ADDR': '192.168.1.100'}
+                )
+                assert response.status_code == 200
+
+
+def test_brt1_stream_upload_error_handling() -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['kartsim']
+            }
+        }
+    }
+
+    meta = {
+        'Track name': 'Rowrah',
+        'Date': '2026-05-10',
+        'Time': '14:30:00',
+        'Driver name': 'Driver A',
+        'League': 'kartsim',
+        'Class': 'cadet',
+        'Session': 'Practice'
+    }
+    channels = [{'name': 'Time', 'scale': 0.001}, {'name': 'Speed', 'scale': 0.01}]
+
+    with patch('auth.load_keys', return_value=mock_keys):
+        # 1. Truncated magic chunk header
+        res = client.post('/api/upload/stream', data=b'\x04\x00', headers={'X-API-Key': 'test_key'})
+        assert res.status_code == 400
+
+        # 2. Magic chunk followed immediately by EOF (missing metadata chunk)
+        magic_only = encode_brt1_chunk(0x01, b'BRT1')
+        res = client.post('/api/upload/stream', data=magic_only, headers={'X-API-Key': 'test_key'})
+        assert res.status_code == 400
+
+        # 3. Truncated metadata payload
+        truncated_meta = magic_only + b'\x10\x00\x02{"bad":'
+        res = client.post('/api/upload/stream', data=truncated_meta, headers={'X-API-Key': 'test_key'})
+        assert res.status_code == 400
+
+        # 4. Unknown chunk type
+        meta_chunk = encode_brt1_chunk(
+            0x02, json.dumps({'metadata': meta, 'channels': channels}).encode('utf-8')
+        )
+        unknown_chunk = b'\x02\x00\x77\x00\x00'  # Type 0x77
+        res = client.post(
+            '/api/upload/stream',
+            data=magic_only + meta_chunk + unknown_chunk,
+            headers={'X-API-Key': 'test_key'}
+        )
+        assert res.status_code == 400
+        assert 'Unknown BRT1 chunk type' in res.get_json()['error']
+
+        # 5. Forbidden driver
+        forbidden_meta = dict(meta)
+        forbidden_meta['Driver name'] = 'Forbidden Driver'
+        forbidden_bytes = encode_brt1_stream(forbidden_meta, channels, [{'Time': 0.0, 'Speed': 10.0}])
+        res = client.post('/api/upload/stream', data=forbidden_bytes, headers={'X-API-Key': 'test_key'})
+        assert res.status_code == 403
+        assert 'Forbidden: Upload for driver' in res.get_json()['error']

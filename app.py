@@ -73,6 +73,9 @@ def teardown_db(exception: Any = None) -> None:
 @app.before_request
 def _require_login() -> werkzeug_wrappers.Response | tuple[str, int] | None:
     """Global auth gate — skipped for localhost, static files, auth, about, settings, and gallery endpoints."""
+    if request.method == 'OPTIONS':
+        return None
+
     if request.endpoint in (
         'auth', 'static', 'about', 'favicon', 'settings', 'save_settings', 'auth_builder'
     ) or (

@@ -36,7 +36,6 @@ A BRT1 stream consists of a continuous sequence of framed chunks:
 | **`0x02`** | **Metadata JSON Chunk** | Session metadata & channel schema with fixed scales. Usually sent immediately after magic. |
 | **`0x03`** | **Baseline / Keyframe Chunk** | Full-precision absolute values (`float64_le` for each channel). Sets initial values or resyncs stream. |
 | **`0x04`** | **Telemetry Delta Chunk** | One or more samples of 16-bit signed deltas ($M \times \text{int16\_le}$ per sample). |
-| **`0xFF`** | **End of Stream (EOS)** | Optional explicit end-of-stream indicator (payload length = 0). |
 
 ---
 
@@ -57,21 +56,22 @@ Total size on wire: **7 bytes** (`04 00 01 42 52 54 31`).
 - **`payload`**: UTF-8 encoded JSON object.
 
 #### JSON Structure:
+Metadata fields match the canonical CSV format headers (`Track name`, `Date`, `Time`, `Driver name`, `League`, `Class`, `Session`, etc.):
 ```json
 {
   "metadata": {
-    "track_name": "Rowrah",
-    "date": "2026-05-10",
-    "time": "14:30:00",
-    "driver_name": "Driver A",
-    "league": "kartsim",
-    "class_name": "cadet",
-    "session_name": "Practice",
+    "Track name": "Rowrah",
+    "Date": "2026-05-10",
+    "Time": "14:30:00",
+    "Driver name": "Driver A",
+    "League": "kartsim",
+    "Class": "cadet",
+    "Session": "Practice",
     "kart_number": "12",
-    "distance_to_rear_axle": 1.5,
-    "track_conditions": "Dry",
-    "temperature": "18.0",
-    "weather": "Sunny"
+    "Distance to rear axle": 1.5,
+    "Conditions": "Dry",
+    "Temperature": "18.0",
+    "Weather": "Sunny"
   },
   "channels": [
     {"name": "Time", "scale": 0.001},
@@ -136,15 +136,6 @@ Streams telemetry samples in real time as they are captured.
 
 ---
 
-### 5. End of Stream Chunk (`Type 0xFF`)
-- **`chunk_len`**: `0` (`0x0000`)
-- **`chunk_type`**: `0xFF`
-- **`payload`**: Empty
-
-Signals intentional completion of the streaming session. The server also cleanly finalizes if the HTTP connection closes (EOF).
-
----
-
 ## Bandwidth & Streaming Comparison
 
 For a typical 100 Hz kart telemetry stream with 12 channels:
@@ -164,9 +155,9 @@ For a typical 100 Hz kart telemetry stream with 12 channels:
 ```mermaid
 flowchart TD
     A["HTTP POST /api/upload/stream"] --> B["HTTP Transport Layer\n(Optional Content-Encoding: br/gzip/deflate)"]
-    B --> C["StreamingByteReader\n(Peek first 3 bytes)"]
+    B --> C["StreamingByteReader\n(Peek first 7 bytes)"]
     
-    C --> D{"Type == 0x01 AND Len == 4\n(Payload == 'BRT1')?"}
+    C --> D{"reader.peek(7) == b'\\x04\\x00\\x01BRT1'?"}
     D -- "No (ASCII)" --> E["Legacy CSV Stream Parser"]
     D -- "Yes ('BRT1')" --> F["Binary Chunk Parser"]
     
@@ -176,8 +167,7 @@ flowchart TD
     H --> I["Stream Loop: Read Chunks"]
     I --> J{"Chunk Type"}
     J -- "0x03 (Baseline)" --> K["Set Channel Current Values"]
-    J -- "0x04 (Deltas)" --> L["Accumulate: v = v_prev + delta * scale\nEmit Record Dict"]
-    J -- "0xFF (EOS)" --> M["Mark Stream Finished"]
+    J -- "0x04 (Deltas)" --> L["Accumulate: v += delta * scale\nEmit Record Dict"]
     
     L --> N["Buffer Decoded Records"]
     N --> O{"15s Elapsed OR EOF?"}
@@ -189,11 +179,11 @@ flowchart TD
 ### Server Components:
 
 1. **`StreamingByteReader`**:
-   - Extends the existing `StreamingLineReader` buffering logic in [upload_handlers.py](file:///mnt/data/kibergus/karting/analysis/upload_handlers.py) to support binary streaming: `read_exact(n: int) -> bytes` and `peek(n: int) -> bytes`.
+   - Implements streaming byte and line buffering logic in `upload_handlers.py` supporting `read_exact(n: int) -> bytes`, `peek(n: int) -> bytes`, `readline() -> str | None`, and `read_chunk() -> tuple[int, bytes] | None`.
    - Handles decompression transparently using standard `Content-Encoding: br`, `gzip`, or `deflate`.
 
 2. **Auto-Format Detection**:
-   - The reader inspects the first 3 bytes. If `[0x04, 0x00, 0x01]` (length 4, type 0x01) followed by `b'BRT1'`, it activates the binary parser.
+   - The reader inspects the first 7 bytes via `reader.peek(7) == b'\x04\x00\x01BRT1'`.
    - Otherwise, it falls back to the legacy CSV line reader.
 
 3. **15-Second Server Batching & Real-Time Support**:

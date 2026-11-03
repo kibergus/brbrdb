@@ -16,6 +16,7 @@
 import os
 import json
 import csv
+import struct
 import math
 import datetime
 import time
@@ -24,7 +25,7 @@ import re
 from urllib.parse import unquote
 import zlib
 import brotli  # type: ignore[import-untyped]
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 from dataclasses import dataclass, asdict
 import numpy as np
 import pandas as pd
@@ -241,6 +242,15 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
         origin=origin,
         session_id=session_id,
     )
+
+
+def parse_json_metadata(meta_dict: dict[str, Any]) -> CSVSessionMetadata:
+    """Parses metadata dictionary from BRT1 metadata JSON chunk into CSVSessionMetadata.
+
+    Follows the canonical CSV metadata format fields.
+    """
+    rows = [[str(k), str(v)] for k, v in meta_dict.items() if v is not None]
+    return parse_csv_metadata_rows(rows)
 
 
 def parse_streamed_csv_records(csv_content: str) -> tuple[list[dict], dict]:
@@ -1217,11 +1227,12 @@ def process_telemetry_derivative_data(
     return df_telemetry, metadata_json, df_summary
 
 
-class StreamingLineReader:
-    """Reads lines incrementally from a streaming request body with optional compression.
+class StreamingByteReader:
+    """Reads bytes or lines incrementally from a streaming request body with optional compression.
 
     Supports uncompressed (identity), gzip, and brotli (br) Content-Encoding.
     Enforces maximum size limits on both raw incoming data and decompressed data.
+    Provides read_exact(n) and peek(n) for binary stream decoding, and readline() for text.
     """
 
     CHUNK_SIZE = 64 * 1024
@@ -1250,35 +1261,8 @@ class StreamingLineReader:
         self.pos = 0
         self.eof = False
 
-    def readline(self) -> str | None:
-        while True:
-            idx = self.buffer.find(b'\n', self.pos)
-            if idx != -1:
-                line_bytes = self.buffer[self.pos:idx + 1]
-                self.pos = idx + 1
-                try:
-                    return line_bytes.decode('utf-8')
-                except UnicodeDecodeError as e:
-                    raise BadRequest(f'Invalid UTF-8 encoding in CSV data: {e}')
-
-            if self.eof:
-                if self.pos < len(self.buffer):
-                    line_bytes = self.buffer[self.pos:]
-                    self.buffer.clear()
-                    self.pos = 0
-                    try:
-                        return line_bytes.decode('utf-8')
-                    except UnicodeDecodeError as e:
-                        raise BadRequest(f'Invalid UTF-8 encoding in CSV data: {e}')
-                return None
-
-            if self.pos > 0:
-                if self.pos >= len(self.buffer):
-                    self.buffer.clear()
-                else:
-                    del self.buffer[:self.pos]
-                self.pos = 0
-
+    def _fill_buffer(self, min_bytes: int = 1) -> None:
+        while len(self.buffer) - self.pos < min_bytes and not self.eof:
             chunk = self.stream.read(self.CHUNK_SIZE)
             if chunk:
                 self.raw_bytes_read += len(chunk)
@@ -1326,10 +1310,203 @@ class StreamingLineReader:
                             raise
                         raise BadRequest(f'Decompression error: {e}')
 
+    def _compact_buffer(self) -> None:
+        if self.pos >= len(self.buffer):
+            self.buffer.clear()
+            self.pos = 0
+        elif self.pos > 32 * 1024:
+            del self.buffer[:self.pos]
+            self.pos = 0
+
+    def peek(self, n: int) -> bytes:
+        """Peeks up to n bytes ahead without advancing the read position."""
+        self._fill_buffer(n)
+        return bytes(self.buffer[self.pos:self.pos + n])
+
+    def read_exact(self, n: int) -> bytes:
+        """Reads exactly n bytes, or fewer if EOF is reached."""
+        self._fill_buffer(n)
+        available = min(n, len(self.buffer) - self.pos)
+        res = bytes(self.buffer[self.pos:self.pos + available])
+        self.pos += available
+        self._compact_buffer()
+        return res
+
+    def readline(self) -> str | None:
+        while True:
+            idx = self.buffer.find(b'\n', self.pos)
+            if idx != -1:
+                line_bytes = self.buffer[self.pos:idx + 1]
+                self.pos = idx + 1
+                self._compact_buffer()
+                try:
+                    return line_bytes.decode('utf-8')
+                except UnicodeDecodeError as e:
+                    raise BadRequest(f'Invalid UTF-8 encoding in CSV data: {e}')
+
+            if self.eof:
+                if self.pos < len(self.buffer):
+                    line_bytes = self.buffer[self.pos:]
+                    self.buffer.clear()
+                    self.pos = 0
+                    try:
+                        return line_bytes.decode('utf-8')
+                    except UnicodeDecodeError as e:
+                        raise BadRequest(f'Invalid UTF-8 encoding in CSV data: {e}')
+                return None
+
+            self._fill_buffer(len(self.buffer) - self.pos + 1)
+
+    def read_chunk(self) -> tuple[int, bytes] | None:
+        """Reads a single framed BRT1 chunk: 2B length, 1B type, and payload bytes.
+
+        Returns:
+            A tuple of (chunk_type, payload), or None if at EOF.
+        Raises:
+            BadRequest: If the 3-byte header or chunk payload is truncated.
+        """
+        hdr = self.read_exact(3)
+        if not hdr:
+            return None
+        if len(hdr) < 3:
+            raise BadRequest('Truncated BRT1 chunk header.')
+        chunk_len, chunk_type = struct.unpack('<HB', hdr)
+        payload = self.read_exact(chunk_len)
+        if len(payload) < chunk_len:
+            raise BadRequest(
+                f'Truncated BRT1 chunk payload: expected {chunk_len} bytes, got {len(payload)}.'
+            )
+        return chunk_type, payload
+
+    def read_chunks(self) -> Iterator[tuple[int, bytes]]:
+        """Yields framed BRT1 chunks (chunk_type, payload) until EOF."""
+        while (chunk := self.read_chunk()) is not None:
+            yield chunk
+
+
+def parse_brt1_stream_header(
+    reader: StreamingByteReader,
+) -> tuple[CSVSessionMetadata, list[str], list[float]]:
+    """Reads and validates BRT1 Magic chunk (0x01) and Metadata JSON chunk (0x02)."""
+    magic_chunk = reader.read_chunk()
+    if magic_chunk is None or magic_chunk[0] != 0x01 or magic_chunk[1] != b'BRT1':
+        raise BadRequest('Invalid BRT1 magic chunk.')
+
+    meta_chunk = reader.read_chunk()
+    if meta_chunk is None:
+        raise BadRequest('Truncated BRT1 metadata chunk header.')
+    meta_type, meta_payload = meta_chunk
+    if meta_type != 0x02:
+        raise BadRequest(f'Expected BRT1 metadata chunk (0x02), got 0x{meta_type:02x}')
+
+    try:
+        meta_json = json.loads(meta_payload.decode('utf-8'))
+    except Exception as e:
+        raise BadRequest(f'Invalid JSON in BRT1 metadata chunk: {e}')
+
+    metadata = parse_json_metadata(meta_json.get('metadata', {}))
+    channels = meta_json.get('channels', [])
+    if not channels or not isinstance(channels, list):
+        raise BadRequest('BRT1 metadata chunk must contain a non-empty channels list.')
+
+    channel_names: list[str] = []
+    channel_scales: list[float] = []
+    for ch in channels:
+        if not isinstance(ch, dict) or 'name' not in ch or 'scale' not in ch:
+            raise BadRequest('Each channel in channels must have "name" and "scale".')
+        name = str(ch['name'])
+        try:
+            scale = float(ch['scale'])
+        except (ValueError, TypeError):
+            raise BadRequest(f'Invalid scale for channel {name!r}: {ch["scale"]!r}')
+        if scale <= 0 or math.isnan(scale):
+            raise BadRequest(f'Channel scale must be positive: {name!r}')
+        channel_names.append(name)
+        channel_scales.append(scale)
+
+    return metadata, channel_names, channel_scales
+
+
+def iter_brt1_records(
+    reader: StreamingByteReader,
+    session_start_datetime: datetime.datetime,
+    channel_names: list[str],
+    channel_scales: list[float],
+) -> Iterator[dict[str, Any]]:
+    """Yields telemetry record dictionaries decoded from BRT1 binary chunks (0x03, 0x04)."""
+    M = len(channel_names)
+    time_idx = channel_names.index('Time') if 'Time' in channel_names else None
+    current_values = [math.nan] * M
+
+    def record_from_current_values() -> dict[str, Any]:
+        rec: dict[str, Any] = {}
+        for idx, (c_name, c_val) in enumerate(zip(channel_names, current_values)):
+            if math.isnan(c_val):
+                rec[c_name] = ''
+            elif idx == time_idx:
+                dt_rec = (
+                    session_start_datetime.replace(tzinfo=None)
+                    + datetime.timedelta(seconds=c_val)
+                )
+                rec[c_name] = dt_rec.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+            elif c_name == 'Lap':
+                rec[c_name] = str(int(round(c_val)))
+            else:
+                rec[c_name] = round(float(c_val), 8)
+        return rec
+
+    for chunk_type, payload in reader.read_chunks():
+        if chunk_type == 0x03:  # Baseline / Keyframe
+            if len(payload) != M * 8:
+                raise BadRequest(
+                    f'Invalid chunk length {len(payload)} for baseline chunk with {M} channels (expected {M * 8}).'
+                )
+            unpacked_floats = struct.unpack(f'<{M}d', payload)
+            current_values = list(unpacked_floats)
+            if time_idx is None or not math.isnan(current_values[time_idx]):
+                yield record_from_current_values()
+        elif chunk_type == 0x04:  # Telemetry Delta
+            sample_size = M * 2
+            if sample_size == 0 or len(payload) % sample_size != 0:
+                raise BadRequest(
+                    f'Invalid chunk length {len(payload)} for delta chunk with {M} channels '
+                    f'(must be multiple of {sample_size}).'
+                )
+            for deltas in struct.iter_unpack(f'<{M}h', payload):
+                for j in range(M):
+                    d_val = deltas[j]
+                    if d_val == -32768:
+                        current_values[j] = math.nan
+                    else:
+                        current_values[j] += d_val * channel_scales[j]
+                yield record_from_current_values()
+        elif chunk_type in (0x01, 0x02):
+            pass
+        else:
+            raise BadRequest(f'Unknown BRT1 chunk type: 0x{chunk_type:02x}')
+
+
+def iter_csv_records(
+    reader: StreamingByteReader,
+    csv_header_line_str: str,
+) -> Iterator[dict[str, Any]]:
+    """Yields telemetry record dictionaries decoded from CSV lines."""
+    fieldnames = [c.strip() for c in next(csv.reader([csv_header_line_str]))]
+    while (line_str := reader.readline()) is not None:
+        if not line_str.strip():
+            continue
+        row_cols = next(csv.reader([line_str]))
+        record = {
+            fieldnames[idx]: val
+            for idx, val in enumerate(row_cols)
+            if idx < len(fieldnames) and val is not None
+        }
+        yield record
+
 
 @upload_blueprint.route('/api/upload/stream', methods=['POST'])
 def stream_upload() -> Any:
-    """Stream telemetry CSV directly into the handler.
+    """Stream telemetry (CSV or BRT1 binary) directly into the handler.
     Consumes the stream and populates the database and files continuously.
     """
     acl = auth.get_current_acl()
@@ -1337,18 +1514,29 @@ def stream_upload() -> Any:
         raise Forbidden('Forbidden: No session upload permission.')
 
     content_encoding = request.content_encoding or request.headers.get('Content-Encoding')
-    line_reader = StreamingLineReader(request.stream, content_encoding=content_encoding)
-    read_line_with_limit = line_reader.readline
+    reader = StreamingByteReader(request.stream, content_encoding=content_encoding)
 
-    # 1. Read first real lines until an empty line (metadata block/header)
-    header_lines: list[str] = []
-    while line := read_line_with_limit():
-        if not line.strip():
-            break
-        header_lines.append(line)
+    # Auto-format detection: peek first 7 bytes to check for BRT1 magic chunk
+    is_binary_brt1 = reader.peek(7) == b'\x04\x00\x01BRT1'
 
-    # Parse the header metadata
-    metadata = parse_csv_metadata_rows(csv.reader(header_lines))
+    if is_binary_brt1:
+        metadata, channel_names, channel_scales = parse_brt1_stream_header(reader)
+        records_iter = iter_brt1_records(
+            reader, metadata.session_start_datetime, channel_names, channel_scales
+        )
+    else:
+        # Legacy CSV Stream Parser
+        header_lines: list[str] = []
+        while line := reader.readline():
+            if not line.strip():
+                break
+            header_lines.append(line)
+
+        metadata = parse_csv_metadata_rows(csv.reader(header_lines))
+        csv_header_line_str = reader.readline()
+        if not csv_header_line_str:
+            raise BadRequest('No telemetry records found in the streamed CSV.')
+        records_iter = iter_csv_records(reader, csv_header_line_str)
 
     # ACL validation
     if not auth.can_upload_session_for_league(acl, metadata.league):
@@ -1417,14 +1605,6 @@ def stream_upload() -> Any:
                             'in the existing session.'
                         )
 
-    # 2. Read the CSV header line and remember it
-    csv_header_line_str = read_line_with_limit()
-    if not csv_header_line_str:
-        raise BadRequest('No telemetry records found in the streamed CSV.')
-
-    # 3. Read lines one by one, process them, write processed results to a buffer,
-    # and after each line check if 15 seconds have passed (or the file has been closed)
-    # and write data to the filesystem and to the DB.
     existing_lines = load_existing_telemetry_lines(telemetry_path)
     if existing_lines:
         ex_origin_lat = None
@@ -1458,14 +1638,13 @@ def stream_upload() -> Any:
                 lon=ex_origin_lon,
                 heading=ex_origin_heading,
             )
-    pruned_and_merged = False
 
+    pruned_and_merged = False
     written_rows_count = 0
     last_write_time = time.time()
     db_session_id = None
-    # Accumulate ALL raw records across the entire stream so that lap detection
-    # and derivative processing always sees the full session data on each flush.
     all_raw_records: list[dict] = []
+    buffered_records: list[dict] = []
 
     with open(telemetry_path, 'w', newline='', encoding='utf-8') as telemetry_file:
         writer = csv.writer(telemetry_file)
@@ -1487,148 +1666,128 @@ def stream_upload() -> Any:
             writer.writerow(['Track Origin Heading', metadata.origin.heading])
         writer.writerow([])  # Mandatory separator
 
-        buffered_lines: list[str] = []
-        while True:
-            line_str = read_line_with_limit()
-            if line_str is not None:
-                buffered_lines.append(line_str)
+        def flush_data() -> None:
+            nonlocal pruned_and_merged, written_rows_count, last_write_time, db_session_id
+            if not buffered_records:
+                return
 
-            now = time.time()
-            should_write = (now - last_write_time >= STREAM_FLUSH_INTERVAL_SEC) or (line_str is None)
+            new_records = list(buffered_records)
+            buffered_records.clear()
 
-            if should_write and buffered_lines:
-                # Parse newly buffered lines
-                reader = csv.DictReader([csv_header_line_str] + buffered_lines)
-                new_records = []
-                for row_dict in reader:
-                    record = {
-                        k: v for k, v in row_dict.items()
-                        if k is not None and v is not None
-                    }
-                    new_records.append(record)
-                buffered_lines.clear()
+            if new_records:
+                if not pruned_and_merged:
+                    new_timestamps = []
+                    for r in new_records:
+                        t_val = r.get('Time')
+                        if t_val:
+                            dt = to_naive_datetime(t_val)
+                            if dt is not None:
+                                new_timestamps.append(dt)
 
-                if new_records:
-                    if not pruned_and_merged:
-                        # Find the minimal timestamp in the newly uploaded records
-                        new_timestamps = []
-                        for r in new_records:
-                            t_val = r.get('Time')
-                            if t_val:
-                                dt = to_naive_datetime(t_val)
-                                if dt is not None:
-                                    new_timestamps.append(dt)
+                    if new_timestamps:
+                        min_new_timestamp = min(new_timestamps)
+                        blank_idx = -1
+                        for idx, line in enumerate(existing_lines):
+                            if not line.strip():
+                                blank_idx = idx
+                                break
 
-                        if new_timestamps:
-                            min_new_timestamp = min(new_timestamps)
+                        kept_pre_existing_records = []
+                        if blank_idx != -1 and blank_idx + 1 < len(existing_lines):
+                            existing_header_line = existing_lines[blank_idx + 1]
+                            existing_header_cols = [c.strip() for c in next(csv.reader([existing_header_line]))]
 
-                            # Find the data separator blank line
-                            blank_idx = -1
-                            for idx, line in enumerate(existing_lines):
-                                if not line.strip():
-                                    blank_idx = idx
-                                    break
+                            if 'Time' in existing_header_cols:
+                                existing_time_idx = existing_header_cols.index('Time')
+                                data_lines = []
+                                for line in existing_lines[blank_idx + 2:]:
+                                    if not line.strip():
+                                        continue
+                                    try:
+                                        row_cols = next(csv.reader([line]))
+                                        if len(row_cols) > existing_time_idx:
+                                            t_val = row_cols[existing_time_idx].strip()
+                                            dt = to_naive_datetime(t_val)
+                                            if dt is not None and dt < min_new_timestamp:
+                                                data_lines.append(line)
+                                    except Exception:
+                                        pass
 
-                            kept_pre_existing_records = []
-                            if blank_idx != -1 and blank_idx + 1 < len(existing_lines):
-                                # The line after the blank line is the header line
-                                existing_header_line = existing_lines[blank_idx + 1]
-                                existing_header_cols = [c.strip() for c in next(csv.reader([existing_header_line]))]
+                                if data_lines:
+                                    reader_existing = csv.DictReader([existing_header_line] + data_lines)
+                                    derived_cols_to_strip = {
+                                        'Lap', 'Lap Distance', 'Kart Heading', 'Yaw',
+                                        'Slip Angle Rear', 'Slip Angle Front',
+                                        'Lat Force Front', 'Lat Force Rear',
+                                        'Long Force Front', 'Long Force Rear'
+                                    }
+                                    kept_pre_existing_records = [
+                                        {k: v for k, v in row.items() if k not in derived_cols_to_strip}
+                                        for row in reader_existing
+                                    ]
 
-                                if 'Time' in existing_header_cols:
-                                    existing_time_idx = existing_header_cols.index('Time')
-
-                                    # Extract data lines
-                                    data_lines = []
-                                    for line in existing_lines[blank_idx + 2:]:
-                                        if not line.strip():
-                                            continue
-                                        try:
-                                            row_cols = next(csv.reader([line]))
-                                            if len(row_cols) > existing_time_idx:
-                                                t_val = row_cols[existing_time_idx].strip()
-                                                dt = to_naive_datetime(t_val)
-                                                if dt is not None and dt < min_new_timestamp:
-                                                    data_lines.append(line)
-                                        except Exception:
-                                            pass
-
-                                    # Dynamically parse the kept data lines using the existing file's header
-                                    if data_lines:
-                                        reader_existing = csv.DictReader([existing_header_line] + data_lines)
-                                        derived_cols_to_strip = {
-                                            'Lap', 'Lap Distance', 'Kart Heading', 'Yaw',
-                                            'Slip Angle Rear', 'Slip Angle Front',
-                                            'Lat Force Front', 'Lat Force Rear',
-                                            'Long Force Front', 'Long Force Rear'
-                                        }
-                                        kept_pre_existing_records = [
-                                            {k: v for k, v in row.items() if k not in derived_cols_to_strip}
-                                            for row in reader_existing
-                                        ]
-
-                            all_raw_records = kept_pre_existing_records + new_records
-                        else:
-                            all_raw_records = new_records
-
-                        pruned_and_merged = True
+                        all_raw_records.extend(kept_pre_existing_records)
+                        all_raw_records.extend(new_records)
                     else:
                         all_raw_records.extend(new_records)
 
-                if all_raw_records:
-                    # Process telemetry derivative data
-                    df_telemetry, metadata_json, df_summary = process_telemetry_derivative_data(
-                        all_raw_records, metadata, DATA_DIR
-                    )
+                    pruned_and_merged = True
+                else:
+                    all_raw_records.extend(new_records)
 
-                    # Append new processed rows
-                    new_df = df_telemetry.iloc[written_rows_count:]
-                    if not new_df.empty:
-                        # Write with header if it's the first chunk. The header will be based on standard column names.
-                        new_df.to_csv(telemetry_file, index=False, header=(written_rows_count == 0))
-                        telemetry_file.flush()
-                        written_rows_count = len(df_telemetry)
+            if all_raw_records:
+                df_telemetry, metadata_json, df_summary = process_telemetry_derivative_data(
+                    all_raw_records, metadata, DATA_DIR
+                )
 
-                    if not has_alphatiming:
-                        if os.path.exists(meta_path):
-                            try:
-                                with open(meta_path, 'r', encoding='utf-8') as f:
-                                    ex_meta = json.load(f)
-                                ex_dt_str = ex_meta.get('session_start_datetime')
-                                if ex_dt_str:
-                                    ex_dt = session_time.parse_session_start_datetime_tolerant(ex_dt_str)
-                                    resolved_dt = session_time.resolve_start_datetime_overwrite(
-                                        ex_dt, metadata.session_start_datetime, getattr(metadata, 'has_seconds', False)
-                                    )
-                                    metadata_json['session_start_datetime'] = (
-                                        resolved_dt.strftime('%Y-%m-%d %H:%M:%S')
-                                        if (getattr(metadata, 'has_seconds', False) or resolved_dt.second)
-                                        else resolved_dt.strftime('%Y-%m-%d %H:%M')
-                                    )
-                            except Exception:
-                                pass
+                new_df = df_telemetry.iloc[written_rows_count:]
+                if not new_df.empty:
+                    new_df.to_csv(telemetry_file, index=False, header=(written_rows_count == 0))
+                    telemetry_file.flush()
+                    written_rows_count = len(df_telemetry)
 
-                        # Write metadata.json
-                        with open(meta_path, 'w', encoding='utf-8') as f:
-                            json.dump(metadata_json, f, indent=4)
+                if not has_alphatiming:
+                    if os.path.exists(meta_path):
+                        try:
+                            with open(meta_path, 'r', encoding='utf-8') as f:
+                                ex_meta = json.load(f)
+                            ex_dt_str = ex_meta.get('session_start_datetime')
+                            if ex_dt_str:
+                                ex_dt = session_time.parse_session_start_datetime_tolerant(ex_dt_str)
+                                resolved_dt = session_time.resolve_start_datetime_overwrite(
+                                    ex_dt, metadata.session_start_datetime, getattr(metadata, 'has_seconds', False)
+                                )
+                                metadata_json['session_start_datetime'] = (
+                                    resolved_dt.strftime('%Y-%m-%d %H:%M:%S')
+                                    if (getattr(metadata, 'has_seconds', False) or resolved_dt.second)
+                                    else resolved_dt.strftime('%Y-%m-%d %H:%M')
+                                )
+                        except Exception:
+                            pass
 
-                        # Write summary csv
-                        df_summary.to_csv(summary_path, index=False)
+                    with open(meta_path, 'w', encoding='utf-8') as f:
+                        json.dump(metadata_json, f, indent=4)
 
-                        # Populate DB
-                        db_session_id = populate_db.populate_single_session(meta_path, db.conn, DATA_DIR)
-                    else:
-                        meeting_folder = os.path.basename(meeting_dir)
-                        db_session_id = f'{meeting_folder}_{session_filename}'
+                    df_summary.to_csv(summary_path, index=False)
+                    db_session_id = populate_db.populate_single_session(meta_path, db.conn, DATA_DIR)
+                else:
+                    meeting_folder_name = os.path.basename(meeting_dir)
+                    db_session_id = f'{meeting_folder_name}_{session_filename}'
 
-                    invalidate_plot_cache([db_session_id, session_filename])
+                invalidate_plot_cache([db_session_id, session_filename])
+                last_write_time = time.time()
 
-                    last_write_time = now
+        for record in records_iter:
+            buffered_records.append(record)
+            now = time.time()
+            if (now - last_write_time >= STREAM_FLUSH_INTERVAL_SEC) and buffered_records:
+                flush_data()
 
-            if line_str is None:
-                break
+        flush_data()
 
     if not db_session_id:
+        if is_binary_brt1:
+            raise BadRequest('No telemetry records found in the binary stream.')
         raise BadRequest('No telemetry records found in the streamed CSV.')
 
     return jsonify({
