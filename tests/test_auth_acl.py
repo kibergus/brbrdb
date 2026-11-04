@@ -402,7 +402,8 @@ def test_cookie_secure_flags_in_debug_and_non_debug() -> None:
     original_debug = app.app.debug
 
     try:
-        # Test debug mode: True (cookies should NOT be secure)
+        # Test debug mode: True
+        # Settings cookies should NOT be secure; auth_cookie is partitioned cross-site and always secure
         app.app.debug = True
         with patch('auth.load_keys', return_value=mock_keys):
             # Test auth GET
@@ -410,7 +411,9 @@ def test_cookie_secure_flags_in_debug_and_non_debug() -> None:
             cookies = response.headers.getlist('Set-Cookie')
             auth_cookie = next((c for c in cookies if auth.AUTH_COOKIE in c), None)
             assert auth_cookie is not None
-            assert 'Secure' not in auth_cookie and 'secure' not in auth_cookie
+            assert 'secure' in auth_cookie.lower()
+            assert 'samesite=none' in auth_cookie.lower()
+            assert 'partitioned' in auth_cookie.lower()
             assert f'Max-Age={app.COOKIE_MAX_AGE}' in auth_cookie
 
             # Test settings POST
@@ -435,6 +438,8 @@ def test_cookie_secure_flags_in_debug_and_non_debug() -> None:
             assert auth_cookie is not None
             # Check case-insensitively for Secure/secure attribute in cookie header
             assert 'secure' in auth_cookie.lower()
+            assert 'samesite=none' in auth_cookie.lower()
+            assert 'partitioned' in auth_cookie.lower()
             assert f'Max-Age={app.COOKIE_MAX_AGE}' in auth_cookie
 
             # Test settings POST
@@ -450,6 +455,49 @@ def test_cookie_secure_flags_in_debug_and_non_debug() -> None:
             assert f'Max-Age={app.COOKIE_MAX_AGE}' in disabled_cookie
     finally:
         app.app.debug = original_debug
+
+
+def test_auth_cookie_partitioned_cross_site_flags() -> None:
+    mock_keys = {
+        'test_key': {
+            'see_telemetry': True,
+        }
+    }
+    client = app.app.test_client()
+    with patch('auth.load_keys', return_value=mock_keys):
+        # 1. GET /auth?key=...
+        response = client.get('/auth?key=test_key&next=/telemetry/track')
+        cookies = response.headers.getlist('Set-Cookie')
+        auth_cookie = next((c for c in cookies if auth.AUTH_COOKIE in c), None)
+        assert auth_cookie is not None
+        assert 'secure' in auth_cookie.lower()
+        assert 'httponly' in auth_cookie.lower()
+        assert 'samesite=none' in auth_cookie.lower()
+        assert 'partitioned' in auth_cookie.lower()
+        assert 'path=/' in auth_cookie.lower()
+
+        # 2. POST /auth
+        response_post = client.post('/auth', data={'key': 'test_key', 'next': '/telemetry/track'})
+        cookies_post = response_post.headers.getlist('Set-Cookie')
+        auth_cookie_post = next((c for c in cookies_post if auth.AUTH_COOKIE in c), None)
+        assert auth_cookie_post is not None
+        assert 'secure' in auth_cookie_post.lower()
+        assert 'httponly' in auth_cookie_post.lower()
+        assert 'samesite=none' in auth_cookie_post.lower()
+        assert 'partitioned' in auth_cookie_post.lower()
+        assert 'path=/' in auth_cookie_post.lower()
+
+        # 3. Sliding refresh via after_request
+        client.set_cookie('auth_key', 'test_key')
+        response_refresh = client.get('/telemetry/track')
+        cookies_refresh = response_refresh.headers.getlist('Set-Cookie')
+        auth_cookie_refresh = next((c for c in cookies_refresh if auth.AUTH_COOKIE in c), None)
+        assert auth_cookie_refresh is not None
+        assert 'secure' in auth_cookie_refresh.lower()
+        assert 'httponly' in auth_cookie_refresh.lower()
+        assert 'samesite=none' in auth_cookie_refresh.lower()
+        assert 'partitioned' in auth_cookie_refresh.lower()
+        assert 'path=/' in auth_cookie_refresh.lower()
 
 
 def test_auth_redirects() -> None:

@@ -164,9 +164,11 @@ def refresh_cookies(response: Response) -> Response:
                 auth.AUTH_COOKIE,
                 key,
                 httponly=True,
-                samesite='Lax',
-                secure=not app.debug,
-                max_age=COOKIE_MAX_AGE
+                samesite='None',
+                secure=True,
+                partitioned=True,
+                max_age=COOKIE_MAX_AGE,
+                path='/'
             )
 
         for name in ('hero_pilot', 'disabled_heroes'):
@@ -224,9 +226,11 @@ def auth_route() -> werkzeug_wrappers.Response | str:
                 auth.AUTH_COOKIE,
                 key,
                 httponly=True,
-                samesite='Lax',
-                secure=not app.debug,
-                max_age=COOKIE_MAX_AGE
+                samesite='None',
+                secure=True,
+                partitioned=True,
+                max_age=COOKIE_MAX_AGE,
+                path='/'
             )
             return resp
         return render_template('auth.html', error='Invalid access key', next_url=next_url)
@@ -239,9 +243,11 @@ def auth_route() -> werkzeug_wrappers.Response | str:
             auth.AUTH_COOKIE,
             key,
             httponly=True,
-            samesite='Lax',
-            secure=not app.debug,
-            max_age=COOKIE_MAX_AGE
+            samesite='None',
+            secure=True,
+            partitioned=True,
+            max_age=COOKIE_MAX_AGE,
+            path='/'
         )
         return resp
 
