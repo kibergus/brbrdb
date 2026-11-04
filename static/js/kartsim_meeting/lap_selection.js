@@ -849,6 +849,41 @@ export function focusMapOnRange(startDist, endDist, padding = 50) {
     }
 }
 
+export function centerMapOnCoords(lat, lng, zoom) {
+    if (!state.map) return;
+    const numLat = parseFloat(lat);
+    const numLng = parseFloat(lng);
+    if (!isNaN(numLat) && !isNaN(numLng)) {
+        if (typeof state.map.panTo === 'function') {
+            state.map.panTo({ lat: numLat, lng: numLng });
+        } else if (typeof state.map.setCenter === 'function') {
+            state.map.setCenter({ lat: numLat, lng: numLng });
+        }
+        if (zoom !== undefined && zoom !== null && typeof state.map.setZoom === 'function') {
+            const z = parseInt(zoom, 10);
+            if (!isNaN(z)) {
+                state.map.setZoom(z);
+            }
+        }
+    }
+}
+
+export function seekToDistance(dist) {
+    handleReportTriggerAction({ dist });
+}
+
+export function setPlotXLim(min, max) {
+    if (min !== undefined && max !== undefined) {
+        setTelemetryRange(min, max);
+    } else if (Array.isArray(min)) {
+        setTelemetryRange(min);
+    }
+}
+
+export function setGroupALaps(lapsA) {
+    selectLaps(lapsA, undefined);
+}
+
 export function setTelemetryRange(startDist, endDist) {
     let range = null;
     if (Array.isArray(startDist) && startDist.length === 2) {
@@ -2090,6 +2125,13 @@ export function handleReportTriggerAction(data) {
         focusMapOnRange(focusRangeData);
     }
 
+    // Map centering on specific lat/lng coordinates and zoom
+    if (data.lat !== undefined && data.lng !== undefined) {
+        centerMapOnCoords(data.lat, data.lng, data.zoom);
+    } else if (data.centerMap && typeof data.centerMap === 'object' && !Array.isArray(data.centerMap)) {
+        centerMapOnCoords(data.centerMap.lat, data.centerMap.lng, data.centerMap.zoom);
+    }
+
     // 3. Turn select
     if (data.turn !== undefined && data.turn !== null && data.turn !== '') {
         const turnIdx = parseInt(data.turn, 10);
@@ -2236,8 +2278,17 @@ export function selectLaps(lapsA, lapsB) {
 export function initReportInteractions() {
     if (typeof window !== 'undefined' && window.addEventListener) {
         window.addEventListener('message', (event) => {
-            if (!event.data || event.data.type !== 'telemetry_jump') return;
-            handleReportTriggerAction(event.data);
+            if (!event.data || typeof event.data !== 'object') return;
+            const type = typeof event.data.type === 'string' ? event.data.type.toLowerCase() : '';
+            const isKnownType = ['telemetry_jump', 'telemetry_select_laps', 'telemetry_center_map'].includes(type);
+            const hasKnownPayload = event.data.dist !== undefined || event.data.xlim !== undefined ||
+                                   event.data.range !== undefined || event.data.plots !== undefined ||
+                                   event.data.laps !== undefined || event.data.lapsA !== undefined ||
+                                   event.data.mapRange !== undefined || event.data.focusRange !== undefined ||
+                                   (event.data.lat !== undefined && event.data.lng !== undefined);
+            if (isKnownType || (!type && hasKnownPayload)) {
+                handleReportTriggerAction(event.data);
+            }
         });
     }
 
@@ -2414,6 +2465,11 @@ if (typeof window !== 'undefined') {
     window.addGroup = addGroup;
     window.deleteGroup = deleteGroup;
     window.toggleGroupEnabled = toggleGroupEnabled;
+    window.handleReportTriggerAction = handleReportTriggerAction;
+    window.centerMapOnCoords = centerMapOnCoords;
+    window.seekToDistance = seekToDistance;
+    window.setPlotXLim = setPlotXLim;
+    window.setGroupALaps = setGroupALaps;
 }
 
 

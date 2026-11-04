@@ -19,11 +19,12 @@
  * Main entry point for the kartsim meeting page.
  */
 import { state } from './state.js';
-import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, toggleGroupManagementPopup, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, initReportInteractions, onSessionChange, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, updateSessionSelectorColors, toggleSessionDropdown, selectSessionFromDropdown, toggleMobileSidebar, toggleMobileRightPanel } from './lap_selection.js';
+import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, toggleGroupManagementPopup, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, initReportInteractions, onSessionChange, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, updateSessionSelectorColors, toggleSessionDropdown, selectSessionFromDropdown, toggleMobileSidebar, toggleMobileRightPanel, seekToDistance, setPlotXLim, setGroupALaps, centerMapOnCoords, focusMapOnRange, handleReportTriggerAction } from './lap_selection.js';
 import { setMapType, setTrajectoryColorMode, toggleTrajDropdown, updateDistanceMarker } from './map.js';
 import { stepDistance } from './telemetry.js';
-import { initExpandablePlots } from './plots_sync.js';
+import { initExpandablePlots, setVisiblePlots } from './plots_sync.js';
 import { debouncedUpdateURL } from './url_sync.js';
+import { initCompanionControl } from './companion.js';
 
 // Attach functions to window for HTML onclick handlers
 window.showTab = showTab;
@@ -50,6 +51,15 @@ window.collapseSidePanel = collapseSidePanel;
 window.expandSidePanel = expandSidePanel;
 window.toggleMobileSidebar = toggleMobileSidebar;
 window.toggleMobileRightPanel = toggleMobileRightPanel;
+
+window.initCompanionControl = initCompanionControl;
+window.seekToDistance = seekToDistance;
+window.setPlotXLim = setPlotXLim;
+window.setVisiblePlots = setVisiblePlots;
+window.setGroupALaps = setGroupALaps;
+window.centerMapOnCoords = centerMapOnCoords;
+window.focusMapOnRange = focusMapOnRange;
+window.handleReportTriggerAction = handleReportTriggerAction;
 
 document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('click', (e) => {
@@ -124,6 +134,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initAllLapsHandlers();
     updateSessionSelectorColors();
     initReportInteractions();
+    initCompanionControl();
 
     if (isReportMode) {
         if (reportState.sidePanelWidth) {

@@ -188,7 +188,9 @@ def refresh_cookies(response: Response) -> Response:
 def set_security_headers(response: Response) -> Response:
     """Set standard HTTP security headers on all responses."""
     response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['Content-Security-Policy'] = (
+        "frame-ancestors 'self' vscode-webview: plugin: http://localhost:* http://127.0.0.1:*;"
+    )
     response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
     return response
 

@@ -549,7 +549,9 @@ def test_security_headers() -> None:
     client = app.app.test_client()
     response = client.get('/static/style.css')
     assert response.headers.get('X-Content-Type-Options') == 'nosniff'
-    assert response.headers.get('X-Frame-Options') == 'SAMEORIGIN'
+    csp = response.headers.get('Content-Security-Policy', '')
+    assert "frame-ancestors 'self' vscode-webview: plugin: http://localhost:* http://127.0.0.1:*;" in csp
+    assert response.headers.get('X-Frame-Options') is None
     assert response.headers.get('Referrer-Policy') == 'strict-origin-when-cross-origin'
 
 

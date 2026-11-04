@@ -15,7 +15,7 @@
  * ==============================================================================
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds, setSort, selectTurnAndSwitchToMap, getSessionColor, updateSessionSelectorColors, renderLapList, toggleSessionDropdown, selectSessionFromDropdown, SESSION_PALETTE, getSessionOrderIndex, compareLaps, getSortedLaps, selectLapsByCriteria, showSelectionMenu, addGroup, deleteGroup, toggleGroupEnabled, toggleMobileSidebar } from './lap_selection.js';
+import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds, setSort, selectTurnAndSwitchToMap, getSessionColor, updateSessionSelectorColors, renderLapList, toggleSessionDropdown, selectSessionFromDropdown, SESSION_PALETTE, getSessionOrderIndex, compareLaps, getSortedLaps, selectLapsByCriteria, showSelectionMenu, addGroup, deleteGroup, toggleGroupEnabled, toggleMobileSidebar, centerMapOnCoords, seekToDistance, setPlotXLim, setGroupALaps } from './lap_selection.js';
 import { setTrajectoryColorMode } from './map.js';
 import { state } from './state.js';
 import * as plotsSync from './plots_sync.js';
@@ -586,6 +586,19 @@ describe('lap_selection.js showRightPanelTab and Report Mode', () => {
         expect(mockSlider.value).toBe(316.5);
         expect(mockDisplay.textContent).toBe('317m');
         expect(state.globalTelemetryXRange).toEqual([290, 380]);
+
+        // Also test uppercase TELEMETRY_JUMP
+        messageListener({
+            data: {
+                type: 'TELEMETRY_JUMP',
+                dist: 450.0,
+                xlim: [400, 500]
+            }
+        });
+        expect(state.playbackDistance).toBe(450.0);
+        expect(mockSlider.value).toBe(450.0);
+        expect(mockDisplay.textContent).toBe('450m');
+        expect(state.globalTelemetryXRange).toEqual([400, 500]);
     });
 
     it('resets report state when resetReportView is called', () => {
@@ -677,6 +690,56 @@ describe('lap_selection.js showRightPanelTab and Report Mode', () => {
         handleReportTriggerAction({ laps: '18_09_practice-6' });
         expect(state.groupASelection.has('18_09_practice-6')).toBe(true);
         expect(state.groupBSelection.size).toBe(0);
+    });
+
+    it('handles centerMapOnCoords and coordinate triggers in handleReportTriggerAction', () => {
+        const mockPanTo = vi.fn();
+        const mockSetZoom = vi.fn();
+        state.map = {
+            panTo: mockPanTo,
+            setZoom: mockSetZoom
+        };
+
+        centerMapOnCoords(51.189, 0.941, 17);
+        expect(mockPanTo).toHaveBeenCalledWith({ lat: 51.189, lng: 0.941 });
+        expect(mockSetZoom).toHaveBeenCalledWith(17);
+
+        handleReportTriggerAction({ lat: 52.0, lng: -1.0, zoom: 16 });
+        expect(mockPanTo).toHaveBeenCalledWith({ lat: 52.0, lng: -1.0 });
+        expect(mockSetZoom).toHaveBeenCalledWith(16);
+
+        handleReportTriggerAction({ centerMap: { lat: 53.0, lng: -2.0, zoom: 15 } });
+        expect(mockPanTo).toHaveBeenCalledWith({ lat: 53.0, lng: -2.0 });
+        expect(mockSetZoom).toHaveBeenCalledWith(15);
+    });
+
+    it('helper functions seekToDistance, setPlotXLim, setGroupALaps call underlying actions', () => {
+        const mockSlider = { value: 0 };
+        const mockDisplay = { textContent: '' };
+        vi.stubGlobal('document', {
+            getElementById: vi.fn().mockImplementation((id) => {
+                if (id === 'distance-slider') return mockSlider;
+                if (id === 'distance-display') return mockDisplay;
+                return null;
+            }),
+            querySelectorAll: vi.fn().mockReturnValue([]),
+            querySelector: vi.fn().mockReturnValue(null)
+        });
+
+        seekToDistance(250.5);
+        expect(state.playbackDistance).toBe(250.5);
+        expect(mockSlider.value).toBe(250.5);
+
+        setPlotXLim(100, 300);
+        expect(state.globalTelemetryXRange).toEqual([100, 300]);
+
+        setPlotXLim([200, 400]);
+        expect(state.globalTelemetryXRange).toEqual([200, 400]);
+
+        state.allSessionsData = [];
+        setGroupALaps(['lap-1', 'lap-2']);
+        expect(state.groupSelections.A.has('lap-1')).toBe(true);
+        expect(state.groupSelections.A.has('lap-2')).toBe(true);
     });
 
     it('sets visible range in the bottom plot with setTelemetryRange and triggers', () => {
