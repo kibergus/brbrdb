@@ -1765,6 +1765,94 @@ def test_stream_upload_preserves_track_origin_headers(tmp_path: Path) -> None:
         assert meta_json.get('track_origin_heading') == 180.0
 
 
+def test_resolve_track() -> None:
+    # 1. No configuration: looks up track_name
+    with patch('upload_handlers.db.get_track', return_value={'track_name': 'Monza'}) as mock_get_track:
+        info, resolved = upload_handlers.resolve_track('Monza')
+        assert resolved == 'Monza'
+        assert info == {'track_name': 'Monza'}
+        mock_get_track.assert_called_once_with('Monza')
+
+    # 2. With configuration: looks up "track_name track_configuration"
+    with patch('upload_handlers.db.get_track', return_value={'track_name': 'Monza GP'}) as mock_get_track:
+        info, resolved = upload_handlers.resolve_track('Monza', 'GP')
+        assert resolved == 'Monza GP'
+        assert info == {'track_name': 'Monza GP'}
+        mock_get_track.assert_called_once_with('Monza GP')
+
+    # 3. With configuration: full name not found, falls back to base name
+    def mock_lookup(name: str) -> dict | None:
+        if name == 'Monza':
+            return {'track_name': 'Monza'}
+        return None
+
+    with patch('upload_handlers.db.get_track', side_effect=mock_lookup) as mock_get_track:
+        info, resolved = upload_handlers.resolve_track('Monza', 'UnknownConfig')
+        assert resolved == 'Monza'
+        assert info == {'track_name': 'Monza'}
+        assert [c[0][0] for c in mock_get_track.call_args_list] == ['Monza UnknownConfig', 'Monza']
+
+    # 4. Neither found: returns None and original track name
+    with patch('upload_handlers.db.get_track', return_value=None):
+        info, resolved = upload_handlers.resolve_track('UnknownTrack', 'GP')
+        assert info is None
+        assert resolved == 'UnknownTrack'
+
+
+def test_upload_streamed_csv_resolves_track_with_configuration(tmp_path: Path) -> None:
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['*']
+            },
+            'see_telemetry': True
+        }
+    }
+    client = app.app.test_client()
+    temp_data_dir = str(tmp_path)
+
+    csv_data = (
+        'Format,RaceTools CSV\n'
+        'Track name,Monza\n'
+        'Track configuration,GP\n'
+        'Date,2026-10-22\n'
+        'Time,08:56:35\n'
+        'Driver name,Driver A\n'
+        'League,acevo\n'
+        'Class,Ferrari SF25\n'
+        'Session,Practice\n'
+        'Track Origin Latitude,45.61389\n'
+        'Track Origin Longitude,9.28624\n'
+        'Track Origin Heading,180.0\n'
+        '\n'
+        'Time,x,z,Speed\n'
+        '2026-10-22T08:56:35.000Z,10.0,20.0,15.0\n'
+    )
+
+    def mock_get_track(name: str) -> dict | None:
+        if name == 'Monza GP':
+            return {'track_name': 'Monza GP Circuit'}
+        return None
+
+    with (patch('auth.load_keys', return_value=mock_keys),
+          patch('upload_handlers.DATA_DIR', temp_data_dir),
+          patch('upload_handlers.db.load', return_value=pd.DataFrame()),
+          patch('upload_handlers.db.get_track', side_effect=mock_get_track),
+          patch('upload_handlers.populate_db.populate_single_session', return_value='session_acevo')):
+
+        response = client.post(
+            '/api/upload/stream',
+            data=csv_data,
+            headers={'X-API-Key': 'test_key'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response.status_code == 200
+
+        meeting_dir = tmp_path / 'acevo' / 'f1' / '2026_10_22_monza_gp_circuit'
+        assert meeting_dir.exists()
+
+
 def test_compute_gyro_rear_slip_angle_straight() -> None:
     records = [
         {'Time': f'2026-05-10T14:30:0{i:02d}.000Z', 'Yaw Rate': '0.0', 'GForceLat': '0.0'}

@@ -99,6 +99,27 @@ def create_track_origin(
     )
 
 
+def resolve_track(
+    track_name: str,
+    track_configuration: str | None = None,
+) -> tuple[dict | None, str]:
+    """Resolves track info and canonical track name using track name and optional configuration."""
+    if not track_name:
+        return None, track_name
+    lookup_name = (
+        f'{track_name} {track_configuration}'
+        if track_configuration
+        else track_name
+    )
+    track_info = db.get_track(lookup_name)
+    if not track_info and track_configuration:
+        track_info = db.get_track(track_name)
+    resolved_track_name = track_name
+    if track_info and track_info.get('track_name'):
+        resolved_track_name = str(track_info['track_name'])
+    return track_info, resolved_track_name
+
+
 def detect_distance_to_rear_axle(target: str | None) -> float | None:
     """Auto-detect distance to rear axle (in meters) from a session path, league/class string, or URL.
 
@@ -768,15 +789,15 @@ def process_telemetry_derivative_data(
     """Computes derivative data from raw telemetry records."""
     dt = session_info.session_start_datetime
 
-    track_name_raw = session_info.track_name
-
     # Load track data
-    track_info = db.get_track(track_name_raw)
+    track_info, resolved_track_name = resolve_track(
+        session_info.track_name, session_info.track_configuration
+    )
     centerline = None
     if track_info:
         centerline = track_info.get('center_line')
     else:
-        logger.warning(f"Track data not found for: '{track_name_raw}'")
+        logger.warning(f"Track data not found for: '{resolved_track_name}'")
         track_info = {}
 
     # Coordinate conversion
@@ -785,7 +806,6 @@ def process_telemetry_derivative_data(
 
     origin: track_data.TrackOrigin | None = session_info.origin
     if origin is None:
-        resolved_track_name = (track_info.get('track_name') if track_info else None) or track_name_raw
         try:
             if session_info.league == 'kartsim':
                 origin = rfactor.get_track_origin(resolved_track_name)
@@ -1192,7 +1212,7 @@ def process_telemetry_derivative_data(
 
     canonical_track_name = (
         (track_info.get('track_name') if track_info else None)
-        or sanitize.humanize_track_name(track_name_raw)
+        or sanitize.humanize_track_name(resolved_track_name)
     )
 
     metadata_json = {
@@ -1546,9 +1566,9 @@ def stream_upload() -> Any:
 
     # Resolve any car/class name aliases
     metadata.class_name = aliases.resolve_car_name(metadata.class_name)
-    track_info = db.get_track(metadata.track_name)
-    if track_info and track_info.get('track_name'):
-        metadata.track_name = track_info['track_name']
+    track_info, metadata.track_name = resolve_track(
+        metadata.track_name, metadata.track_configuration
+    )
 
     # Prepare directories and file paths
     time_str = metadata.session_start_datetime.strftime('%H_%M')
@@ -1835,9 +1855,9 @@ def files_upload() -> Any:
     meta['class_name'] = class_name
 
     # Resolve any track name aliases
-    track_info = db.get_track(track_name)
-    if track_info and track_info.get('track_name'):
-        track_name = track_info['track_name']
+    track_info, track_name = resolve_track(
+        track_name, meta.get('track_configuration')
+    )
     meta['track_name'] = track_name
 
     # ACL Check for league
