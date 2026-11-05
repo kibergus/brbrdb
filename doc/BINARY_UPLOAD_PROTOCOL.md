@@ -36,6 +36,7 @@ A BRT1 stream consists of a continuous sequence of framed chunks:
 | **`0x02`** | **Metadata JSON Chunk** | Session metadata & channel schema with fixed scales. Usually sent immediately after magic. |
 | **`0x03`** | **Baseline / Keyframe Chunk** | Full-precision absolute values (`float64_le` for each channel). Sets initial values or resyncs stream. |
 | **`0x04`** | **Telemetry Delta Chunk** | One or more samples of 16-bit signed deltas ($M \times \text{int16\_le}$ per sample). |
+| **`0xFF`** | **End of Stream (EOS) Chunk** | Explicitly signals the end of the telemetry stream. |
 
 ---
 
@@ -136,6 +137,15 @@ Streams telemetry samples in real time as they are captured.
 
 ---
 
+### 5. End of Stream (EOS) Chunk (`Type 0xFF`)
+Explicitly signals that the client has completed streaming telemetry data for this session.
+
+- **`chunk_len`**: `0` (or optional diagnostic/status payload).
+- **`chunk_type`**: `0xFF`
+- **`payload`**: Empty by default.
+
+---
+
 ## Bandwidth & Streaming Comparison
 
 For a typical 100 Hz kart telemetry stream with 12 channels:
@@ -168,9 +178,10 @@ flowchart TD
     I --> J{"Chunk Type"}
     J -- "0x03 (Baseline)" --> K["Set Channel Current Values"]
     J -- "0x04 (Deltas)" --> L["Accumulate: v += delta * scale\nEmit Record Dict"]
+    J -- "0xFF (EOS)" --> P
     
     L --> N["Buffer Decoded Records"]
-    N --> O{"15s Elapsed OR EOF?"}
+    N --> O{"15s Elapsed OR EOF / EOS?"}
     O -- "No" --> I
     O -- "Yes" --> P["run process_telemetry_derivative_data\nWrite CSV to Disk\nUpdate DB & Invalidate Cache"]
     P --> I

@@ -2880,6 +2880,60 @@ def test_brt1_stream_upload_error_handling() -> None:
         assert 'Forbidden: Upload for driver' in res.get_json()['error']
 
 
+def test_brt1_stream_upload_with_eos(tmp_path: Path) -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['Driver A'],
+                'leagues': ['kartsim']
+            }
+        }
+    }
+
+    meta = {
+        'Track name': 'Rowrah',
+        'Date': '2026-05-10',
+        'Time': '14:30:00',
+        'Driver name': 'Driver A',
+        'League': 'kartsim',
+        'Class': 'cadet',
+        'Session': 'Practice'
+    }
+    channels = [
+        {'name': 'Time', 'scale': 0.001},
+        {'name': 'Latitude', 'scale': 1e-7},
+        {'name': 'Longitude', 'scale': 1e-7},
+        {'name': 'Speed', 'scale': 0.01},
+        {'name': 'Lap', 'scale': 1.0}
+    ]
+    records = [
+        {'Time': 0.0, 'Latitude': 54.123, 'Longitude': -3.123, 'Speed': 10.0, 'Lap': 1},
+        {'Time': 0.01, 'Latitude': 54.12301, 'Longitude': -3.12301, 'Speed': 10.2, 'Lap': 1}
+    ]
+
+    brt1_bytes = bytearray(encode_brt1_stream(meta, channels, records))
+    # Append EOS (0xFF) chunk
+    brt1_bytes.extend(encode_brt1_chunk(0xFF, b''))
+
+    with patch('auth.load_keys', return_value=mock_keys):
+        patch_path = 'upload_handlers.populate_db.populate_single_session'
+        with patch(patch_path, return_value='session_eos_123') as mock_populate:
+            with patch('upload_handlers.db.get_track', return_value={}):
+                response = client.post(
+                    '/api/upload/stream',
+                    data=bytes(brt1_bytes),
+                    headers={'X-API-Key': 'test_key'},
+                    environ_base={'REMOTE_ADDR': '192.168.1.100'}
+                )
+                assert response.status_code == 200
+                assert response.get_json() == {
+                    'message': 'Session completed and imported successfully.',
+                    'session_id': 'session_eos_123'
+                }
+                mock_populate.assert_called_once()
+
+
 def test_merge_driver_summary(tmp_path: Path) -> None:
     summary_path = str(tmp_path / 'session.csv')
 

@@ -266,6 +266,7 @@ describe('telemetry_upload.js', () => {
             expect(BRT1_CHUNK_TYPES.METADATA).toBe(0x02);
             expect(BRT1_CHUNK_TYPES.BASELINE).toBe(0x03);
             expect(BRT1_CHUNK_TYPES.DELTA).toBe(0x04);
+            expect(BRT1_CHUNK_TYPES.EOS).toBe(0xFF);
 
             expect(DEFAULT_BRT1_CHANNELS.length).toBeGreaterThan(5);
             const timeChan = DEFAULT_BRT1_CHANNELS.find(c => c.name === 'Time');
@@ -358,6 +359,28 @@ describe('telemetry_upload.js', () => {
             // Valid magic chunk, followed by metadata chunk claiming 10 bytes payload, but only 1 byte provided
             const truncatedPayload = new Uint8Array([4, 0, 1, 0x42, 0x52, 0x54, 0x31, 10, 0, 2, 0x7b]);
             expect(() => decodeBrt1Stream(truncatedPayload)).toThrow(/Truncated chunk payload/);
+        });
+
+        it('handles End of Stream (EOS, 0xFF) chunk cleanly', () => {
+            const channels = [
+                { name: 'Time', scale: 0.001 },
+                { name: 'Speed', scale: 0.01 }
+            ];
+            const records = [
+                { Time: 0.0, Speed: 15.0 },
+                { Time: 0.01, Speed: 15.5 }
+            ];
+
+            const streamBytes = encodeBrt1Stream(testSessionMeta, channels, records);
+            const eosChunk = encodeBrt1Chunk(BRT1_CHUNK_TYPES.EOS); // 0-length payload 0xFF
+            const streamWithEos = new Uint8Array(streamBytes.length + eosChunk.length);
+            streamWithEos.set(streamBytes, 0);
+            streamWithEos.set(eosChunk, streamBytes.length);
+
+            const decoded = decodeBrt1Stream(streamWithEos);
+            expect(decoded.records.length).toBe(2);
+            expect(decoded.records[0].Speed).toBeCloseTo(15.0, 2);
+            expect(decoded.records[1].Speed).toBeCloseTo(15.5, 2);
         });
     });
 });

@@ -1697,6 +1697,8 @@ def iter_brt1_records(
                 yield record_from_current_values()
         elif chunk_type in (0x01, 0x02):
             pass
+        elif chunk_type == 0xFF:  # End of Stream (EOS)
+            break
         else:
             raise BadRequest(f'Unknown BRT1 chunk type: 0x{chunk_type:02x}')
 

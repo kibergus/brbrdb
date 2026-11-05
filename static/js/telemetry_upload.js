@@ -40,7 +40,8 @@ export const BRT1_CHUNK_TYPES = {
     MAGIC: 0x01,
     METADATA: 0x02,
     BASELINE: 0x03,
-    DELTA: 0x04
+    DELTA: 0x04,
+    EOS: 0xFF
 };
 
 export const DEFAULT_BRT1_CHANNELS = [
@@ -215,6 +216,7 @@ export function decodeBrt1Stream(bufferOrUint8Array) {
     let M = 0;
     let currentValues = null;
     const records = [];
+    let seenEos = false;
 
     while (offset + 3 <= uint8.length) {
         const chunkLen = view.getUint16(offset, true);
@@ -277,6 +279,10 @@ export function decodeBrt1Stream(bufferOrUint8Array) {
                 }
                 records.push(rec);
             }
+        } else if (chunkType === BRT1_CHUNK_TYPES.EOS) {
+            offset += chunkLen;
+            seenEos = true;
+            break;
         } else {
             throw new Error(`Unknown BRT1 chunk type: 0x${chunkType.toString(16)}`);
         }
@@ -284,7 +290,7 @@ export function decodeBrt1Stream(bufferOrUint8Array) {
         offset += chunkLen;
     }
 
-    if (offset < uint8.length) {
+    if (!seenEos && offset < uint8.length) {
         throw new Error('Truncated chunk header at end of stream.');
     }
 
