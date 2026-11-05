@@ -56,6 +56,7 @@ def test_racedb_walk_and_cache() -> None:
     assert 'LapTimeSeconds' in res.columns
     assert 'SessionName' in res.columns
     assert 'ChampPoints' in res.columns
+    assert 'KartNumber' in res.columns
     # Check if we got laps
     assert res['Lap'].max() > 0
     # Ensure LapTimeSeconds are parsed

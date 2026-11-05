@@ -60,6 +60,19 @@ def _normalize_pos(v: Any) -> int | str:
         return str(v) if not pd.isna(v) else '999'
 
 
+def normalize_kart_number(val: Any) -> str | None:
+    """Normalize kart number preserving alphanumeric identifiers (e.g. 34E, N12)."""
+    if val is None or pd.isna(val):
+        return None
+    s = str(val).strip()
+    if not s or s.lower() == 'nan':
+        return None
+    # If loaded as float from pandas (e.g. 12.0), format without decimal suffix
+    if re.match(r'^-?\d+\.0$', s):
+        s = s[:-2]
+    return s
+
+
 def _check_path_is_safe(base_dir: str, path: str) -> bool:
     """Validate that a path is within the base_dir."""
     try:
@@ -188,6 +201,7 @@ def create_schema(conn: Any, drop_first: bool = False) -> None:
                 champ_points INTEGER,
                 best_lap_seconds REAL,
                 lap_times REAL[],
+                kart_number TEXT,
                 CONSTRAINT unique_driver_session UNIQUE (session_id, driver_id)
             );
         ''')
@@ -231,6 +245,7 @@ def create_schema(conn: Any, drop_first: bool = False) -> None:
         cur.execute('ALTER TABLE photos ADD COLUMN IF NOT EXISTS album TEXT;')
         cur.execute('ALTER TABLE videos ADD COLUMN IF NOT EXISTS session_id TEXT;')
         cur.execute('ALTER TABLE photos ADD COLUMN IF NOT EXISTS session_id TEXT;')
+        cur.execute('ALTER TABLE session_results ADD COLUMN IF NOT EXISTS kart_number TEXT;')
 
         cur.execute('''
             CREATE TABLE IF NOT EXISTS photo_drivers (
@@ -262,6 +277,7 @@ def create_schema(conn: Any, drop_first: bool = False) -> None:
 
         cur.execute('CREATE INDEX IF NOT EXISTS idx_results_driver ON session_results (driver_id, session_id);')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_results_session ON session_results (session_id, best_lap_seconds);')
+        cur.execute('CREATE INDEX IF NOT EXISTS idx_results_kart_number ON session_results (kart_number);')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_meetings_lookup ON meetings (league, date, track_name);')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_sessions_start ON sessions (session_start_datetime);')
         cur.execute('CREATE INDEX IF NOT EXISTS idx_drivers_name ON drivers (driver_name);')
@@ -478,17 +494,25 @@ def populate_single_session(meta_path: str, conn: Any, base_dir: str) -> str:
                     gap = str(row['Gap']) if 'Gap' in row and pd.notna(row['Gap']) else None
                     champ_points = parse_champ_points(row)
 
+                    kart_number = normalize_kart_number(row.get('No'))
+                    if not kart_number:
+                        for alt_col in ('Kart', 'KartNumber', 'Kart Number'):
+                            if alt_col in row:
+                                kart_number = normalize_kart_number(row[alt_col])
+                                if kart_number:
+                                    break
+
                     # Insert into session_results
                     cur.execute(
                         '''
                         INSERT INTO session_results (
                             session_id, driver_id, pos, positions_gained, gap,
-                            champ_points, best_lap_seconds, lap_times
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            champ_points, best_lap_seconds, lap_times, kart_number
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ''',
                         (
                             db_session_id, driver_id, str(pos), positions_gained, gap,
-                            champ_points, best_lap_seconds, db_laps
+                            champ_points, best_lap_seconds, db_laps, kart_number
                         )
                     )
 

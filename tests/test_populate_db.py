@@ -57,6 +57,7 @@ def test_populate_database_basic(db_conn: Any, tmp_path: Any) -> None:
     csv_data = {
         'Pos': [1, 2],
         'Name': ['Driver A', 'Driver B'],
+        'No': ['10', '34E'],
         'Positions Gained': [0, 2],
         'Gap': ['', '+1.200s'],
         'ChampPoints': [50, 48],
@@ -96,7 +97,8 @@ def test_populate_database_basic(db_conn: Any, tmp_path: Any) -> None:
 
         # Results
         cur.execute('''
-            SELECT d.driver_name, r.pos, r.positions_gained, r.champ_points, r.best_lap_seconds, r.lap_times
+            SELECT d.driver_name, r.pos, r.positions_gained, r.champ_points,
+                   r.best_lap_seconds, r.lap_times, r.kart_number
             FROM session_results r
             JOIN drivers d ON r.driver_id = d.id
             ORDER BY d.driver_name
@@ -111,6 +113,7 @@ def test_populate_database_basic(db_conn: Any, tmp_path: Any) -> None:
         assert results[0][3] == 50
         assert results[0][4] == pytest.approx(60.200)
         assert results[0][5] == [0.0, 60.5, 60.2]
+        assert results[0][6] == '10'
 
         # Driver B
         assert results[1][0] == 'Driver B'
@@ -119,6 +122,7 @@ def test_populate_database_basic(db_conn: Any, tmp_path: Any) -> None:
         assert results[1][3] == 48
         assert results[1][4] == pytest.approx(60.800)
         assert results[1][5] == [0.0, 61.0, 60.8]
+        assert results[1][6] == '34E'
 
 
 def test_populate_database_penalties(db_conn: Any, tmp_path: Any) -> None:
@@ -305,3 +309,21 @@ def test_populate_database_duplicate_driver(db_conn: Any, tmp_path: Any) -> None
         assert res[0] == 'Driver A'
         assert res[1] == '1'
         assert res[2] == pytest.approx(60.0)
+
+
+def test_normalize_kart_number() -> None:
+    assert populate_db.normalize_kart_number('10') == '10'
+    assert populate_db.normalize_kart_number(10) == '10'
+    assert populate_db.normalize_kart_number(10.0) == '10'
+    assert populate_db.normalize_kart_number('10.0') == '10'
+    assert populate_db.normalize_kart_number('34E') == '34E'
+    assert populate_db.normalize_kart_number('N12') == 'N12'
+    assert populate_db.normalize_kart_number('14A') == '14A'
+    assert populate_db.normalize_kart_number('0') == '0'
+    assert populate_db.normalize_kart_number(0) == '0'
+    assert populate_db.normalize_kart_number(None) is None
+    assert populate_db.normalize_kart_number(float('nan')) is None
+    assert populate_db.normalize_kart_number('') is None
+    assert populate_db.normalize_kart_number('   ') is None
+    assert populate_db.normalize_kart_number('NaN') is None
+    assert populate_db.normalize_kart_number('nan') is None

@@ -515,6 +515,7 @@ class RaceDB:
             - Name (str): Driver name.
             - League, Class, Date, TrackName, SessionID: Standard identifiers.
             - Pos (str/int), PositionsGained (int), Gap (str): Race result metadata.
+            - KartNumber (str): Kart number (e.g. '10', '34E').
             - SessionName, MeetingName, DateTime, AlphaTimingURL: Session metadata.
             - TrackConditions, Temperature, Weather: Environment info.
         """
@@ -542,7 +543,8 @@ class RaceDB:
                 s.temperature AS "Temperature",
                 s.weather AS "Weather",
                 s.alphatiming_url AS "AlphaTimingURL",
-                m.meeting_dir
+                m.meeting_dir,
+                r.kart_number AS "KartNumber"
             FROM session_results r
             JOIN sessions s ON r.session_id = s.session_id
             JOIN meetings m ON s.meeting_id = m.id
@@ -598,7 +600,8 @@ class RaceDB:
             (
                 session_id, driver_name, pos, pos_gained, gap, champ_points,
                 best_lap_sec, lap_times, league, db_class_arr, meeting_date,
-                track_name, session_name, meeting_name, dt, cond, temp, weather, url, meeting_dir
+                track_name, session_name, meeting_name, dt, cond, temp, weather, url, meeting_dir,
+                kart_number
             ) = r_row
 
             meta_classes = [c.strip() for c in (db_class_arr or []) if c.strip()]
@@ -651,7 +654,8 @@ class RaceDB:
                         'TrackConditions': cond or '',
                         'Temperature': str(temp) if temp is not None else '',
                         'Weather': weather or '',
-                        'AlphaTimingURL': url or ''
+                        'AlphaTimingURL': url or '',
+                        'KartNumber': str(kart_number) if kart_number is not None else ''
                     })
         if df_rows:
             return pd.DataFrame(df_rows)
@@ -660,7 +664,7 @@ class RaceDB:
                 'Lap', 'LapTime', 'LapTimeSeconds', 'LapTimeDeleted', 'Name',
                 'League', 'Class', 'Date', 'TrackName', 'SessionID',
                 'Pos', 'PositionsGained', 'Gap', 'ChampPoints', 'SessionName', 'MeetingName', 'DateTime',
-                'TrackConditions', 'Temperature', 'Weather', 'AlphaTimingURL'
+                'TrackConditions', 'Temperature', 'Weather', 'AlphaTimingURL', 'KartNumber'
             ])
 
     def load_penalties(self,
