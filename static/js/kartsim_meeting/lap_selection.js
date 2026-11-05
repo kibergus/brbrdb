@@ -1581,10 +1581,16 @@ export function showSelectionMenu(e, group) {
 
     // 2. Sections per session
     const sessions = state.allSessionsData || [];
+    const hasMultipleDrivers = new Set(sessions.map(s => s.driver_name).filter(Boolean)).size > 1;
     sessions.forEach(session => {
         const sId = session.session_id;
         const sColor = getSessionColor(sId);
         let sName = session.session_name || sId;
+        if (session.driver_name && (hasMultipleDrivers || !sName.toLowerCase().includes(session.driver_name.toLowerCase()))) {
+            if (!sName.toLowerCase().includes(session.driver_name.toLowerCase())) {
+                sName = `${sName} (${session.driver_name})`;
+            }
+        }
         if (session.session_start_datetime && session.session_start_datetime.includes(' ')) {
             const timePart = session.session_start_datetime.split(' ')[1];
             if (timePart && !sName.includes(timePart)) {

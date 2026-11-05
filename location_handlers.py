@@ -17,6 +17,7 @@ import os
 import re
 import csv
 import logging
+from collections import Counter
 from urllib.parse import unquote, quote, parse_qs
 from typing import Any
 from flask import Blueprint, render_template, abort, request, jsonify, Response, url_for, redirect
@@ -1344,6 +1345,7 @@ def get_track_points() -> Response | tuple[Response, int]:
             all_session_data.append({
                 'session_id': unique_sid,
                 'session_name': display_name,
+                'driver_name': driver_name,
                 'columns': columns,
                 'laps': laps,
                 'csv_file': target_csv
@@ -1401,6 +1403,7 @@ def get_track_points() -> Response | tuple[Response, int]:
     lap_length = track_data.get('lap_length')
 
     valid_sids = {s.session_id for s in sessions}
+    parsed_items: list[dict[str, Any]] = []
 
     for csv_file in csv_files:
         if sanitized_heroes:
@@ -1414,7 +1417,14 @@ def get_track_points() -> Response | tuple[Response, int]:
                 continue
 
         if filter_session_ids:
-            if matching_sid not in filter_session_ids and csv_file not in filter_session_ids:
+            clean_file = csv_file[:-4] if csv_file.endswith('.csv') else csv_file
+            matches_filter = (
+                (matching_sid and matching_sid in filter_session_ids) or
+                csv_file in filter_session_ids or
+                clean_file in filter_session_ids or
+                any(fsid in csv_file for fsid in filter_session_ids)
+            )
+            if not matches_filter:
                 continue
 
         csv_path = os.path.join(telemetry_dir, csv_file)
@@ -1448,13 +1458,66 @@ def get_track_points() -> Response | tuple[Response, int]:
             for lap in laps:
                 lap.pop('dists', None)
                 lap.pop('times', None)
-            all_session_data.append({
-                'session_id': matching_sid or csv_file,
-                'session_name': display_name,
+            parsed_items.append({
+                'matching_sid': matching_sid,
+                'csv_file': csv_file,
+                'display_name': display_name,
                 'columns': columns,
                 'laps': laps,
-                'csv_file': csv_file
+                'driver_name': driver_name
             })
+
+    sid_counts: Counter[str] = Counter()
+    for item in parsed_items:
+        matching_sid = item.get('matching_sid')
+        csv_file_val = str(item['csv_file'])
+        clean_file = csv_file_val[:-4] if csv_file_val.endswith('.csv') else csv_file_val
+        sid_val = str(matching_sid) if matching_sid else clean_file
+        sid_counts[sid_val] += 1
+
+    distinct_drivers = {
+        str(item['driver_name']) for item in parsed_items if item.get('driver_name')
+    }
+    has_multiple_drivers = len(distinct_drivers) > 1
+
+    for item in parsed_items:
+        matching_sid_raw = item.get('matching_sid')
+        matching_sid = str(matching_sid_raw) if matching_sid_raw is not None else None
+        csv_file_str = str(item['csv_file'])
+        clean_name = csv_file_str[:-4] if csv_file_str.endswith('.csv') else csv_file_str
+        sid_val = matching_sid if matching_sid else clean_name
+        driver_name_raw = item.get('driver_name')
+        driver_name = str(driver_name_raw) if driver_name_raw is not None else None
+        display_name = str(item['display_name'])
+
+        is_disambiguated = (
+            sid_counts[sid_val] > 1 or
+            (matching_sid is not None and any(fsid.startswith(f"{matching_sid}_") for fsid in filter_session_ids))
+        )
+        if is_disambiguated:
+            if driver_name:
+                final_session_id = f"{sid_val}_{sanitize.sanitize_filename(driver_name)}"
+            else:
+                final_session_id = clean_name
+        else:
+            final_session_id = matching_sid or csv_file_str
+
+        if has_multiple_drivers and driver_name:
+            if driver_name.lower() not in display_name.lower():
+                final_session_name = f"{display_name} ({driver_name})"
+            else:
+                final_session_name = display_name
+        else:
+            final_session_name = display_name
+
+        all_session_data.append({
+            'session_id': final_session_id,
+            'session_name': final_session_name,
+            'driver_name': driver_name,
+            'columns': item['columns'],
+            'laps': item['laps'],
+            'csv_file': csv_file_str
+        })
 
     return jsonify(all_session_data)
 
@@ -1534,6 +1597,8 @@ def get_telemetry_channel() -> Response | tuple[Response, int]:
         target_csv = csv_file_param
     elif session_id in csv_files:
         target_csv = session_id
+    elif f"{session_id}.csv" in csv_files:
+        target_csv = f"{session_id}.csv"
     else:
         matching_files = [
             csv_f for csv_f in sorted(csv_files)

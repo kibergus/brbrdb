@@ -1600,3 +1600,97 @@ def test_get_track_points_track_alias_fallback(tmp_path: Path) -> None:
         data = resp.get_json()
         assert len(data) == 1
         assert data[0]['session_id'] == 'sess1'
+
+
+def test_get_track_points_multi_driver_disambiguation(tmp_path: Path) -> None:
+    client = flask_app.app.test_client()
+
+    meeting_dir = tmp_path / "meeting"
+    meeting_dir.mkdir()
+    telem_dir = meeting_dir / "telemetry"
+    telem_dir.mkdir()
+
+    csv_coach = (
+        "Format,RaceBox CSV\nData Source,KartSim\nDriver name,KartSim Coach RS\n\n"
+        "Record,Time,Latitude,Longitude,Lap Distance,Lap\n1,2026-11-05T18:43:00Z,50.0,-1.0,10.0,1\n"
+    )
+    csv_katia = (
+        "Format,RaceBox CSV\nData Source,KartSim\nDriver name,Katia Guseinova\n\n"
+        "Record,Time,Latitude,Longitude,Lap Distance,Lap\n1,2026-11-05T18:43:00Z,50.0,-1.0,10.0,1\n"
+    )
+    (telem_dir / "18_43_practice_kartsim_coach_rs.csv").write_text(csv_coach)
+    (telem_dir / "18_43_practice_katia_guseinova.csv").write_text(csv_katia)
+
+    mock_session = MagicMock()
+    mock_session.session_id = '18_43_practice'
+    mock_session.session_name = '18:43 Practice'
+    mock_session.meeting_dir = str(meeting_dir)
+
+    mock_track = {'track_name': 'Whilton Mill', 'sector_end': [], 'turns': []}
+    heroes = ['KartSim Coach RS', 'Katia Guseinova']
+    with patch('location_handlers.auth.can_see_telemetry', return_value=True), \
+         patch('location_handlers.db.get_track', return_value=mock_track), \
+         patch('location_handlers.db.load', return_value=pd.DataFrame()), \
+         patch('location_handlers.plot_handlers.get_hero_names', return_value=heroes), \
+         patch('location_handlers.db.find_sessions', return_value=[mock_session]):
+        url = (
+            '/api/telemetry?league=kartsim&class_name=cadet&'
+            'date=2026-11-05&track=Whilton%20Mill&session_id=18_43_practice'
+        )
+        resp = client.get(url)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert len(data) == 2
+        coach_data = next(d for d in data if d['driver_name'] == 'KartSim Coach RS')
+        katia_data = next(d for d in data if d['driver_name'] == 'Katia Guseinova')
+
+        assert coach_data['session_id'] == '18_43_practice_kartsim_coach_rs'
+        assert coach_data['session_name'] == '18:43 Practice (KartSim Coach RS)'
+
+        assert katia_data['session_id'] == '18_43_practice_katia_guseinova'
+        assert katia_data['session_name'] == '18:43 Practice (Katia Guseinova)'
+
+
+def test_get_telemetry_channel_with_disambiguated_session_id(tmp_path: Path) -> None:
+    client = flask_app.app.test_client()
+
+    meeting_dir = tmp_path / "meeting"
+    meeting_dir.mkdir()
+    telem_dir = meeting_dir / "telemetry"
+    telem_dir.mkdir()
+
+    csv_coach = (
+        "Format,RaceTools CSV\nDriver name,KartSim Coach RS\n\n"
+        "Time,Latitude,Longitude,Record,Lap,Speed\n"
+        "2026-06-10T17:02:32.427Z,52.000000,-1.000000,1,1,0.0\n"
+        "2026-06-10T17:02:32.436Z,52.000000,-1.000000,2,1,0.0\n"
+    )
+    csv_katia = (
+        "Format,RaceTools CSV\nDriver name,Katia Guseinova\n\n"
+        "Time,Latitude,Longitude,Record,Lap,Speed\n"
+        "2026-06-10T17:02:32.427Z,52.123456,-1.234567,1,1,25.0\n"
+        "2026-06-10T17:02:32.436Z,52.123456,-1.234567,2,1,30.0\n"
+    )
+    (telem_dir / "18_43_practice_kartsim_coach_rs.csv").write_text(csv_coach)
+    (telem_dir / "18_43_practice_katia_guseinova.csv").write_text(csv_katia)
+
+    mock_session = MagicMock()
+    mock_session.session_id = '18_43_practice'
+    mock_session.session_name = '18:43 Practice'
+    mock_session.meeting_dir = str(meeting_dir)
+
+    mock_track = {'track_name': 'Whilton Mill', 'sector_end': [], 'turns': []}
+    heroes = ['KartSim Coach RS', 'Katia Guseinova']
+    with patch('location_handlers.auth.can_see_telemetry', return_value=True), \
+         patch('location_handlers.db.get_track', return_value=mock_track), \
+         patch('location_handlers.plot_handlers.get_hero_names', return_value=heroes), \
+         patch('location_handlers.db.find_sessions', return_value=[mock_session]):
+        url = (
+            '/api/telemetry/channel?league=kartsim&class_name=cadet&'
+            'date=2026-11-05&track=Whilton%20Mill&session_id=18_43_practice_katia_guseinova&channel=Speed'
+        )
+        resp = client.get(url)
+        assert resp.status_code == 200
+        _, _, reconstructed = _decode_channel_payload(resp.data)
+        assert len(reconstructed) == 2
+        assert np.allclose(reconstructed, [90.0, 108.0], atol=1e-5)

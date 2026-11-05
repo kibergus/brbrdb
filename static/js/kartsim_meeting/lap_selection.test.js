@@ -1389,6 +1389,96 @@ describe('lap_selection.js showRightPanelTab and Report Mode', () => {
             expect(sections[0].innerHTML).toContain('All Sessions');
             expect(sections[1].innerHTML).toContain('Practice Session');
         });
+
+        it('displays driver name in section headers in showSelectionMenu when multiple drivers exist', () => {
+            state.allSessionsData = [
+                {
+                    session_id: '18_43_practice_kartsim_coach_rs',
+                    session_name: '18:43 Practice',
+                    driver_name: 'KartSim Coach RS',
+                    laps: [{ lap_num: 1, lap_time: '0:55.000', is_valid: true }]
+                },
+                {
+                    session_id: '18_43_practice_katia_guseinova',
+                    session_name: '18:43 Practice',
+                    driver_name: 'Katia Guseinova',
+                    laps: [{ lap_num: 1, lap_time: '0:54.000', is_valid: true }]
+                }
+            ];
+            let createdMenu = null;
+            const makeMockElement = (tag) => {
+                const children = [];
+                let _innerHTML = '';
+                let _textContent = '';
+                const el = {
+                    tagName: tag.toUpperCase(),
+                    id: '',
+                    className: '',
+                    classList: {
+                        add: vi.fn(c => { el.className += ' ' + c; }),
+                        contains: vi.fn(c => el.className.includes(c))
+                    },
+                    get innerHTML() {
+                        return _innerHTML || children.map(c => c.innerHTML).join('');
+                    },
+                    set innerHTML(val) {
+                        _innerHTML = val;
+                    },
+                    get textContent() {
+                        return _textContent || children.map(c => c.textContent || c.innerHTML).join(' ');
+                    },
+                    set textContent(val) {
+                        _textContent = val;
+                    },
+                    style: {},
+                    appendChild: vi.fn(child => { children.push(child); }),
+                    querySelectorAll: vi.fn(selector => {
+                        const results = [];
+                        const walk = (node) => {
+                            if (node !== el) {
+                                const classes = (node.className || '').split(' ');
+                                if (selector === '.menu-section' && classes.includes('menu-section')) results.push(node);
+                                if (selector === '.menu-btn-row button' && node.tagName === 'BUTTON') results.push(node);
+                            }
+                            (node._children || []).forEach(walk);
+                        };
+                        walk(el);
+                        return results;
+                    }),
+                    remove: vi.fn(() => { if (createdMenu === el) createdMenu = null; }),
+                    _children: children
+                };
+                return el;
+            };
+
+            const mockBody = {
+                appendChild: vi.fn(el => { createdMenu = el; })
+            };
+
+            vi.stubGlobal('document', {
+                body: mockBody,
+                getElementById: vi.fn(id => (createdMenu && createdMenu.id === id) ? createdMenu : null),
+                createElement: vi.fn(tag => makeMockElement(tag)),
+                querySelectorAll: vi.fn(() => []),
+                addEventListener: vi.fn(),
+                removeEventListener: vi.fn()
+            });
+
+            const mockEvent = {
+                target: {
+                    getBoundingClientRect: () => ({ left: 100, bottom: 50, top: 40, right: 120 })
+                },
+                preventDefault: vi.fn()
+            };
+
+            showSelectionMenu(mockEvent, 'A');
+
+            expect(createdMenu).toBeTruthy();
+            const sections = createdMenu.querySelectorAll('.menu-section');
+            expect(sections.length).toBe(3);
+            expect(sections[1].innerHTML).toContain('KartSim Coach RS');
+            expect(sections[2].innerHTML).toContain('Katia Guseinova');
+        });
     });
 });
 
