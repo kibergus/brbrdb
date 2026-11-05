@@ -1287,18 +1287,22 @@ def get_track_points() -> Response | tuple[Response, int]:
             if s_sid in csv_files:
                 target_csv = s_sid
             else:
+                candidates: list[str] = []
                 for f in csv_files:
                     if matching_s and _match_session(f, [matching_s]) == s_sid:
-                        target_csv = f
-                        break
+                        candidates.append(f)
                     elif _match_session(f, sessions) == s_sid:
-                        target_csv = f
-                        break
-            if not target_csv:
-                for f in csv_files:
-                    if s_sid in f:
-                        target_csv = f
-                        break
+                        candidates.append(f)
+                    elif s_sid in f:
+                        candidates.append(f)
+                if candidates:
+                    if sanitized_heroes:
+                        target_csv = next(
+                            (f for f in candidates if any(h in f.lower() for h in sanitized_heroes)),
+                            candidates[0]
+                        )
+                    else:
+                        target_csv = candidates[0]
             if not target_csv:
                 continue
 
@@ -1341,7 +1345,8 @@ def get_track_points() -> Response | tuple[Response, int]:
                 'session_id': unique_sid,
                 'session_name': display_name,
                 'columns': columns,
-                'laps': laps
+                'laps': laps,
+                'csv_file': target_csv
             })
 
         return jsonify(all_session_data)
@@ -1447,7 +1452,8 @@ def get_track_points() -> Response | tuple[Response, int]:
                 'session_id': matching_sid or csv_file,
                 'session_name': display_name,
                 'columns': columns,
-                'laps': laps
+                'laps': laps,
+                'csv_file': csv_file
             })
 
     return jsonify(all_session_data)
@@ -1520,14 +1526,33 @@ def get_telemetry_channel() -> Response | tuple[Response, int]:
     except OSError:
         return jsonify({'error': 'Failed to read telemetry directory'}), 500
 
+    csv_file_param = request.args.get('csv_file')
+    driver_param = request.args.get('driver')
+
     target_csv = None
-    if session_id in csv_files:
+    if csv_file_param and csv_file_param in csv_files:
+        target_csv = csv_file_param
+    elif session_id in csv_files:
         target_csv = session_id
     else:
-        for csv_f in csv_files:
-            if csv_f.endswith('.csv') and (_match_session(csv_f, sessions) == session_id or session_id in csv_f):
-                target_csv = csv_f
-                break
+        matching_files = [
+            csv_f for csv_f in sorted(csv_files)
+            if csv_f.endswith('.csv') and (_match_session(csv_f, sessions) == session_id or session_id in csv_f)
+        ]
+        if matching_files:
+            if driver_param:
+                clean_driver = sanitize.sanitize_filename(driver_param).lower()
+                target_csv = next((f for f in matching_files if clean_driver in f.lower()), None)
+            if not target_csv:
+                hero_names = plot_handlers.get_hero_names()
+                sanitized_heroes = [sanitize.sanitize_filename(h) for h in hero_names]
+                if sanitized_heroes:
+                    target_csv = next(
+                        (f for f in matching_files if any(h in f.lower() for h in sanitized_heroes)),
+                        None
+                    )
+            if not target_csv:
+                target_csv = matching_files[0]
 
     if not target_csv:
         return jsonify({'error': 'Unauthorized or invalid session ID'}), 403

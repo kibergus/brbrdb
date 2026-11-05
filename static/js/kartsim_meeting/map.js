@@ -481,7 +481,7 @@ export function loadBaseColumnsForSessions(sessionsData) {
         const fetchPromises = Object.entries(colsToFetch).map(async ([key, colName]) => {
             if (!colName) return { key, values: [] };
             try {
-                const values = await fetchTelemetryChannel(session_id, colName);
+                const values = await fetchTelemetryChannel(session_id, colName, session.csv_file);
                 return { key, values };
             } catch (e) {
                 console.error(`Failed to fetch column ${colName} for session ${session_id}:`, e);

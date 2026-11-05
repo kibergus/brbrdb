@@ -244,6 +244,20 @@ describe('telemetry.js', () => {
             const result = await fetchTelemetryChannel('session1', 'Speed');
             expect(result).toEqual([]);
         });
+
+        it('includes csv_file in query parameters when passed', async () => {
+            const buffer = new ArrayBuffer(0);
+            global.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                arrayBuffer: () => Promise.resolve(buffer)
+            });
+
+            await fetchTelemetryChannel('session1', 'Speed', 'session1_driver.csv');
+            expect(global.fetch).toHaveBeenCalled();
+            const calledUrl = global.fetch.mock.calls[0][0];
+            expect(calledUrl).toContain('csv_file=session1_driver.csv');
+            expect(calledUrl).toContain('session_id=session1');
+        });
     });
 
     describe('getSteeringTicks', () => {

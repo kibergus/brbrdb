@@ -411,7 +411,7 @@ export function getMinSpeedInRange(lap, startDist, endDist, fallbackApex) {
     return minSpeed === Infinity ? null : minSpeed;
 }
 
-export async function fetchTelemetryChannel(sessionId, columnName) {
+export async function fetchTelemetryChannel(sessionId, columnName, csvFile) {
     const urlObj = new URL('/api/telemetry/channel', window.location.origin);
     const mainUrl = new URL(window.KART_CONFIG.getTrackPointsUrl, window.location.origin);
     mainUrl.searchParams.forEach((val, k) => {
@@ -419,6 +419,9 @@ export async function fetchTelemetryChannel(sessionId, columnName) {
     });
     urlObj.searchParams.set('session_id', sessionId);
     urlObj.searchParams.set('channel', columnName);
+    if (csvFile) {
+        urlObj.searchParams.set('csv_file', csvFile);
+    }
     urlObj.searchParams.set('_t', Date.now());
 
     const res = await fetch(urlObj.toString());

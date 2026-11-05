@@ -499,6 +499,72 @@ Time,Latitude,Longitude,Record,Lap,Steering Wheel Angle (deg)
 
 
 @patch('location_handlers.db')
+def test_get_telemetry_channel_multi_driver_resolution(
+    mock_db: MagicMock,
+    tmp_path: Path
+) -> None:
+    app = Flask(__name__)
+    app.register_blueprint(location_handlers.location_blueprint)
+    client = app.test_client()
+
+    telemetry_dir = tmp_path / "telemetry"
+    telemetry_dir.mkdir(parents=True, exist_ok=True)
+
+    # Driver 1: Coach (stationary in pits)
+    coach_csv = """Format,RaceTools CSV
+Driver name,KartSim Coach RS
+
+Time,Latitude,Longitude,Record,Lap,Speed
+2026-06-10T17:02:32.427Z,52.000000,-1.000000,1,1,0.0
+2026-06-10T17:02:32.436Z,52.000000,-1.000000,2,1,0.0
+"""
+    (telemetry_dir / "S1_kartsim_coach_rs.csv").write_text(coach_csv)
+
+    # Driver 2: Katia (moving on track)
+    katia_csv = """Format,RaceTools CSV
+Driver name,Katia Guseinova
+
+Time,Latitude,Longitude,Record,Lap,Speed
+2026-06-10T17:02:32.427Z,52.123456,-1.234567,1,1,25.0
+2026-06-10T17:02:32.436Z,52.123456,-1.234567,2,1,30.0
+"""
+    (telemetry_dir / "S1_katia_guseinova.csv").write_text(katia_csv)
+
+    mock_session = MagicMock()
+    mock_session.meeting_dir = str(tmp_path)
+    mock_session.session_id = 'S1'
+    mock_db.find_sessions.return_value = [mock_session]
+    mock_db.get_track.return_value = {'sector_end': [], 'turns': []}
+    mock_db.load.return_value = pd.DataFrame()
+
+    base_url = '/api/telemetry/channel?league=kartsim&class_name=X30&date=2026-05-10&track=Rowrah&session_id=S1'
+
+    # 1. With hero cookie: selecting S1 resolves to Katia
+    client.set_cookie('hero_pilot', 'Katia Guseinova')
+    url_hero = f'{base_url}&channel=Speed'
+    resp_hero = client.get(url_hero)
+    assert resp_hero.status_code == 200
+    _, _, arr_hero = _decode_channel_payload(resp_hero.data)
+    # Speed is converted from m/s to km/h (25 * 3.6 = 90, 30 * 3.6 = 108)
+    assert np.allclose(arr_hero, [90.0, 108.0], atol=1e-5)
+
+    # 2. With csv_file param: resolves directly to Katia
+    client.delete_cookie('hero_pilot')
+    url_csv = f'{base_url}&csv_file=S1_katia_guseinova.csv&channel=Speed'
+    resp_csv = client.get(url_csv)
+    assert resp_csv.status_code == 200
+    _, _, arr_csv = _decode_channel_payload(resp_csv.data)
+    assert np.allclose(arr_csv, [90.0, 108.0], atol=1e-5)
+
+    # 3. With driver param: resolves to Coach
+    url_driver = f'{base_url}&driver=KartSim%20Coach%20RS&channel=Speed'
+    resp_driver = client.get(url_driver)
+    assert resp_driver.status_code == 200
+    _, _, arr_driver = _decode_channel_payload(resp_driver.data)
+    assert np.allclose(arr_driver, [0.0, 0.0], atol=1e-5)
+
+
+@patch('location_handlers.db')
 @patch('auth.get_current_acl')
 def test_get_telemetry_channel_security(
     mock_get_current_acl: MagicMock,

@@ -141,7 +141,7 @@ export function ensureChannelLoaded(channel) {
                     if (exactCol) {
                         fetchPromises.push((async () => {
                             try {
-                                const values = await fetchTelemetryChannel(session.session_id, exactCol);
+                                const values = await fetchTelemetryChannel(session.session_id, exactCol, session.csv_file);
                                 return { session_id: session.session_id, key, values };
                             } catch (e) {
                                 console.error(`Failed to fetch column ${exactCol} for session ${session.session_id}:`, e);
