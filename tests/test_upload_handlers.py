@@ -35,6 +35,7 @@ from upload_handlers import (
     CSVSessionMetadata,
     StreamingByteReader,
     parse_json_metadata,
+    merge_driver_summary,
 )
 from race_tools import assetto_corsa, rfactor
 from database import db, config
@@ -2877,3 +2878,139 @@ def test_brt1_stream_upload_error_handling() -> None:
         res = client.post('/api/upload/stream', data=forbidden_bytes, headers={'X-API-Key': 'test_key'})
         assert res.status_code == 403
         assert 'Forbidden: Upload for driver' in res.get_json()['error']
+
+
+def test_merge_driver_summary(tmp_path: Path) -> None:
+    summary_path = str(tmp_path / 'session.csv')
+
+    base_cols = ['Pos', 'Positions Gained', 'No', 'Name', 'Laps', 'Time', '', 'Avg Speed', 'Gap', 'Best', 'On']
+
+    # Driver A
+    cols_a = base_cols + ['Lap 1', 'Lap 2']
+    row_a = [['1', '0', '10', 'Driver A', '2', '', '', '', '', '54.000', '1', '54.000', '55.000']]
+    df_a = pd.DataFrame(row_a, columns=cols_a)
+
+    merged1 = merge_driver_summary(summary_path, df_a)
+    assert len(merged1) == 1
+    assert merged1['Pos'].iloc[0] == '1'
+    assert merged1['Name'].iloc[0] == 'Driver A'
+    assert merged1['Gap'].iloc[0] == ''
+    assert 'Lap 2' in merged1.columns
+    merged1.to_csv(summary_path, index=False)
+
+    # Driver B (faster than Driver A, has 3 laps)
+    cols_b = base_cols + ['Lap 1', 'Lap 2', 'Lap 3']
+    row_b = [['1', '0', '12', 'Driver B', '3', '', '', '', '', '53.000', '2', '53.500', '53.000', '53.800']]
+    df_b = pd.DataFrame(row_b, columns=cols_b)
+
+    merged2 = merge_driver_summary(summary_path, df_b)
+    assert len(merged2) == 2
+    # Driver B is Pos 1
+    assert merged2['Pos'].iloc[0] == '1'
+    assert merged2['Name'].iloc[0] == 'Driver B'
+    assert merged2['Gap'].iloc[0] == ''
+    # Driver A is Pos 2
+    assert merged2['Pos'].iloc[1] == '2'
+    assert merged2['Name'].iloc[1] == 'Driver A'
+    assert merged2['Gap'].iloc[1] == '+1.000'
+    # Laps should go up to Lap 3
+    assert 'Lap 3' in merged2.columns
+    assert merged2['Lap 3'].iloc[0] == '53.800'
+    assert merged2['Lap 3'].iloc[1] == ''
+    merged2.to_csv(summary_path, index=False)
+
+    # Driver A updates with a faster lap 52.500 on Lap 3
+    row_a_up = [['1', '0', '10', 'Driver A', '3', '', '', '', '', '52.500', '3', '54.000', '55.000', '52.500']]
+    df_a_updated = pd.DataFrame(row_a_up, columns=cols_b)
+
+    merged3 = merge_driver_summary(summary_path, df_a_updated)
+    assert len(merged3) == 2
+    # Driver A is now Pos 1
+    assert merged3['Pos'].iloc[0] == '1'
+    assert merged3['Name'].iloc[0] == 'Driver A'
+    assert merged3['Gap'].iloc[0] == ''
+    assert merged3['Best'].iloc[0] == '52.500'
+    # Driver B is now Pos 2
+    assert merged3['Pos'].iloc[1] == '2'
+    assert merged3['Name'].iloc[1] == 'Driver B'
+    assert merged3['Gap'].iloc[1] == '+0.500'
+
+
+def test_stream_upload_multi_driver_session(tmp_path: Path) -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'upload_sessions': {
+                'drivers': ['*'],
+                'leagues': ['*']
+            }
+        }
+    }
+    temp_data_dir = str(tmp_path)
+    meeting_dir = os.path.join(temp_data_dir, 'kartsim', 'cadet', '2026_05_10_rowrah')
+
+    driver_a_csv = (
+        'Track name,Rowrah\n'
+        'Date,2026-05-10\n'
+        'Time,14:30:00\n'
+        'Driver name,Driver A\n'
+        'League,kartsim\n'
+        'Class,cadet\n'
+        'Session,Practice\n'
+        '\n'
+        'Time,Latitude,Longitude,Speed,Lap\n'
+        '2026-05-10T14:30:00.000Z,54.123,-3.123,10.0,1\n'
+        '2026-05-10T14:30:55.000Z,54.123,-3.123,10.0,1\n'
+    )
+    driver_b_csv = (
+        'Track name,Rowrah\n'
+        'Date,2026-05-10\n'
+        'Time,14:30:00\n'
+        'Driver name,Driver B\n'
+        'League,kartsim\n'
+        'Class,cadet\n'
+        'Session,Practice\n'
+        '\n'
+        'Time,Latitude,Longitude,Speed,Lap\n'
+        '2026-05-10T14:30:00.000Z,54.123,-3.123,10.0,1\n'
+        '2026-05-10T14:30:52.000Z,54.123,-3.123,10.0,1\n'
+    )
+
+    with (patch('auth.load_keys', return_value=mock_keys),
+          patch('upload_handlers.DATA_DIR', temp_data_dir),
+          patch('upload_handlers.db.get_track', return_value={}),
+          patch('upload_handlers.db.load', return_value=pd.DataFrame()),
+          patch('upload_handlers.populate_db.populate_single_session',
+                return_value='2026_05_10_rowrah_14_30_practice')):
+
+        # Upload Driver A
+        resp_a = client.post(
+            '/api/upload/stream',
+            data=driver_a_csv,
+            headers={'X-API-Key': 'test_key'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_a.status_code == 200
+
+        # Upload Driver B
+        resp_b = client.post(
+            '/api/upload/stream',
+            data=driver_b_csv,
+            headers={'X-API-Key': 'test_key'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert resp_b.status_code == 200
+
+    # Both telemetry files must exist
+    assert os.path.exists(os.path.join(meeting_dir, 'telemetry', '14_30_practice_driver_a.csv'))
+    assert os.path.exists(os.path.join(meeting_dir, 'telemetry', '14_30_practice_driver_b.csv'))
+
+    # Summary CSV must contain BOTH drivers!
+    summary_path = os.path.join(meeting_dir, '14_30_practice.csv')
+    assert os.path.exists(summary_path)
+
+    df_summary = pd.read_csv(summary_path)
+    assert len(df_summary) == 2
+    drivers_in_summary = set(df_summary['Name'])
+    assert drivers_in_summary == {'Driver A', 'Driver B'}
+    assert set(df_summary['Pos']) == {1, 2}

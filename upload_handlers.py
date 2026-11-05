@@ -22,6 +22,8 @@ import datetime
 import time
 import logging
 import re
+import fcntl
+import contextlib
 from urllib.parse import unquote
 import zlib
 import brotli  # type: ignore[import-untyped]
@@ -1191,8 +1193,9 @@ def process_telemetry_derivative_data(
         if lap['num'] in valid_lap_nums
     }
 
+    kart_num_str = str(session_info.kart_number) if session_info.kart_number is not None else ''
     summary_row = [
-        '1', '0', str(session_info.kart_number), session_info.driver_name, str(len(valid_laps)),
+        '1', '0', kart_num_str, session_info.driver_name, str(len(valid_laps)),
         '', '', '', '', best_lap_time, best_lap_num
     ]
     for idx in range(1, max_lap_num + 1):
@@ -1245,6 +1248,198 @@ def process_telemetry_derivative_data(
         metadata_json['track_origin_heading'] = session_info.origin.heading
 
     return df_telemetry, metadata_json, df_summary
+
+
+@contextlib.contextmanager
+def session_file_lock(lock_path: str) -> Iterator[None]:
+    """Process-level mutual-exclusion lock using fcntl.flock on a lockfile across worker processes."""
+    lock_fd = -1
+    try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    except OSError as e:
+        logger.warning(f"Failed to open session lock file {lock_path}: {e}")
+        yield
+        return
+
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        except OSError as e:
+            logger.warning(f"Failed to flock session lock file {lock_path}: {e}")
+        yield
+    finally:
+        if lock_fd != -1:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+
+
+def merge_driver_summary(summary_path: str, new_driver_df: pd.DataFrame) -> pd.DataFrame:
+    """Merges new_driver_df with existing drivers in summary_path, re-calculating positions and gaps."""
+    if new_driver_df is None or new_driver_df.empty:
+        if os.path.exists(summary_path):
+            try:
+                return pd.read_csv(summary_path)
+            except Exception:
+                pass
+        return pd.DataFrame()
+
+    new_driver_name = str(new_driver_df['Name'].iloc[0]).strip()
+
+    def _get_val(col_name: str, default: str = '') -> str:
+        if col_name in new_driver_df.columns:
+            v = new_driver_df[col_name].iloc[0]
+            if pd.notna(v):
+                return str(v)
+        return default
+
+    new_driver_entry: dict[str, Any] = {
+        'No': _get_val('No'),
+        'Name': new_driver_name,
+        'Laps': _get_val('Laps', '0'),
+        'Time': _get_val('Time'),
+        'Avg Speed': _get_val('Avg Speed'),
+        'Gap': _get_val('Gap'),
+        'Best': _get_val('Best'),
+        'On': _get_val('On'),
+        'Positions Gained': _get_val('Positions Gained', '0'),
+        'lap_times': {},
+    }
+    for col in new_driver_df.columns:
+        m = re.match(r'^Lap (\d+)$', col)
+        if m:
+            lap_num = int(m.group(1))
+            val = str(new_driver_df[col].iloc[0]) if pd.notna(new_driver_df[col].iloc[0]) else ''
+            if val:
+                new_driver_entry['lap_times'][lap_num] = val
+
+    existing_drivers: list[dict[str, Any]] = []
+    seen_drivers: set[str] = set()
+
+    if os.path.exists(summary_path):
+        try:
+            with open(summary_path, 'r', encoding='utf-8') as f:
+                reader = list(csv.reader(f))
+            if reader and len(reader) >= 2:
+                header = reader[0]
+                col_map = {col_name.strip(): idx for idx, col_name in enumerate(header)}
+                name_idx = col_map.get('Name')
+                if name_idx is not None:
+                    lap_col_map = {}
+                    for idx, col_name in enumerate(header):
+                        m = re.match(r'^Lap (\d+)$', col_name.strip())
+                        if m:
+                            lap_col_map[int(m.group(1))] = idx
+
+                    for row in reader[1:]:
+                        if not row or len(row) <= name_idx:
+                            continue
+                        d_name = row[name_idx].strip()
+                        if not d_name:
+                            continue
+                        if d_name.lower() == new_driver_name.lower():
+                            # If existing entry had a kart number and new entry doesn't, preserve it
+                            no_idx = col_map.get('No')
+                            if not new_driver_entry['No'] and no_idx is not None and no_idx < len(row):
+                                new_driver_entry['No'] = row[no_idx].strip()
+                            continue
+                        if d_name.lower() in seen_drivers:
+                            continue
+                        seen_drivers.add(d_name.lower())
+
+                        def get_cell(c_name: str, default: str = '') -> str:
+                            idx = col_map.get(c_name)
+                            if idx is not None and idx < len(row):
+                                return row[idx].strip()
+                            return default
+
+                        d_entry: dict[str, Any] = {
+                            'No': get_cell('No'),
+                            'Name': d_name,
+                            'Laps': get_cell('Laps', '0'),
+                            'Time': get_cell('Time'),
+                            'Avg Speed': get_cell('Avg Speed'),
+                            'Gap': get_cell('Gap'),
+                            'Best': get_cell('Best'),
+                            'On': get_cell('On'),
+                            'Positions Gained': get_cell('Positions Gained', '0'),
+                            'lap_times': {},
+                        }
+                        for lap_num, idx in lap_col_map.items():
+                            if idx < len(row):
+                                l_val = row[idx].strip()
+                                if l_val:
+                                    d_entry['lap_times'][lap_num] = l_val
+                        existing_drivers.append(d_entry)
+        except Exception as e:
+            logger.warning(f"Error reading existing summary CSV {summary_path}: {e}")
+
+    all_drivers = existing_drivers + [new_driver_entry]
+
+    def driver_sort_key(d: dict[str, Any]) -> tuple:
+        best_sec = sanitize.parse_time(d.get('Best'))
+        has_best = (best_sec is not None and best_sec > 0)
+        laps_count = 0
+        try:
+            laps_count = int(float(d.get('Laps', 0)))
+        except (ValueError, TypeError):
+            laps_count = len(d.get('lap_times', {}))
+        return (
+            0 if has_best else 1,
+            best_sec if has_best else -laps_count,
+            -laps_count,
+            d.get('Name', '').lower()
+        )
+
+    all_drivers.sort(key=driver_sort_key)
+
+    leader_best_sec = sanitize.parse_time(all_drivers[0].get('Best'))
+    for i, d in enumerate(all_drivers):
+        d['Pos'] = str(i + 1)
+        if i == 0:
+            d['Gap'] = ''
+        else:
+            d_best = sanitize.parse_time(d.get('Best'))
+            if leader_best_sec is not None and d_best is not None:
+                diff = d_best - leader_best_sec
+                d['Gap'] = f'+{diff:.3f}' if diff > 0 else '+0.000'
+            else:
+                d['Gap'] = ''
+
+    max_lap_num = 0
+    for d in all_drivers:
+        if d['lap_times']:
+            max_lap_num = max(max_lap_num, max(d['lap_times'].keys()))
+
+    headers = ['Pos', 'Positions Gained', 'No', 'Name', 'Laps', 'Time', '', 'Avg Speed', 'Gap', 'Best', 'On']
+    for idx in range(1, max_lap_num + 1):
+        headers.append(f'Lap {idx}')
+
+    rows: list[list[str]] = []
+    for d in all_drivers:
+        row = [
+            d['Pos'],
+            d['Positions Gained'],
+            d['No'],
+            d['Name'],
+            d['Laps'],
+            d['Time'],
+            '',
+            d['Avg Speed'],
+            d['Gap'],
+            d['Best'],
+            d['On'],
+        ]
+        for idx in range(1, max_lap_num + 1):
+            row.append(d['lap_times'].get(idx, ''))
+        rows.append(row)
+
+    return pd.DataFrame(rows, columns=headers)
 
 
 class StreamingByteReader:
@@ -1725,7 +1920,8 @@ def stream_upload() -> Any:
                                         continue
                                     try:
                                         row_cols = next(csv.reader([line]))
-                                        if len(row_cols) > existing_time_idx:
+                                        valid_cols = (len(row_cols) == len(existing_header_cols))
+                                        if valid_cols and len(row_cols) > existing_time_idx:
                                             t_val = row_cols[existing_time_idx].strip()
                                             dt = to_naive_datetime(t_val)
                                             if dt is not None and dt < min_new_timestamp:
@@ -1767,29 +1963,35 @@ def stream_upload() -> Any:
                     written_rows_count = len(df_telemetry)
 
                 if not has_alphatiming:
-                    if os.path.exists(meta_path):
-                        try:
-                            with open(meta_path, 'r', encoding='utf-8') as f:
-                                ex_meta = json.load(f)
-                            ex_dt_str = ex_meta.get('session_start_datetime')
-                            if ex_dt_str:
-                                ex_dt = session_time.parse_session_start_datetime_tolerant(ex_dt_str)
-                                resolved_dt = session_time.resolve_start_datetime_overwrite(
-                                    ex_dt, metadata.session_start_datetime, getattr(metadata, 'has_seconds', False)
-                                )
-                                metadata_json['session_start_datetime'] = (
-                                    resolved_dt.strftime('%Y-%m-%d %H:%M:%S')
-                                    if (getattr(metadata, 'has_seconds', False) or resolved_dt.second)
-                                    else resolved_dt.strftime('%Y-%m-%d %H:%M')
-                                )
-                        except Exception:
-                            pass
+                    lock_path = f'{summary_path}.lock'
+                    with session_file_lock(lock_path):
+                        if os.path.exists(meta_path):
+                            try:
+                                with open(meta_path, 'r', encoding='utf-8') as f:
+                                    ex_meta = json.load(f)
+                                ex_dt_str = ex_meta.get('session_start_datetime')
+                                if ex_dt_str:
+                                    ex_dt = session_time.parse_session_start_datetime_tolerant(ex_dt_str)
+                                    resolved_dt = session_time.resolve_start_datetime_overwrite(
+                                        ex_dt, metadata.session_start_datetime, getattr(metadata, 'has_seconds', False)
+                                    )
+                                    metadata_json['session_start_datetime'] = (
+                                        resolved_dt.strftime('%Y-%m-%d %H:%M:%S')
+                                        if (getattr(metadata, 'has_seconds', False) or resolved_dt.second)
+                                        else resolved_dt.strftime('%Y-%m-%d %H:%M')
+                                    )
+                                for k in ('temperature', 'weather', 'track_conditions', 'track_temperature'):
+                                    if not metadata_json.get(k) and ex_meta.get(k):
+                                        metadata_json[k] = ex_meta[k]
+                            except Exception:
+                                pass
 
-                    with open(meta_path, 'w', encoding='utf-8') as f:
-                        json.dump(metadata_json, f, indent=4)
+                        with open(meta_path, 'w', encoding='utf-8') as f:
+                            json.dump(metadata_json, f, indent=4)
 
-                    df_summary.to_csv(summary_path, index=False)
-                    db_session_id = populate_db.populate_single_session(meta_path, db.conn, DATA_DIR)
+                        df_merged_summary = merge_driver_summary(summary_path, df_summary)
+                        df_merged_summary.to_csv(summary_path, index=False)
+                        db_session_id = populate_db.populate_single_session(meta_path, db.conn, DATA_DIR)
                 else:
                     meeting_folder_name = os.path.basename(meeting_dir)
                     db_session_id = f'{meeting_folder_name}_{session_filename}'
