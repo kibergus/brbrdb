@@ -2157,6 +2157,16 @@ export function handleReportTriggerAction(data) {
         setVisiblePlots(data.plots !== undefined ? data.plots : data.plot);
     }
 
+    // 7. Collapse / expand side panel
+    if (data.collapseSidePanel || data.sidePanel === 'collapsed') {
+        if (typeof collapseSidePanel === 'function') {
+            collapseSidePanel(true);
+        }
+    } else if (data.expandSidePanel || data.sidePanel === 'expanded') {
+        if (typeof expandSidePanel === 'function') {
+            expandSidePanel(true);
+        }
+    }
 
     // 8. Switch right tab
     if (data.rtab) {
@@ -2285,7 +2295,8 @@ export function initReportInteractions() {
                                    event.data.range !== undefined || event.data.plots !== undefined ||
                                    event.data.laps !== undefined || event.data.lapsA !== undefined ||
                                    event.data.mapRange !== undefined || event.data.focusRange !== undefined ||
-                                   (event.data.lat !== undefined && event.data.lng !== undefined);
+                                   (event.data.lat !== undefined && event.data.lng !== undefined) ||
+                                   event.data.collapseSidePanel !== undefined || event.data.sidePanel !== undefined;
             if (isKnownType || (!type && hasKnownPayload)) {
                 handleReportTriggerAction(event.data);
             }
@@ -2300,7 +2311,7 @@ export function initReportInteractions() {
                     '[data-dist], [data-xlim], [data-range], [data-plot-range], [data-map-range], ' +
                     '[data-map-focus], [data-center-map], [data-focus-map], [data-focus-range], [data-zoom-range], ' +
                     '[data-turn], [data-laps], [data-laps-a], [data-laps-b], [data-tab], [data-rtab], ' +
-                    '[data-toggle-plot], [data-plots], [data-plot]'
+                    '[data-toggle-plot], [data-plots], [data-plot], [data-collapse-side-panel], [data-side-panel]'
                 );
                 if (!trigger) return;
                 handleReportTriggerAction({
@@ -2315,7 +2326,9 @@ export function initReportInteractions() {
                     tab: trigger.dataset.tab,
                     rtab: trigger.dataset.rtab,
                     togglePlot: trigger.dataset.togglePlot,
-                    plots: trigger.dataset.plots || trigger.dataset.plot
+                    plots: trigger.dataset.plots || trigger.dataset.plot,
+                    collapseSidePanel: trigger.dataset.collapseSidePanel !== undefined,
+                    sidePanel: trigger.dataset.sidePanel
                 });
             });
         }

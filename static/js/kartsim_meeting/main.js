@@ -136,7 +136,12 @@ document.addEventListener('DOMContentLoaded', () => {
     initReportInteractions();
     initCompanionControl();
 
-    if (isReportMode) {
+    const isCompanionMode = params.get('companion') === '1' ||
+                            params.get('ws') === '1' ||
+                            params.has('ws_url') ||
+                            params.has('ws_port');
+
+    if (isReportMode && !isCompanionMode) {
         if (reportState.sidePanelWidth) {
             state.sidePanelWidth = reportState.sidePanelWidth;
             const sidePanel = document.getElementById('map-side-panel');

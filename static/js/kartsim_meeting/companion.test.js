@@ -25,7 +25,9 @@ vi.mock('./lap_selection.js', () => ({
     setPlotXLim: vi.fn(),
     setGroupALaps: vi.fn(),
     centerMapOnCoords: vi.fn(),
-    focusMapOnRange: vi.fn()
+    focusMapOnRange: vi.fn(),
+    collapseSidePanel: vi.fn(),
+    expandSidePanel: vi.fn()
 }));
 
 describe('companion.js', () => {
@@ -75,6 +77,7 @@ describe('companion.js', () => {
 
         const controller = initCompanionControl();
         expect(controller).not.toBeNull();
+        expect(lapSelection.collapseSidePanel).toHaveBeenCalledWith(false);
         expect(mockWebSocket).toHaveBeenCalledWith('ws://127.0.0.1:38472/ws');
 
         const socket = controller.getSocket();
@@ -100,6 +103,7 @@ describe('companion.js', () => {
 
         const controller = initCompanionControl();
         expect(controller).not.toBeNull();
+        expect(lapSelection.collapseSidePanel).toHaveBeenCalledWith(false);
         expect(mockWebSocket).toHaveBeenCalledWith('ws://127.0.0.1:38472/ws');
         controller.close();
     });

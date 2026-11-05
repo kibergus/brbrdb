@@ -692,6 +692,39 @@ describe('lap_selection.js showRightPanelTab and Report Mode', () => {
         expect(state.groupBSelection.size).toBe(0);
     });
 
+    it('handles collapseSidePanel and sidePanel trigger actions in handleReportTriggerAction', () => {
+        const mockSidePanel = { style: { width: '380px' }, classList: { add: vi.fn(), remove: vi.fn(), contains: vi.fn() } };
+        const mockTabMap = { classList: { add: vi.fn(), remove: vi.fn() } };
+        const mockToggleBtn = { setAttribute: vi.fn() };
+
+        vi.stubGlobal('document', {
+            querySelector: vi.fn().mockImplementation((sel) => {
+                if (sel === '.map-side-panel') return mockSidePanel;
+                return null;
+            }),
+            querySelectorAll: vi.fn().mockReturnValue([]),
+            getElementById: vi.fn().mockImplementation((id) => {
+                if (id === 'tab-map') return mockTabMap;
+                if (id === 'side-panel-toggle-btn') return mockToggleBtn;
+                return null;
+            })
+        });
+
+        handleReportTriggerAction({ collapseSidePanel: true });
+        expect(mockSidePanel.classList.add).toHaveBeenCalledWith('collapsed');
+        expect(mockTabMap.classList.add).toHaveBeenCalledWith('side-panel-collapsed');
+        expect(state.sidePanelCollapsed).toBe(true);
+
+        handleReportTriggerAction({ sidePanel: 'expanded' });
+        expect(mockSidePanel.classList.remove).toHaveBeenCalledWith('collapsed');
+        expect(mockTabMap.classList.remove).toHaveBeenCalledWith('side-panel-collapsed');
+        expect(state.sidePanelCollapsed).toBe(false);
+
+        handleReportTriggerAction({ sidePanel: 'collapsed' });
+        expect(mockSidePanel.classList.add).toHaveBeenCalledWith('collapsed');
+        expect(state.sidePanelCollapsed).toBe(true);
+    });
+
     it('handles centerMapOnCoords and coordinate triggers in handleReportTriggerAction', () => {
         const mockPanTo = vi.fn();
         const mockSetZoom = vi.fn();

@@ -20,7 +20,7 @@
  * Enables zero-reload navigation (distance seek, plot selection, lap switching, map centering)
  * directly from Antigravity IDE or local test harnesses.
  */
-import { handleReportTriggerAction } from './lap_selection.js';
+import { handleReportTriggerAction, collapseSidePanel } from './lap_selection.js';
 
 export function handleCompanionCommand(data) {
     if (!data || typeof data !== 'object') return;
@@ -50,6 +50,11 @@ export function initCompanionControl() {
                             params.has('ws_port');
 
     if (!isCompanionMode) return null;
+
+    // Automatically collapse the right sidebar in companion side panel mode
+    if (typeof collapseSidePanel === 'function') {
+        collapseSidePanel(false);
+    }
 
     const wsPort = params.get('ws_port') || '38472';
     const wsUrl = params.get('ws_url') || `ws://127.0.0.1:${wsPort}/ws`;
