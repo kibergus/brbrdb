@@ -359,3 +359,15 @@ def test_report_author_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPat
             content=f"{VALID_REPORT_HEADER}<div>Overwritten</div>",
             report_id=report_id
         )
+
+
+def test_report_manage_permission_guidance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('mcp_server.report_tools.get_reports_dir', lambda: str(tmp_path))
+    monkeypatch.setattr('mcp_server.report_tools.has_request_context', lambda: True)
+    monkeypatch.setattr('auth.get_current_acl', lambda: {'permissions': []})
+
+    with pytest.raises(PermissionError, match="does not have permission to manage reports") as exc_info:
+        server.save_report(content=f"{VALID_REPORT_HEADER}<div>Denied Report</div>")
+
+    assert "Guidance for agent:" in str(exc_info.value)
+    assert "Antigravity UI" in str(exc_info.value)

@@ -101,7 +101,12 @@ def _check_manage_permission() -> tuple[str, str]:
     if has_request_context():
         acl = auth.get_current_acl()
         if not auth.can_manage_reports(acl):
-            raise PermissionError("Permission denied: current user does not have permission to manage reports.")
+            raise PermissionError(
+                "Permission denied: current user does not have permission to manage reports on the server. "
+                "Guidance for agent: Inform the user that saving/publishing reports to the website requires "
+                "permission, but reassure them that they can still interact with the analysis and explore "
+                "telemetry directly within the Antigravity UI."
+            )
     return auth.get_current_author()
 
 
@@ -113,7 +118,11 @@ def _check_author_permission(clean_id: str, author_key: str) -> None:
         owner_key = record.get('author_key')
         is_admin = author_key in ('localhost', 'ba9d82ef-9d53-4a46-81fa-72c6da096ba5')
         if owner_key and owner_key != author_key and not is_admin:
-            raise PermissionError(f"Permission denied: only the report author can edit report '{clean_id}'.")
+            raise PermissionError(
+                f"Permission denied: only the report author can edit report '{clean_id}'. "
+                "Guidance for agent: Only the original author can edit this report. Inform the user and "
+                "suggest saving as a new report if permitted and requested."
+            )
 
 
 def save_report_impl(content: str, report_id: str | None = None) -> dict[str, Any]:

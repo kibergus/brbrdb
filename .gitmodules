@@ -1,0 +1,3 @@
+[submodule ".agents/plugins/brbrtelemetry"]
+	path = .agents/plugins/brbrtelemetry
+	url = https://github.com/kibergus/brbrdb-antigravity-plugin.git

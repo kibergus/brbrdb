@@ -363,7 +363,16 @@ def get_session_consistency_image(
 @mcp.tool()
 def save_report(content: str, report_id: str | None = None) -> dict[str, Any]:
     """
-    Saves or creates a telemetry analysis HTML report.
+    Advanced capability: Saves or updates a permanent telemetry analysis HTML report on the server.
+
+    IMPORTANT: Only use this tool when the user explicitly requests to save or publish the report to the website.
+    Do NOT call this automatically at the end of an analysis. Most interactions should be delivered directly
+    as conversational commentary and interactive pills inside the Antigravity chat.
+
+    Note on permissions: Saving reports requires manage_reports permission on the server. If this tool errors out
+    with a permission denied error, inform the user that remote report saving is not available for their account/token,
+    but reassure them that they can still interact with the analysis and explore telemetry directly within the
+    Antigravity UI.
 
     If `report_id` is empty or None, generates a new random unguessable UUIDv4 for the report.
     If `report_id` is specified, it MUST be a valid UUID; otherwise an error is raised.
