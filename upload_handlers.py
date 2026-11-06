@@ -1175,6 +1175,14 @@ def process_telemetry_derivative_data(
         if is_lap_valid(lap_dists, turns, lap_length):
             valid_lap_nums.add(lap['num'])
 
+    candidate_times = [lap['time'] for lap in laps_data if lap['time'] > 0 and lap['num'] in valid_lap_nums]
+    if candidate_times:
+        median_lap_time = float(np.median(candidate_times))
+        if median_lap_time > 0:
+            for lap in laps_data:
+                if lap['num'] in valid_lap_nums and lap['time'] > 10.0 * median_lap_time:
+                    valid_lap_nums.remove(lap['num'])
+
     valid_laps = [lap for lap in laps_data if lap['time'] > 0 and lap['num'] in valid_lap_nums]
     if valid_laps:
         best_lap_info = min(valid_laps, key=lambda x: x['time'])

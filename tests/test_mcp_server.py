@@ -16,9 +16,10 @@
 from pathlib import Path
 import json
 import uuid
+import pandas as pd
 import pytest
 from mcp.server.fastmcp import Image
-from mcp_server import server, image_tools
+from mcp_server import server, image_tools, lap_tools
 
 
 def test_list_sessions_all() -> None:
@@ -371,3 +372,291 @@ def test_report_manage_permission_guidance(tmp_path: Path, monkeypatch: pytest.M
 
     assert "Guidance for agent:" in str(exc_info.value)
     assert "Antigravity UI" in str(exc_info.value)
+
+
+def test_parse_lap_spec_formats() -> None:
+    assert image_tools.parse_lap_spec(("2026-07-12", "Lydd", "18_54_practice", 23)) == (
+        "2026-07-12", "Lydd", "18_54_practice", 23, None
+    )
+    assert image_tools.parse_lap_spec(("2026-11-05", "Whilton Mill", "18_43_practice", 25, "Coach")) == (
+        "2026-11-05", "Whilton Mill", "18_43_practice", 25, "Coach"
+    )
+    assert image_tools.parse_lap_spec({
+        "date": "2026-11-05",
+        "track": "Whilton Mill",
+        "session_id": "18_43_practice",
+        "lap": 12,
+        "driver_name": "Katia"
+    }) == ("2026-11-05", "Whilton Mill", "18_43_practice", 12, "Katia")
+    assert image_tools.parse_lap_spec({
+        "date": "2026-11-05",
+        "track": "Whilton Mill",
+        "session_id": "18_43_practice",
+        "lap_number": 15,
+        "driver": "Coach"
+    }) == ("2026-11-05", "Whilton Mill", "18_43_practice", 15, "Coach")
+
+    with pytest.raises(ValueError, match="missing 'lap'"):
+        image_tools.parse_lap_spec({"date": "2026-11-05", "track": "Lydd", "session_id": "s1"})
+
+    with pytest.raises(ValueError, match="missing required key"):
+        image_tools.parse_lap_spec({"date": "2026-11-05", "lap": 5})
+
+
+def test_multi_driver_lap_selection_and_plots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tel_dir = tmp_path / "telemetry"
+    tel_dir.mkdir()
+
+    coach_csv = tel_dir / "18_43_practice_coach.csv"
+    coach_csv.write_text(
+        "Format,RaceTools CSV\n"
+        "Driver name,KartSim Coach RS\n\n"
+        "Time,Latitude,Longitude,Record,Lap,Lap Distance (m),Speed,Throttle,Brake\n"
+        "10.0,52.275,-1.095,1,1,0.0,20.0,100.0,0.0\n"
+        "15.0,52.276,-1.094,2,1,100.0,25.0,100.0,0.0\n"
+    )
+
+    student_csv = tel_dir / "18_43_practice_katia.csv"
+    student_csv.write_text(
+        "Format,RaceTools CSV\n"
+        "Driver name,Katia Guseinova\n\n"
+        "Time,Latitude,Longitude,Record,Lap,Lap Distance (m),Speed,Throttle,Brake\n"
+        "10.0,52.275,-1.095,1,1,0.0,18.0,80.0,0.0\n"
+        "16.0,52.276,-1.094,2,1,100.0,22.0,90.0,10.0\n"
+    )
+
+    class DummySession:
+        meeting_dir = str(tmp_path)
+        session_id = "18_43_practice"
+        league = "kartsim"
+        class_name = ["cadet"]
+        date = "2026-11-05"
+        track_name = "Whilton Mill"
+
+    monkeypatch.setattr("race_db.RaceDB.find_sessions", lambda self, **kwargs: [DummySession()])
+
+    resolved_coach = image_tools.find_telemetry_csv(
+        "18_43_practice", "Whilton Mill", "2026-11-05", driver_name="kartsim coach rs"
+    )
+    resolved_katia = image_tools.find_telemetry_csv(
+        "18_43_practice", "Whilton Mill", "2026-11-05", driver_name="Katia Guseinova"
+    )
+    assert resolved_coach == str(coach_csv)
+    assert resolved_katia == str(student_csv)
+
+    # Partial/substring names must NOT match (full driver name required)
+    with pytest.raises(ValueError, match="Available drivers: \\['KartSim Coach RS', 'Katia Guseinova'\\]"):
+        image_tools.find_telemetry_csv(
+            "18_43_practice", "Whilton Mill", "2026-11-05", driver_name="Coach"
+        )
+
+    captured_labels: dict[int | str, str] = {}
+    orig_render = image_tools.render_stacked_telemetry_plot
+
+    def spy_render(*args: object, **kwargs: object) -> str:
+        lbls = kwargs.get("labels")
+        if isinstance(lbls, dict):
+            captured_labels.update(lbls)
+        return orig_render(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(image_tools, "render_stacked_telemetry_plot", spy_render)
+
+    tel_img = server.get_telemetry_plot(
+        laps=[
+            ("2026-11-05", "Whilton Mill", "18_43_practice", 1, "KartSim Coach RS"),
+            {
+                "date": "2026-11-05",
+                "track": "Whilton Mill",
+                "session_id": "18_43_practice",
+                "lap": 1,
+                "driver_name": "Katia Guseinova"
+            }
+        ],
+        start_m=0.0,
+        end_m=100.0,
+        channels=["Speed", "Delta Time"]
+    )
+    assert isinstance(tel_img, Image)
+    assert tel_img.data is not None and tel_img.data.startswith(b'\x89PNG\r\n\x1a\n')
+    label_vals = list(captured_labels.values())
+    assert "KartSim Coach RS - Lap 1 (18_43_practice)" in label_vals
+    assert "Katia Guseinova - Lap 1 (18_43_practice)" in label_vals
+
+    traj_img = server.get_trajectory_plot(
+        laps=[
+            ("2026-11-05", "Whilton Mill", "18_43_practice", 1, "KartSim Coach RS"),
+            {
+                "date": "2026-11-05",
+                "track": "Whilton Mill",
+                "session_id": "18_43_practice",
+                "lap": 1,
+                "driver_name": "Katia Guseinova"
+            }
+        ],
+        start_m=0.0,
+        end_m=100.0,
+        color_mode="delta_t"
+    )
+    assert isinstance(traj_img, Image)
+    assert traj_img.data is not None and traj_img.data.startswith(b'\x89PNG\r\n\x1a\n')
+
+
+def test_get_pace_summary_multi_driver_and_reference(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tel_dir = tmp_path / "telemetry"
+    tel_dir.mkdir()
+
+    coach_csv = tel_dir / "18_43_practice_coach.csv"
+    coach_csv.write_text(
+        "Format,RaceTools CSV\n"
+        "Driver name,KartSim Coach RS\n\n"
+        "Time,Latitude,Longitude,Record,Lap,Lap Distance (m),Speed\n"
+        "2026-11-05T18:43:00.000Z,52.275,-1.095,1,1,0.0,22.0\n"
+        "2026-11-05T18:43:02.500Z,52.275,-1.095,2,1,50.0,18.0\n"
+        "2026-11-05T18:43:05.000Z,52.275,-1.095,3,1,100.0,24.0\n"
+        "2026-11-05T18:43:10.000Z,52.275,-1.095,4,1,200.0,25.0\n"
+        "2026-11-05T18:43:10.000Z,52.275,-1.095,5,2,0.0,22.0\n"
+        "2026-11-05T18:43:12.400Z,52.275,-1.095,6,2,50.0,19.0\n"
+        "2026-11-05T18:43:14.800Z,52.275,-1.095,7,2,100.0,24.5\n"
+        "2026-11-05T18:43:19.500Z,52.275,-1.095,8,2,200.0,25.5\n"
+    )
+
+    student_csv = tel_dir / "18_43_practice_katia.csv"
+    student_csv.write_text(
+        "Format,RaceTools CSV\n"
+        "Driver name,Katia Guseinova\n\n"
+        "Time,Latitude,Longitude,Record,Lap,Lap Distance (m),Speed\n"
+        "2026-11-05T18:43:00.000Z,52.275,-1.095,1,1,0.0,20.0\n"
+        "2026-11-05T18:43:02.800Z,52.275,-1.095,2,1,50.0,15.0\n"
+        "2026-11-05T18:43:05.600Z,52.275,-1.095,3,1,100.0,21.0\n"
+        "2026-11-05T18:43:11.200Z,52.275,-1.095,4,1,200.0,23.0\n"
+        "2026-11-05T18:43:11.200Z,52.275,-1.095,5,2,0.0,20.5\n"
+        "2026-11-05T18:43:13.900Z,52.275,-1.095,6,2,50.0,15.5\n"
+        "2026-11-05T18:43:16.600Z,52.275,-1.095,7,2,100.0,21.5\n"
+        "2026-11-05T18:43:22.000Z,52.275,-1.095,8,2,200.0,23.5\n"
+    )
+
+    class DummySession:
+        meeting_dir = str(tmp_path)
+        meeting_folder = "2026-11-05_whilton"
+        session_id = "18_43_practice"
+        league = "kartsim"
+        class_name = ["cadet"]
+        date = "2026-11-05"
+        track_name = "Whilton Mill"
+
+    mock_track = {
+        "lap_length": 200.0,
+        "sector_end": [100.0, 200.0],
+        "turns": [
+            {"name": "Christmas", "start": 0.0, "apex": [50.0], "end": 100.0},
+            {"name": "The Boot", "start": 100.0, "apex": [150.0], "end": 200.0},
+        ]
+    }
+
+    monkeypatch.setattr("race_db.RaceDB.find_sessions", lambda self, **kwargs: [DummySession()])
+    monkeypatch.setattr("race_db.RaceDB.get_track", lambda self, track: mock_track)
+    monkeypatch.setattr(
+        "race_db.RaceDB.get_session_drivers",
+        lambda self, sid, mf=None: ["KartSim Coach RS", "Katia Guseinova"]
+    )
+    monkeypatch.setattr("race_db.RaceDB.load", lambda self, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(lap_tools, "is_lap_valid", lambda dists, turns, length: True)
+
+    # 1. Explicit cross-driver comparison using case-insensitive full driver names
+    cross = server.get_pace_summary(
+        track="Whilton Mill",
+        date="2026-11-05",
+        session_id="18_43_practice",
+        driver_name="katia guseinova",
+        reference_driver_name="kartsim coach rs"
+    )
+    assert cross["driver_name"] == "Katia Guseinova"
+    assert cross["reference_driver_name"] == "KartSim Coach RS"
+    assert cross["driver_best_lap"]["lap_number"] == 2
+    assert cross["driver_best_lap"]["lap_time_s"] == pytest.approx(10.8, abs=0.01)
+    assert cross["reference_best_lap"]["lap_number"] == 2
+    assert cross["reference_best_lap"]["lap_time_s"] == pytest.approx(9.5, abs=0.01)
+    assert cross["total_best_lap_gap_s"] == pytest.approx(1.3, abs=0.01)
+    assert len(cross["turn_comparison"]) == 2
+    for tc in cross["turn_comparison"]:
+        assert tc["best_lap_delta_s"] > 0
+        assert tc["median_delta_s"] > 0
+        assert tc["vmin_delta_kmh"] < 0
+
+    # Partial/substring driver_name must not match
+    with pytest.raises(ValueError, match="No valid telemetry data found"):
+        server.get_pace_summary(
+            track="Whilton Mill",
+            date="2026-11-05",
+            session_id="18_43_practice",
+            driver_name="Katia"
+        )
+
+    # 2. Explicit reference_lap selection
+    cross_lap1 = server.get_pace_summary(
+        track="Whilton Mill",
+        date="2026-11-05",
+        session_id="18_43_practice",
+        driver_name="Katia Guseinova",
+        reference_driver_name="KartSim Coach RS",
+        reference_lap=1
+    )
+    assert cross_lap1["reference_best_lap"]["lap_number"] == 1
+    assert cross_lap1["reference_best_lap"]["lap_time_s"] == pytest.approx(10.0, abs=0.01)
+
+    # 3. Omitting driver_name on a multi-driver session returns per-driver breakdown + comparisons
+    multi = server.get_pace_summary(
+        track="Whilton Mill",
+        date="2026-11-05",
+        session_id="18_43_practice"
+    )
+    assert "drivers" in multi
+    assert set(multi["drivers"].keys()) == {"KartSim Coach RS", "Katia Guseinova"}
+    assert multi["fastest_driver"] == "KartSim Coach RS"
+    assert "Katia Guseinova" in multi["comparisons"]
+    assert multi["comparisons"]["Katia Guseinova"]["total_best_lap_gap_s"] == pytest.approx(1.3, abs=0.01)
+
+
+def test_long_pit_wait_lap_marked_invalid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tel_dir = tmp_path / "telemetry"
+    tel_dir.mkdir()
+
+    # Lap 1: 10s, Lap 2: 11s, Lap 3: 500s (> 10x median of ~11s)
+    csv_file = tel_dir / "18_43_practice_coach.csv"
+    csv_file.write_text(
+        "Format,RaceTools CSV\n"
+        "Driver name,KartSim Coach RS\n\n"
+        "Time,Latitude,Longitude,Record,Lap,Lap Distance (m),Speed\n"
+        "2026-11-05T18:43:00.000Z,52.275,-1.095,1,1,0.0,20.0\n"
+        "2026-11-05T18:43:10.000Z,52.275,-1.095,2,1,200.0,22.0\n"
+        "2026-11-05T18:43:10.000Z,52.275,-1.095,3,2,0.0,20.0\n"
+        "2026-11-05T18:43:21.000Z,52.275,-1.095,4,2,200.0,22.0\n"
+        "2026-11-05T18:43:21.000Z,52.275,-1.095,5,3,0.0,20.0\n"
+        "2026-11-05T18:51:41.000Z,52.275,-1.095,6,3,200.0,22.0\n"
+    )
+
+    class DummySession:
+        meeting_dir = str(tmp_path)
+        meeting_folder = "2026-11-05_whilton"
+        session_id = "18_43_practice"
+        league = "kartsim"
+        class_name = ["cadet"]
+        date = "2026-11-05"
+        track_name = "Whilton Mill"
+
+    mock_track = {
+        "lap_length": 200.0,
+        "sector_end": [100.0, 200.0],
+        "turns": [{"name": "Christmas", "start": 0.0, "apex": [50.0], "end": 100.0}]
+    }
+
+    monkeypatch.setattr("race_db.RaceDB.find_sessions", lambda self, **kwargs: [DummySession()])
+    monkeypatch.setattr("race_db.RaceDB.get_track", lambda self, track: mock_track)
+    monkeypatch.setattr("race_db.RaceDB.get_session_drivers", lambda self, sid, mf=None: ["KartSim Coach RS"])
+    monkeypatch.setattr("race_db.RaceDB.load", lambda self, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(lap_tools, "is_lap_valid", lambda dists, turns, length: True)
+
+    stats = json.loads(server.get_stats(track="Whilton Mill", date="2026-11-05", session_id="18_43_practice"))
+    lap_nums = [s["lap"] for s in stats]
+    assert lap_nums == [1, 2]
+    assert 3 not in lap_nums

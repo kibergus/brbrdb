@@ -76,7 +76,7 @@ def list_sessions(
     Parameters:
     - track: Filter by track name (substring match)
     - date: Filter by ISO date string (YYYY-MM-DD)
-    - driver_name: Filter by driver name (substring match)
+    - driver_name: Filter by full driver name
     - league: e.g. "kartsim"
     - class_name: e.g. "iame_waterswift_restricted_cadet_uk"
 
@@ -86,8 +86,7 @@ def list_sessions(
         leagues=league,
         classes=class_name,
         date=date,
-        track=track,
-        driver_names=driver_name
+        track=track
     )
 
     results = []
@@ -107,6 +106,9 @@ def list_sessions(
 
                     if tel_driver and tel_driver not in drivers:
                         drivers.append(tel_driver)
+
+        if driver_name and not any(d.strip().lower() == driver_name.strip().lower() for d in drivers):
+            continue
 
         results.append({
             "session_id": s.session_id,
@@ -141,27 +143,25 @@ def get_track_info(track: str, include_geometry: bool = False) -> dict[str, Any]
 
 @mcp.tool()
 def get_telemetry_plot(
-    laps: list[tuple[str, str, str, int] | list[Any] | dict[str, Any]],
+    laps: list[tuple[str, str, str, int] | tuple[str, str, str, int, str] | dict[str, Any]],
     start_m: float,
     end_m: float,
     channels: list[str]
 ) -> Image:
     """
-    Generates a stacked multi-channel telemetry comparison plot for one or more laps over a
-    distance range specified by the caller.
+    Generates a stacked multi-channel telemetry comparison plot for one or more laps over [start_m, end_m].
 
-    `laps` selects laps for comparison. Each entry in `laps` MUST be a tuple
-    or list specifying: (date, track, session_id, lap_number).
-    Example:
-    [
-        ("2026-06-25", "Llandow", "16_20_practice", 15),
-        ("2026-07-28", "Llandow", "18_32_practice", 12),
-        ("2026-07-28", "Llandow", "18_32_practice", 15),
-        ("2026-07-28", "Llandow", "18_32_practice", 21)
+    Each entry in `laps` can be:
+    - Tuple: (date, track, session_id, lap) or (date, track, session_id, lap, driver_name)
+    - Dict: {"date": str, "track": str, "session_id": str, "lap": int, "driver_name": str (optional)}
+    `driver_name` is a case-insensitive full driver name match (required when a session has multiple drivers).
+    Example: [
+        ("2026-11-05", "Lydd", "18_43", 25, "KartSim Coach RS"),
+        {"date": "2026-11-05", "track": "Lydd", "session_id": "18_43", "lap": 12, "driver_name": "Katia Guseinova"}
     ]
 
     Parameters:
-    - laps: List of (date, track, session_id, lap_number) tuples or lists.
+    - laps: List of lap selector tuples or dicts.
     - start_m: Start distance along the lap in metres
     - end_m: End distance along the lap in metres
     - channels: Channels to plot (e.g. ["Speed", "Throttle", "Brake", "Steering Angle", "Delta Time"])
@@ -179,14 +179,22 @@ def get_telemetry_plot(
     raw_lap_data: dict[int | str, dict[str, list[float]]] = {}
     all_lap_keys: list[int | str] = []
     labels: dict[int | str, str] = {}
+    resolved_drivers: list[str | None] = []
 
-    for idx, (cs_date, cs_track, cs_sid, cs_lap) in enumerate(parsed_laps):
+    for idx, (cs_date, cs_track, cs_sid, cs_lap, cs_driver) in enumerate(parsed_laps):
         cs_key = f"{cs_sid}_L{cs_lap}" if f"{cs_sid}_L{cs_lap}" not in raw_lap_data else f"{cs_sid}_L{cs_lap}_{idx}"
-        cs_csv = image_tools.find_telemetry_csv(cs_sid, cs_track, cs_date)
+        cs_csv = image_tools.find_telemetry_csv(cs_sid, cs_track, cs_date, driver_name=cs_driver)
         cs_data = image_tools.extract_raw_lap_data(cs_csv, [cs_lap], channels)
         raw_lap_data[cs_key] = cs_data[cs_lap]
         all_lap_keys.append(cs_key)
-        labels[cs_key] = f"Lap {cs_lap} ({cs_sid})"
+        resolved_drivers.append(image_tools._read_csv_driver(cs_csv) or cs_driver)
+
+    distinct_drivers = {d for d in resolved_drivers if d}
+    show_driver = len(distinct_drivers) > 1 or any(p[4] is not None for p in parsed_laps)
+    for idx, lap_key in enumerate(all_lap_keys):
+        _, _, cs_sid, cs_lap, _ = parsed_laps[idx]
+        drv = resolved_drivers[idx]
+        labels[lap_key] = f"{drv} - Lap {cs_lap} ({cs_sid})" if (show_driver and drv) else f"Lap {cs_lap} ({cs_sid})"
 
     dists_grid, interp_lap_data = image_tools.interpolate_lap_channels(
         all_lap_keys, channels, raw_lap_data, start_m, end_m
@@ -270,31 +278,43 @@ def get_pace_summary(
     track: str,
     date: str,
     session_id: str | None = None,
-    driver_name: str | None = None
+    driver_name: str | None = None,
+    reference_driver_name: str | None = None,
+    reference_lap: int | None = None
 ) -> dict[str, Any]:
     """
     Returns a structured summary of the theoretical vs. actual best lap for a session or day,
     including per-turn deltas and prioritized improvement opportunities.
 
+    When `reference_driver_name` (or `reference_lap`) is provided, computes a per-turn cross-driver
+    benchmark (`turn_comparison`) between `driver_name` and `reference_driver_name`.
+    When `driver_name` is omitted on a multi-driver session, returns per-driver summaries (`drivers`)
+    and automatic cross-driver comparisons against the fastest driver (`comparisons`).
+
     Parameters:
     - track: Track name
     - date: ISO date
     - session_id: Restrict to one session
-    - driver_name: Filter by driver name
+    - driver_name: Filter by full driver name (case-insensitive)
+    - reference_driver_name: Optional benchmark full driver name (case-insensitive)
+    - reference_lap: Optional specific lap number for the reference driver (defaults to their best lap)
 
-    Returns summary dictionary with actual vs theoretical best lap and prioritized turn deltas.
+    Returns summary dictionary with actual vs theoretical best lap, prioritized turn deltas, and
+    cross-driver comparison when applicable.
     """
     return lap_tools.get_pace_summary_impl(
         track=track,
         date=date,
         session_id=session_id,
-        driver_name=driver_name
+        driver_name=driver_name,
+        reference_driver_name=reference_driver_name,
+        reference_lap=reference_lap
     )
 
 
 @mcp.tool()
 def get_trajectory_plot(
-    laps: list[tuple[str, str, str, int] | list[Any] | dict[str, Any]],
+    laps: list[tuple[str, str, str, int] | tuple[str, str, str, int, str] | dict[str, Any]],
     start_m: float | None = None,
     end_m: float | None = None,
     color_mode: str = "lap"
@@ -302,16 +322,17 @@ def get_trajectory_plot(
     """
     Renders GPS (X/Z) trajectories for one or more laps overlaid on the full track outline.
 
-    `laps` selects laps for comparison. Each entry in `laps` MUST be a tuple
-    or list specifying: (date, track, session_id, lap_number).
-    Example:
-    [
-        ("2026-06-25", "Llandow", "16_20_practice", 15),
-        ("2026-07-28", "Llandow", "18_32_practice", 12)
+    Each entry in `laps` can be:
+    - Tuple: (date, track, session_id, lap) or (date, track, session_id, lap, driver_name)
+    - Dict: {"date": str, "track": str, "session_id": str, "lap": int, "driver_name": str (optional)}
+    `driver_name` is a case-insensitive full driver name match (required when a session has multiple drivers).
+    Example: [
+        ("2026-11-05", "Lydd", "18_43", 25, "KartSim Coach RS"),
+        {"date": "2026-11-05", "track": "Lydd", "session_id": "18_43", "lap": 12, "driver_name": "Katia Guseinova"}
     ]
 
     Parameters:
-    - laps: List of (date, track, session_id, lap_number) tuples or lists.
+    - laps: List of lap selector tuples or dicts.
     - start_m: Start distance for crop (omit for full lap)
     - end_m: End distance for crop (omit for full lap)
     - color_mode: Color scheme mode: 'lap' (default, solid color per lap), 'pedals' (green throttle /

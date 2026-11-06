@@ -252,6 +252,7 @@ def parse_telemetry_csv(csv_path: str, track_data: dict | None = None) -> tuple[
             'times': times,
             'duration': duration
         })
+    _filter_long_outlier_laps(laps_list)
     core_cols = {'Record', 'Time', 'Latitude', 'Longitude', 'Lap'}
     active_columns = [
         header[i] for i in range(len(header))
@@ -1182,6 +1183,34 @@ def _override_with_official_laps(
                 lap['is_valid'] = lap_map[l_num]['is_valid']
             if lap.get('is_outlap'):
                 lap['is_valid'] = False
+    _filter_long_outlier_laps(laps)
+
+
+def _filter_long_outlier_laps(laps: list[dict[str, Any]]) -> None:
+    """Mark laps with duration > 10x median valid lap duration as invalid (e.g. stationary pit-wait laps)."""
+    valid_durations: list[float] = []
+    lap_durations: list[tuple[dict[str, Any], float]] = []
+    for lap in laps:
+        if lap.get('is_outlap') or not lap.get('is_valid', True):
+            continue
+        dur = float(lap.get('duration') or 0.0)
+        l_time_str = lap.get('lap_time')
+        if l_time_str and l_time_str != 'Unknown':
+            parsed_sec = sanitize.parse_time(str(l_time_str))
+            if parsed_sec and parsed_sec > 0:
+                dur = float(parsed_sec)
+        if dur > 0:
+            valid_durations.append(dur)
+            lap_durations.append((lap, dur))
+
+    if not valid_durations:
+        return
+    median_dur = float(np.median(valid_durations))
+    if median_dur <= 0:
+        return
+    for lap, dur in lap_durations:
+        if dur > 10.0 * median_dur:
+            lap['is_valid'] = False
 
 
 def _compute_lap_segments(laps: list, sector_ends: list, turns: list) -> None:

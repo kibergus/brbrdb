@@ -43,22 +43,73 @@ def _parse_time_seconds(time_str: str) -> float:
     return float(time_str)
 
 
-def find_telemetry_csv(session_id: str, track: str, date: str) -> str:
-    """Locate the telemetry CSV path matching session_id, track, and date."""
+def _read_csv_driver(csv_path: str) -> str | None:
+    """Fast header parser to extract driver name from CSV metadata rows."""
+    try:
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if not row or all(cell.strip() == '' for cell in row):
+                    break
+                if len(row) >= 2 and row[0].strip().lower() in ('driver name', 'configuration'):
+                    val = row[1].strip()
+                    if val:
+                        return val
+    except (OSError, UnicodeDecodeError):
+        pass
+    return None
+
+
+def find_telemetry_csv(
+    session_id: str,
+    track: str,
+    date: str,
+    driver_name: str | None = None
+) -> str:
+    """Locate the telemetry CSV path matching session_id, track, date, and optional driver_name."""
     raw_sessions = db.find_sessions(date=date, track=track, session_id=session_id)
+    candidates: list[str] = []
+    seen: set[str] = set()
+
     for s in raw_sessions:
         tel_dir = os.path.join(s.meeting_dir, 'telemetry') if s.meeting_dir else ''
         if tel_dir and os.path.exists(tel_dir):
-            csv_files = sorted(os.listdir(tel_dir))
-            if session_id:
-                for csv_file in csv_files:
-                    if csv_file.endswith('.csv') and session_id in csv_file:
-                        return os.path.join(tel_dir, csv_file)
-            for csv_file in csv_files:
-                if csv_file.endswith('.csv'):
-                    return os.path.join(tel_dir, csv_file)
+            csv_files = [f for f in sorted(os.listdir(tel_dir)) if f.endswith('.csv')]
+            matched = [f for f in csv_files if session_id in f] if session_id else csv_files
+            if not matched:
+                matched = csv_files
+            for csv_file in matched:
+                p = os.path.join(tel_dir, csv_file)
+                if p not in seen:
+                    seen.add(p)
+                    candidates.append(p)
+
+    if not candidates:
+        raise ValueError(
+            f"Telemetry file not found for session_id={session_id!r}, track={track!r}, date={date!r}"
+        )
+
+    if not driver_name:
+        return candidates[0]
+
+    target_driver = driver_name.strip().lower()
+    available_drivers: list[str] = []
+    for csv_path in candidates:
+        csv_driver = _read_csv_driver(csv_path)
+        if csv_driver:
+            if csv_driver not in available_drivers:
+                available_drivers.append(csv_driver)
+            if csv_driver.strip().lower() == target_driver:
+                return csv_path
+
+    if available_drivers:
+        raise ValueError(
+            f"Telemetry file not found for driver_name={driver_name!r} in session_id={session_id!r}, "
+            f"track={track!r}, date={date!r}. Available drivers: {available_drivers}"
+        )
     raise ValueError(
-        f"Telemetry file not found for session_id={session_id!r}, track={track!r}, date={date!r}"
+        f"Telemetry file not found for session_id={session_id!r}, track={track!r}, "
+        f"date={date!r}, driver_name={driver_name!r}"
     )
 
 
@@ -308,13 +359,25 @@ def render_stacked_telemetry_plot(
     return base64.b64encode(buf.getvalue()).decode('utf-8')
 
 
-def parse_lap_spec(spec: Any) -> tuple[str, str, str, int]:
-    """Parse lap specification tuple/list (date, track, session_id, lap) or dict."""
-    if isinstance(spec, (list, tuple)) and len(spec) >= 4:
-        return str(spec[0]), str(spec[1]), str(spec[2]), int(spec[3])
+def parse_lap_spec(spec: Any) -> tuple[str, str, str, int, str | None]:
+    """Parse lap specification tuple/list (date, track, session_id, lap[, driver_name]) or dict."""
+    if isinstance(spec, (list, tuple)) and len(spec) in (4, 5):
+        driver = str(spec[4]).strip() if len(spec) == 5 and spec[4] is not None else None
+        return str(spec[0]), str(spec[1]), str(spec[2]), int(spec[3]), (driver or None)
     elif isinstance(spec, dict):
-        return str(spec['date']), str(spec['track']), str(spec['session_id']), int(spec.get('lap', 0))
-    raise ValueError(f"Lap specification must be a tuple of (date, track, session_id, lap) or dict. Got: {spec!r}")
+        for req_key in ('date', 'track', 'session_id'):
+            if req_key not in spec:
+                raise ValueError(f"Lap specification dict missing required key {req_key!r}: {spec!r}")
+        lap_val = spec.get('lap') if 'lap' in spec else spec.get('lap_number')
+        if lap_val is None:
+            raise ValueError(f"Lap specification dict missing 'lap' (or 'lap_number') key: {spec!r}")
+        raw_driver = spec.get('driver_name') if 'driver_name' in spec else spec.get('driver')
+        driver = str(raw_driver).strip() if raw_driver is not None else None
+        return str(spec['date']), str(spec['track']), str(spec['session_id']), int(lap_val), (driver or None)
+    raise ValueError(
+        "Lap specification must be a tuple of (date, track, session_id, lap[, driver_name]) or dict. "
+        f"Got: {spec!r}"
+    )
 
 
 from matplotlib.collections import LineCollection  # noqa: E402
@@ -472,12 +535,12 @@ def _render_track_boundaries(ax: plt.Axes, track_name: str) -> bool:
 
 
 def render_trajectory_plot(
-    laps: list[tuple[str, str, str, int] | list[Any] | dict[str, Any]],
+    laps: list[tuple[str, str, str, int] | tuple[str, str, str, int, str] | dict[str, Any]],
     start_m: float | None = None,
     end_m: float | None = None,
     color_mode: str = "lap"
 ) -> str:
-    """Render matplotlib trajectory comparison plot (GPS or X/Z) for lap tuples (date, track, session_id, lap)."""
+    """Render matplotlib trajectory comparison plot (GPS or X/Z) for lap selectors."""
     if not laps:
         raise ValueError("laps parameter cannot be empty")
 
@@ -486,7 +549,7 @@ def render_trajectory_plot(
         color_mode = "lap"
 
     parsed_laps = [parse_lap_spec(item) for item in laps]
-    first_date, first_track, first_sid, _ = parsed_laps[0]
+    first_date, first_track, first_sid, _, _ = parsed_laps[0]
 
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(8, 8))
@@ -495,9 +558,11 @@ def render_trajectory_plot(
     has_boundaries = _render_track_boundaries(ax, first_track)
     full_track_pts: list[tuple[float, float]] = []
     all_lap_pts = []
+    resolved_drivers: list[str | None] = []
 
-    for idx_l, (date, track, session_id, lap_num) in enumerate(parsed_laps):
-        csv_path = find_telemetry_csv(session_id, track, date)
+    for idx_l, (date, track, session_id, lap_num, req_driver) in enumerate(parsed_laps):
+        csv_path = find_telemetry_csv(session_id, track, date, driver_name=req_driver)
+        resolved_drivers.append(_read_csv_driver(csv_path) or req_driver)
         with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.reader(f)
             rows = list(reader)
@@ -599,6 +664,9 @@ def render_trajectory_plot(
     ref_dists = [p['d'] for p in ref_lap_pts]
     ref_times = [p['time'] for p in ref_lap_pts]
 
+    distinct_drivers = {d for d in resolved_drivers if d}
+    show_driver = len(distinct_drivers) > 1 or any(p[4] is not None for p in parsed_laps)
+
     for idx_l, (lap_num, session_id, lap_color, lap_pts) in enumerate(all_lap_pts):
         if not lap_pts:
             continue
@@ -606,7 +674,9 @@ def render_trajectory_plot(
         lx = [p['x'] for p in lap_pts]
         ly = [p['y'] for p in lap_pts]
         is_ref = (idx_l == 0)
-        lap_label = f"Lap {lap_num} ({session_id})" + (" [Ref]" if (color_mode == 'delta_t' and is_ref) else "")
+        drv = resolved_drivers[idx_l] if idx_l < len(resolved_drivers) else None
+        base_lbl = f"{drv} - Lap {lap_num} ({session_id})" if (show_driver and drv) else f"Lap {lap_num} ({session_id})"
+        lap_label = base_lbl + (" [Ref]" if (color_mode == 'delta_t' and is_ref) else "")
 
         if color_mode == 'lap' or len(lap_pts) < 2:
             ax.plot(lx, ly, color=lap_color, linewidth=2.5, label=lap_label, zorder=3)

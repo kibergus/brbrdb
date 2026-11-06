@@ -34,8 +34,7 @@ def _load_all_telemetry_laps(
     raw_sessions = db.find_sessions(
         date=date,
         track=track,
-        session_id=session_id,
-        driver_names=driver_name
+        session_id=session_id
     )
 
     track_info = db.get_track(track) or {}
@@ -69,9 +68,9 @@ def _load_all_telemetry_laps(
             if not laps:
                 continue
 
-            if driver_name and csv_driver:
-                if driver_name.lower() not in csv_driver.lower():
-                    continue
+            driver_label = csv_driver or (session_drivers[0] if session_drivers else 'Unknown')
+            if driver_name and driver_name.strip().lower() != driver_label.strip().lower():
+                continue
 
             df_official = db.load(leagues=s.league, classes=s.class_name, date=s.date, track=track)
             location_handlers._override_with_official_laps(laps, df_official, s.session_id, csv_driver)
@@ -103,8 +102,6 @@ def _load_all_telemetry_laps(
                 raw_channel_data = image_tools.extract_raw_lap_data(
                     csv_path, lap_numbers, channels_to_fetch, parsed_laps=laps
                 )
-
-            driver_label = csv_driver or (session_drivers[0] if session_drivers else 'Unknown')
 
             for l_item in laps:
                 if l_item.get('is_outlap') or not l_item.get('is_valid', True):
@@ -355,19 +352,44 @@ def get_aggregates_impl(
     return res
 
 
-def get_pace_summary_impl(
-    track: str,
-    date: str,
-    session_id: str | None = None,
-    driver_name: str | None = None
-) -> dict[str, Any]:
-    """Returns a structured summary of theoretical vs actual best lap and per-turn improvement priority."""
-    laps_data = _load_all_telemetry_laps(track, date, session_id, driver_name)
-    if not laps_data:
-        raise ValueError(f"No valid telemetry data found for track={track!r}, date={date!r}")
+def _extract_turn_speed_metrics(lap_item: dict[str, Any], idx_t: int) -> tuple[float, float, float]:
+    """Return (vmin_kmh, entry_speed_kmh, exit_speed_kmh) for turn idx_t on a single lap."""
+    pts = lap_item.get('points', [])
+    turns = lap_item.get('turns_def', [])
+    if not pts or idx_t < 0 or idx_t >= len(turns):
+        return 0.0, 0.0, 0.0
 
-    laps_data.sort(key=lambda lap_item: lap_item['time_s'])
-    best_lap_obj = laps_data[0]
+    dists = np.array([p['dist'] for p in pts], dtype=float)
+    speeds = np.array([p['speed'] if p['speed'] is not None else np.nan for p in pts], dtype=float)
+    if len(dists) == 0 or np.all(np.isnan(speeds)):
+        return 0.0, 0.0, 0.0
+
+    t_def = turns[idx_t]
+    prev_t_def = turns[(idx_t - 1 + len(turns)) % len(turns)]
+    t_start_m = float(t_def.get('start', prev_t_def.get('end', 0.0)))
+    t_end_m = float(t_def.get('end', t_start_m + 50.0))
+
+    entry_sp = float(np.interp(t_start_m, dists, speeds))
+    exit_sp = float(np.interp(t_end_m, dists, speeds))
+
+    if t_start_m <= t_end_m:
+        mask = (dists >= t_start_m) & (dists <= t_end_m)
+    else:
+        mask = (dists >= t_start_m) | (dists <= t_end_m)
+    window_speeds = speeds[mask]
+    has_sp = len(window_speeds) > 0 and not np.all(np.isnan(window_speeds))
+    vmin_sp = float(np.nanmin(window_speeds)) if has_sp else min(entry_sp, exit_sp)
+
+    return vmin_sp, entry_sp, exit_sp
+
+
+def _compute_single_driver_pace_summary(
+    laps_data: list[dict[str, Any]],
+    fallback_driver_name: str | None = None
+) -> dict[str, Any]:
+    """Compute theoretical vs actual best lap and prioritized turn deltas for one driver's laps."""
+    sorted_laps = sorted(laps_data, key=lambda lap_item: lap_item['time_s'])
+    best_lap_obj = sorted_laps[0]
 
     turns_def = best_lap_obj.get('turns_def', [])
     num_turns = len(turns_def)
@@ -385,7 +407,7 @@ def get_pace_summary_impl(
         best_l_num = best_lap_obj['lap']
         best_sess = best_lap_obj['session_id']
 
-        for lap_item in laps_data:
+        for lap_item in sorted_laps:
             if idx_t < len(lap_item['turn_times']):
                 tt = lap_item['turn_times'][idx_t]
                 if tt > 0.0 and tt < min_t_time:
@@ -419,9 +441,14 @@ def get_pace_summary_impl(
     theoretical_best = sum(t['best_s'] for t in turn_bests)
     actual_best = best_lap_obj['time_s']
     total_delta = round(max(0.0, actual_best - theoretical_best), 3)
+    resolved_driver = (
+        best_lap_obj['driver_name']
+        if best_lap_obj.get('driver_name') and best_lap_obj['driver_name'] != 'Unknown'
+        else (fallback_driver_name or 'Unknown')
+    )
 
     return {
-        "driver_name": driver_name or best_lap_obj['driver_name'],
+        "driver_name": resolved_driver,
         "actual_best_lap": best_lap_obj['lap'],
         "actual_best_session": best_lap_obj['session_id'],
         "actual_best_s": actual_best,
@@ -429,3 +456,150 @@ def get_pace_summary_impl(
         "total_delta_s": total_delta,
         "turns": turn_bests
     }
+
+
+def _compute_cross_driver_comparison(
+    driver_laps: list[dict[str, Any]],
+    ref_laps: list[dict[str, Any]],
+    reference_lap: int | None = None
+) -> dict[str, Any]:
+    """Compute per-turn deltas between target driver laps and reference driver laps."""
+    driver_best_obj = min(driver_laps, key=lambda x: x['time_s'])
+    if reference_lap is not None:
+        matched_ref = [lp for lp in ref_laps if lp['lap'] == reference_lap]
+        if not matched_ref:
+            avail = sorted({lp['lap'] for lp in ref_laps})
+            raise ValueError(
+                f"reference_lap={reference_lap} not found for reference driver "
+                f"{ref_laps[0]['driver_name']!r}. Available laps: {avail}"
+            )
+        ref_best_obj = min(matched_ref, key=lambda x: x['time_s'])
+    else:
+        ref_best_obj = min(ref_laps, key=lambda x: x['time_s'])
+
+    turns_def = driver_best_obj.get('turns_def') or ref_best_obj.get('turns_def', [])
+    num_turns = len(turns_def)
+    turn_comparison: list[dict[str, Any]] = []
+
+    for idx_t in range(num_turns):
+        t_def = turns_def[idx_t]
+        t_name = str(t_def.get('name', f"Turn {idx_t + 1}"))
+
+        drv_t_times = [
+            lp['turn_times'][idx_t]
+            for lp in driver_laps
+            if idx_t < len(lp['turn_times']) and lp['turn_times'][idx_t] > 0.0
+        ]
+        ref_t_times = [
+            lp['turn_times'][idx_t]
+            for lp in ref_laps
+            if idx_t < len(lp['turn_times']) and lp['turn_times'][idx_t] > 0.0
+        ]
+
+        drv_best_t = (
+            driver_best_obj['turn_times'][idx_t]
+            if idx_t < len(driver_best_obj['turn_times']) and driver_best_obj['turn_times'][idx_t] > 0.0
+            else (min(drv_t_times) if drv_t_times else 0.0)
+        )
+        ref_best_t = (
+            ref_best_obj['turn_times'][idx_t]
+            if idx_t < len(ref_best_obj['turn_times']) and ref_best_obj['turn_times'][idx_t] > 0.0
+            else (min(ref_t_times) if ref_t_times else 0.0)
+        )
+        drv_med_t = float(np.median(drv_t_times)) if drv_t_times else drv_best_t
+        ref_med_t = float(np.median(ref_t_times)) if ref_t_times else ref_best_t
+
+        drv_vmin, drv_entry, drv_exit = _extract_turn_speed_metrics(driver_best_obj, idx_t)
+        ref_vmin, ref_entry, ref_exit = _extract_turn_speed_metrics(ref_best_obj, idx_t)
+
+        turn_comparison.append({
+            "turn_index": idx_t + 1,
+            "turn_name": t_name,
+            "driver_best_s": round(drv_best_t, 3),
+            "driver_median_s": round(drv_med_t, 3),
+            "ref_best_s": round(ref_best_t, 3),
+            "ref_median_s": round(ref_med_t, 3),
+            "best_lap_delta_s": round(drv_best_t - ref_best_t, 3),
+            "median_delta_s": round(drv_med_t - ref_med_t, 3),
+            "vmin_delta_kmh": round(drv_vmin - ref_vmin, 1),
+            "entry_speed_delta_kmh": round(drv_entry - ref_entry, 1),
+            "exit_speed_delta_kmh": round(drv_exit - ref_exit, 1)
+        })
+
+    turn_comparison.sort(key=lambda t: t['best_lap_delta_s'], reverse=True)
+    for rank, item in enumerate(turn_comparison, start=1):
+        item['priority'] = rank
+
+    return {
+        "driver_name": driver_best_obj['driver_name'],
+        "reference_driver_name": ref_best_obj['driver_name'],
+        "driver_best_lap": {
+            "lap_number": driver_best_obj['lap'],
+            "lap_time_s": driver_best_obj['time_s'],
+            "session_id": driver_best_obj['session_id']
+        },
+        "reference_best_lap": {
+            "lap_number": ref_best_obj['lap'],
+            "lap_time_s": ref_best_obj['time_s'],
+            "session_id": ref_best_obj['session_id']
+        },
+        "total_best_lap_gap_s": round(driver_best_obj['time_s'] - ref_best_obj['time_s'], 3),
+        "turn_comparison": turn_comparison
+    }
+
+
+def get_pace_summary_impl(
+    track: str,
+    date: str,
+    session_id: str | None = None,
+    driver_name: str | None = None,
+    reference_driver_name: str | None = None,
+    reference_lap: int | None = None
+) -> dict[str, Any]:
+    """Returns a structured summary of theoretical vs actual best lap and per-turn improvement priority."""
+    laps_data = _load_all_telemetry_laps(track, date, session_id, driver_name)
+    if not laps_data:
+        raise ValueError(f"No valid telemetry data found for track={track!r}, date={date!r}")
+
+    if reference_driver_name is not None or reference_lap is not None:
+        ref_filter = reference_driver_name if reference_driver_name is not None else driver_name
+        ref_laps = _load_all_telemetry_laps(track, date, session_id, ref_filter)
+        if not ref_laps:
+            raise ValueError(
+                f"No valid telemetry data found for reference_driver_name={reference_driver_name!r} "
+                f"on track={track!r}, date={date!r}"
+            )
+        summary = _compute_single_driver_pace_summary(laps_data, driver_name)
+        comp = _compute_cross_driver_comparison(laps_data, ref_laps, reference_lap=reference_lap)
+        summary.update(comp)
+        return summary
+
+    if driver_name is None:
+        by_driver: dict[str, list[dict[str, Any]]] = {}
+        for lp in laps_data:
+            d_key = lp.get('driver_name') or 'Unknown'
+            by_driver.setdefault(d_key, []).append(lp)
+
+        if len(by_driver) > 1:
+            driver_summaries = {
+                d: _compute_single_driver_pace_summary(d_laps, d)
+                for d, d_laps in by_driver.items()
+            }
+            sorted_drivers = sorted(
+                by_driver.keys(),
+                key=lambda d: driver_summaries[d]['actual_best_s']
+            )
+            fastest_driver = sorted_drivers[0]
+            comparisons = {
+                d: _compute_cross_driver_comparison(by_driver[d], by_driver[fastest_driver])
+                for d in sorted_drivers[1:]
+            }
+            res = dict(driver_summaries[fastest_driver])
+            res["drivers"] = {d: driver_summaries[d] for d in sorted_drivers}
+            res["fastest_driver"] = fastest_driver
+            res["comparisons"] = comparisons
+            primary_target = sorted_drivers[1]
+            res.update(comparisons[primary_target])
+            return res
+
+    return _compute_single_driver_pace_summary(laps_data, driver_name)
