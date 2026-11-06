@@ -23,6 +23,7 @@ import * as plotsSync from './plots_sync.js';
 vi.mock('./map.js', () => ({
     initMap: vi.fn(),
     loadTrackPoints: vi.fn(),
+    createLapPolylines: vi.fn(),
     updateTrackLimitsVisibility: vi.fn(),
     updateDistanceMarker: vi.fn(),
     calculateBoundsZoom: vi.fn(() => 15),

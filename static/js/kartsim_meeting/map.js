@@ -392,19 +392,25 @@ export function updateAllPolylineColors(mode) {
         const lap = state.lapDataLookup ? state.lapDataLookup[lapId] : null;
         if (!polylines || !lap || !lap.points) return;
 
-        const isRefLap = (lapId === refLapId);
-        const zIndex = (currentMode === 'delta_t') ? (isRefLap ? 1 : 5) : 1;
-        const opacity = (currentMode === 'time') ? 0.45 : 1.0;
-        const weight = (currentMode === 'time') ? 2 : 4;
-
         const numSegments = lap.points.length - 1;
-        for (let i = 0; i < numSegments; i++) {
-            const segment = polylines[i];
-            if (segment && typeof segment.setOptions === 'function') {
-                const color = calculateSegmentColor(lap.points[i], lapId, currentMode, maxSpeed, lap.points[i + 1]);
-                segment.setOptions({ strokeColor: color, strokeOpacity: opacity, strokeWeight: weight, zIndex: zIndex });
-                segment.originalColor = color;
+        const isMockOrUnmerged = polylines.length > 0 && polylines[0].startIndex === undefined;
+
+        if (isMockOrUnmerged) {
+            const isRefLap = (lapId === refLapId);
+            const zIndex = (currentMode === 'delta_t') ? (isRefLap ? 1 : 5) : 1;
+            const opacity = (currentMode === 'time') ? 0.45 : 1.0;
+            const weight = (currentMode === 'time') ? 2 : 4;
+
+            for (let i = 0; i < numSegments; i++) {
+                const segment = polylines[i];
+                if (segment && typeof segment.setOptions === 'function') {
+                    const color = calculateSegmentColor(lap.points[i], lapId, currentMode, maxSpeed, lap.points[i + 1]);
+                    segment.setOptions({ strokeColor: color, strokeOpacity: opacity, strokeWeight: weight, zIndex: zIndex });
+                    segment.originalColor = color;
+                }
             }
+        } else {
+            createLapPolylines(lapId);
         }
     });
 }
@@ -628,6 +634,86 @@ export function matchesRequestedLap(requestedSet, lapId, session, lap, sIdx = nu
 }
 
 let isFetchingTrackPoints = false;
+
+export function createLapPolylines(lapId) {
+    if (typeof google === 'undefined' || !google.maps || !google.maps.Polyline) return;
+    const lap = state.lapDataLookup ? state.lapDataLookup[lapId] : null;
+    if (!lap || !lap.points || lap.points.length < 2) return;
+
+    if (!state.lapPolylines) {
+        state.lapPolylines = {};
+    }
+    // Clean up any existing polylines for this lap first
+    if (Array.isArray(state.lapPolylines[lapId])) {
+        state.lapPolylines[lapId].forEach(p => {
+            if (p && typeof p.setMap === 'function') p.setMap(null);
+        });
+    }
+    state.lapPolylines[lapId] = [];
+
+    const refLap = getReferenceLap();
+    const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
+    const isRefLap = (lapId === refLapId);
+    const segZIndex = (state.trajectoryColorMode === 'delta_t') ? (isRefLap ? 1 : 5) : 1;
+    const opacity = (state.trajectoryColorMode === 'time') ? 0.45 : 1.0;
+    const weight = (state.trajectoryColorMode === 'time') ? 2 : 4;
+    const targetMap = state.map || null;
+
+    let currentPath = [lap.points[0], lap.points[1]];
+    let currentColor = calculateSegmentColor(lap.points[0], lapId, state.trajectoryColorMode, state.globalMaxSpeed, lap.points[1]);
+    let currentStartIndex = 0;
+
+    for (let i = 1; i < lap.points.length - 1; i++) {
+        const nextColor = calculateSegmentColor(lap.points[i], lapId, state.trajectoryColorMode, state.globalMaxSpeed, lap.points[i + 1]);
+        if (nextColor === currentColor) {
+            currentPath.push(lap.points[i + 1]);
+        } else {
+            const segment = new google.maps.Polyline({
+                path: currentPath,
+                geodesic: false,
+                strokeColor: currentColor,
+                strokeOpacity: opacity,
+                strokeWeight: weight,
+                zIndex: segZIndex,
+                map: targetMap
+            });
+            segment.originalColor = currentColor;
+            segment.startIndex = currentStartIndex;
+            segment.endIndex = i;
+            state.lapPolylines[lapId].push(segment);
+
+            currentPath = [lap.points[i], lap.points[i + 1]];
+            currentColor = nextColor;
+            currentStartIndex = i;
+        }
+    }
+
+    const finalSegment = new google.maps.Polyline({
+        path: currentPath,
+        geodesic: false,
+        strokeColor: currentColor,
+        strokeOpacity: opacity,
+        strokeWeight: weight,
+        zIndex: segZIndex,
+        map: targetMap
+    });
+    finalSegment.originalColor = currentColor;
+    finalSegment.startIndex = currentStartIndex;
+    finalSegment.endIndex = lap.points.length - 1;
+    state.lapPolylines[lapId].push(finalSegment);
+
+    const hitArea = new google.maps.Polyline({
+        path: lap.points,
+        geodesic: false,
+        strokeColor: '#38bdf8',
+        strokeOpacity: 0.0,
+        strokeWeight: 10,
+        zIndex: 2,
+        map: targetMap
+    });
+
+    state.lapPolylines[lapId].push(hitArea);
+}
 
 export function loadTrackPoints(overrideSessionId) {
     if (isFetchingTrackPoints) return Promise.resolve();
@@ -869,46 +955,10 @@ export function loadTrackPoints(overrideSessionId) {
                             }
                         }
                     });
-                    state.lapPolylines[lapId] = [];
-
-                    const refLap = getReferenceLap();
-                    const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
-                    const isRefLap = (lapId === refLapId);
-                    const segZIndex = (state.trajectoryColorMode === 'delta_t') ? (isRefLap ? 1 : 5) : 1;
                     const isVisible = state.getActiveGroups().some(g => state.groupSelectionsMap[g] && state.groupSelectionsMap[g].has(lapId) && state.isGroupVisible(g, 'map'));
-
-                    for (let i = 0; i < lap.points.length - 1; i++) {
-                        const p1 = lap.points[i];
-                        const p2 = lap.points[i + 1];
-
-                        const color = calculateSegmentColor(p1, lapId, state.trajectoryColorMode, state.globalMaxSpeed, p2);
-                        const opacity = (state.trajectoryColorMode === 'time') ? 0.45 : 1.0;
-                        const weight = (state.trajectoryColorMode === 'time') ? 2 : 4;
-
-                        const segment = new google.maps.Polyline({
-                            path: [p1, p2],
-                            geodesic: false,
-                            strokeColor: color,
-                            strokeOpacity: opacity,
-                            strokeWeight: weight,
-                            zIndex: segZIndex,
-                            map: isVisible ? state.map : null
-                        });
-                        segment.originalColor = color;
-                        state.lapPolylines[lapId].push(segment);
+                    if (isVisible) {
+                        createLapPolylines(lapId);
                     }
-
-                    const hitArea = new google.maps.Polyline({
-                        path: lap.points,
-                        geodesic: false,
-                        strokeColor: '#38bdf8',
-                        strokeOpacity: 0.0,
-                        strokeWeight: 10,
-                        zIndex: 2,
-                        map: isVisible ? state.map : null
-                    });
-
-                    state.lapPolylines[lapId].push(hitArea);
 
                     lap.points.forEach(p => bounds.extend(p));
                 });
@@ -1074,6 +1124,12 @@ export function initMap() {
             }
         }
 
+        if (state.trackData) {
+            applyTrackData(state.trackData);
+        } else {
+            initTrackMarkers();
+        }
+
         if (!state.mapInitialized && !isFetchingTrackPoints) {
             loadTrackPoints();
         }
@@ -1104,49 +1160,145 @@ export function setMapType(type) {
 }
 
 export function updateTrackLimitsVisibility() {
+    if (!state.map) return;
     const showLimits = (state.currentMapType === 'kartsim' || state.currentMapType === 'hybrid');
 
-    state.map.data.setMap(showLimits ? state.map : null);
+    if (state.map.data && typeof state.map.data.setMap === 'function') {
+        state.map.data.setMap(showLimits ? state.map : null);
+    }
 
     state.trackMarkers.forEach(m => {
         if (m.setMap) m.setMap(state.map);
         else m.map = state.map;
     });
 
-    if (state.distanceMarker) state.distanceMarker.setMap(state.map);
+    if (state.distanceMarker && typeof state.distanceMarker.setMap === 'function') {
+        state.distanceMarker.setMap(state.map);
+    }
+}
+
+function getGoogleMaps() {
+    if (typeof google !== 'undefined' && google && google.maps) return google.maps;
+    if (typeof window !== 'undefined' && window.google && window.google.maps) return window.google.maps;
+    return null;
+}
+
+export function safeComputeHeading(p1, p2) {
+    const gMaps = getGoogleMaps();
+    if (gMaps && gMaps.geometry && gMaps.geometry.spherical && typeof gMaps.geometry.spherical.computeHeading === 'function') {
+        return gMaps.geometry.spherical.computeHeading(p1, p2);
+    }
+    const lat1 = (p1.lat || 0) * Math.PI / 180;
+    const lat2 = (p2.lat || 0) * Math.PI / 180;
+    const dLng = (((p2.lng !== undefined ? p2.lng : p2.lon) || 0) - ((p1.lng !== undefined ? p1.lng : p1.lon) || 0)) * Math.PI / 180;
+    const y = Math.sin(dLng) * Math.cos(lat2);
+    const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
+export function safeComputeOffset(from, distance, heading) {
+    const gMaps = getGoogleMaps();
+    if (gMaps && gMaps.geometry && gMaps.geometry.spherical && typeof gMaps.geometry.spherical.computeOffset === 'function') {
+        return gMaps.geometry.spherical.computeOffset(from, distance, heading);
+    }
+    const radius = 6378137;
+    const delta = distance / radius;
+    const theta = heading * Math.PI / 180;
+    const phi1 = (from.lat || 0) * Math.PI / 180;
+    const lambda1 = ((from.lng !== undefined ? from.lng : from.lon) || 0) * Math.PI / 180;
+
+    const sinPhi2 = Math.sin(phi1) * Math.cos(delta) + Math.cos(phi1) * Math.sin(delta) * Math.cos(theta);
+    const phi2 = Math.asin(sinPhi2);
+    const y = Math.sin(theta) * Math.sin(delta) * Math.cos(phi1);
+    const x = Math.cos(delta) - Math.sin(phi1) * sinPhi2;
+    const lambda2 = lambda1 + Math.atan2(y, x);
+
+    const lat = phi2 * 180 / Math.PI;
+    const lng = ((lambda2 * 180 / Math.PI) + 540) % 360 - 180;
+    if (gMaps && typeof gMaps.LatLng === 'function') {
+        return new gMaps.LatLng(lat, lng);
+    }
+    return { lat, lng };
+}
+
+export function safeInterpolate(p1, p2, fraction) {
+    const gMaps = getGoogleMaps();
+    if (gMaps && gMaps.geometry && gMaps.geometry.spherical && typeof gMaps.geometry.spherical.interpolate === 'function') {
+        const from = (typeof gMaps.LatLng === 'function') ? new gMaps.LatLng(p1.lat, p1.lng) : p1;
+        const to = (typeof gMaps.LatLng === 'function') ? new gMaps.LatLng(p2.lat, p2.lng) : p2;
+        return gMaps.geometry.spherical.interpolate(from, to, fraction);
+    }
+    const lat = p1.lat + (p2.lat - p1.lat) * fraction;
+    const lng1 = (p1.lng !== undefined ? p1.lng : p1.lon) || 0;
+    const lng2 = (p2.lng !== undefined ? p2.lng : p2.lon) || 0;
+    const lng = lng1 + (lng2 - lng1) * fraction;
+    if (gMaps && typeof gMaps.LatLng === 'function') {
+        return new gMaps.LatLng(lat, lng);
+    }
+    return { lat, lng };
 }
 
 export function addTrackMarker(p1, p2, label, color) {
-    const heading = google.maps.geometry.spherical.computeHeading(p1, p2);
+    const heading = safeComputeHeading(p1, p2);
     const linePath = [
-        google.maps.geometry.spherical.computeOffset(p1, 7.5, heading - 90),
-        google.maps.geometry.spherical.computeOffset(p1, 7.5, heading + 90)
+        safeComputeOffset(p1, 7.5, heading - 90),
+        safeComputeOffset(p1, 7.5, heading + 90)
     ];
 
-    const line = new google.maps.Polyline({
-        path: linePath,
-        geodesic: false,
-        strokeColor: color,
-        strokeOpacity: 0.8,
-        strokeWeight: 3,
-        zIndex: 10,
-        map: state.map
-    });
-    state.trackMarkers.push(line);
+    const gMaps = getGoogleMaps();
+    if (gMaps && typeof gMaps.Polyline === 'function') {
+        const line = new gMaps.Polyline({
+            path: linePath,
+            geodesic: false,
+            strokeColor: color,
+            strokeOpacity: 0.8,
+            strokeWeight: 3,
+            zIndex: 10,
+            map: state.map || null
+        });
+        state.trackMarkers.push(line);
+    }
 
-    const markerContent = document.createElement('div');
-    markerContent.className = 'track-marker-label';
-    markerContent.textContent = label;
-    markerContent.style.color = color;
-    markerContent.style.borderColor = color;
+    let markerContent = null;
+    if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+        try {
+            markerContent = document.createElement('div');
+            markerContent.className = 'track-marker-label';
+            markerContent.textContent = label;
+            markerContent.style.color = color;
+            markerContent.style.borderColor = color;
+        } catch (e) {
+            markerContent = null;
+        }
+    }
 
-    const marker = new google.maps.marker.AdvancedMarkerElement({
-        position: p1,
-        map: state.map,
-        content: markerContent,
-        title: label
-    });
-    state.trackMarkers.push(marker);
+    try {
+        if (gMaps && gMaps.marker && typeof gMaps.marker.AdvancedMarkerElement === 'function') {
+            const marker = new gMaps.marker.AdvancedMarkerElement({
+                position: p1,
+                map: state.map || null,
+                content: markerContent,
+                title: label
+            });
+            state.trackMarkers.push(marker);
+            return;
+        }
+    } catch (e) {
+        console.warn("AdvancedMarkerElement error, fallback to Marker:", e);
+    }
+
+    try {
+        if (gMaps && typeof gMaps.Marker === 'function') {
+            const marker = new gMaps.Marker({
+                position: p1,
+                map: state.map || null,
+                title: label
+            });
+            state.trackMarkers.push(marker);
+        }
+    } catch (e) {
+        console.warn("Marker creation failed:", e);
+    }
 }
 
 export function addTrackMarkerAtDistance(points, targetDist, label, color) {
@@ -1156,181 +1308,214 @@ export function addTrackMarkerAtDistance(points, targetDist, label, color) {
     }
 }
 
+export function applyTrackData(data) {
+    if (!data) return;
+    state.trackData = data;
+
+    const slider = document.getElementById('distance-slider');
+    const params = new URLSearchParams(window.location.search);
+    const reportState = (window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
+    const xlimParam = params.get('xlim');
+    let hasCustomXlim = false;
+    if (xlimParam) {
+        const parts = xlimParam.split(',');
+        if (parts.length === 2) {
+            const min = parseFloat(parts[0]);
+            const max = parseFloat(parts[1]);
+            if (!isNaN(min) && !isNaN(max) && !(min === 0 && max === 100)) {
+                state.globalTelemetryXRange = [min, max];
+                hasCustomXlim = true;
+            }
+        }
+    } else if (reportState.xlim && Array.isArray(reportState.xlim) && reportState.xlim.length === 2) {
+        state.globalTelemetryXRange = [parseFloat(reportState.xlim[0]), parseFloat(reportState.xlim[1])];
+        hasCustomXlim = true;
+    }
+    if (slider && data.lap_length) {
+        slider.max = data.lap_length;
+        slider.step = 0.01;
+        if (!hasCustomXlim && state.sortMode !== 'turn') {
+            state.globalTelemetryXRange = [0, data.lap_length];
+        }
+    }
+
+    let startDist = 0;
+    const distParam = params.has('dist') ? params.get('dist') : (reportState.dist !== undefined ? String(reportState.dist) : null);
+    if (distParam) {
+        const parsedDist = parseFloat(distParam);
+        if (!isNaN(parsedDist) && parsedDist >= 0 && parsedDist <= (data.lap_length || Infinity)) {
+            startDist = parsedDist;
+        }
+    }
+    state.playbackDistance = startDist;
+    state.currentTargetDist = startDist;
+    if (slider) {
+        slider.value = startDist;
+    }
+    const display = document.getElementById('distance-display');
+    if (display) {
+        display.textContent = Math.round(startDist) + 'm';
+    }
+
+    const gMaps = getGoogleMaps();
+    if (gMaps && typeof gMaps.Polyline === 'function') {
+        if (state.distanceMarker && typeof state.distanceMarker.setMap === 'function') {
+            state.distanceMarker.setMap(null);
+        }
+        state.distanceMarker = new gMaps.Polyline({
+            path: [],
+            geodesic: false,
+            strokeColor: '#facc15',
+            strokeOpacity: 1.0,
+            strokeWeight: 5,
+            zIndex: 2000,
+            map: state.map || null
+        });
+
+        updateDistanceMarker(startDist);
+    }
+
+    state.trackMarkers.forEach(m => {
+        if (m.setMap) m.setMap(null);
+        else m.map = null;
+    });
+    state.trackMarkers = [];
+
+    const points = data.center_line;
+    if (points && points.length >= 2) {
+        addTrackMarker(points[0], points[1], 'START', '#3b82f6');
+
+        if (data.sector_end) {
+            data.sector_end.forEach((endDist, idx) => {
+                if (idx === data.sector_end.length - 1 && Math.abs(endDist - data.lap_length) < 1.0) return;
+                addTrackMarkerAtDistance(points, endDist, `S${idx + 2}`, '#f59e0b');
+            });
+        }
+
+        if (data.turns) {
+            const turnSelector = (typeof document !== 'undefined' && typeof document.getElementById === 'function')
+                ? document.getElementById('turn-selector')
+                : null;
+            if (turnSelector && typeof document.createElement === 'function') {
+                turnSelector.innerHTML = '';
+                data.turns.forEach((turn, idx) => {
+                    const opt = document.createElement('option');
+                    opt.value = idx;
+                    opt.textContent = turn.name || `Turn ${idx + 1}`;
+                    turnSelector.appendChild(opt);
+                });
+
+                const urlTurn = params.has('turn') ? params.get('turn') : (reportState.turn !== undefined ? String(reportState.turn) : null);
+                if (urlTurn !== null) {
+                    const turnIdx = parseInt(urlTurn);
+                    if (!isNaN(turnIdx) && turnIdx >= 0 && turnIdx < data.turns.length) {
+                        turnSelector.value = turnIdx;
+                        state.currentTurnIdx = turnIdx;
+                    }
+                } else if (state.currentTurnIdx !== undefined) {
+                    turnSelector.value = state.currentTurnIdx;
+                }
+            }
+
+            if (state.sortMode === 'turn') {
+                const turn = data.turns[state.currentTurnIdx || 0];
+                if (turn && !hasCustomXlim) {
+                    let rangeEnd = turn.end;
+                    const nextTurn = data.turns[(state.currentTurnIdx || 0) + 1];
+                    if (nextTurn) {
+                        rangeEnd = nextTurn.start;
+                    } else if (data.lap_length) {
+                        rangeEnd = data.lap_length;
+                    }
+                    const rangeStart = Math.max(0, turn.start - 20);
+                    state.globalTelemetryXRange = [rangeStart, rangeEnd];
+                }
+                if (state.map) {
+                    import('./lap_selection.js').then(ui => {
+                        ui.focusMapOnTurn(state.currentTurnIdx || 0);
+                    });
+                }
+            }
+
+            data.turns.forEach((turn, idx) => {
+                if (turn.start !== undefined && turn.start !== turn.end) {
+                    addTrackMarkerAtDistance(points, turn.start, `T${idx + 1}`, '#10b981');
+                }
+                addTrackMarkerAtDistance(points, turn.end, `T${idx + 1}`, '#10b981');
+            });
+        } else if (data.turn_end) {
+            data.turn_end.forEach((endDist, idx) => {
+                if (data.sector_end && data.sector_end.some(s => Math.abs(s - endDist) < 2.0)) return;
+                if (Math.abs(endDist - data.lap_length) < 2.0 || endDist < 2.0) return;
+                if (data.turn_start && data.turn_start[idx] !== undefined && data.turn_start[idx] !== endDist) {
+                    addTrackMarkerAtDistance(points, data.turn_start[idx], `T${idx + 1}`, '#10b981');
+                }
+                addTrackMarkerAtDistance(points, endDist, `T${idx + 1}`, '#10b981');
+            });
+        }
+    }
+
+    if (state.map && state.map.data) {
+        state.map.data.forEach(feature => state.map.data.remove(feature));
+        if (data.geojson) {
+            state.map.data.addGeoJson(data.geojson);
+        }
+    }
+
+    updateTrackLimitsVisibility();
+
+    import('./plots_sync.js').then(plots => {
+        plots.renderExpandablePlots();
+        plots.updateTelemetryPlots(startDist);
+    });
+    if (state.sortMode === 'turn') {
+        import('./lap_selection.js').then(ui => {
+            ui.renderLapList();
+            ui.updateFastestSelectedLap();
+        });
+    }
+    import('./stats_plots.js').then(stats => stats.renderStatsPlots());
+}
+
+let trackDataPromise = null;
+
 export function initTrackMarkers() {
+    if (state.trackData) {
+        applyTrackData(state.trackData);
+        return Promise.resolve(state.trackData);
+    }
+    if (trackDataPromise) {
+        return trackDataPromise.then(data => {
+            if (data) applyTrackData(data);
+            return data;
+        });
+    }
+    if (!window.KART_CONFIG || !window.KART_CONFIG.getTrackDataUrl) {
+        return Promise.resolve(null);
+    }
     console.log("Fetching track data for:", window.KART_CONFIG.trackName);
-    fetch(window.KART_CONFIG.getTrackDataUrl)
+    trackDataPromise = fetch(window.KART_CONFIG.getTrackDataUrl)
         .then(res => res.json())
         .then(data => {
             if (data.error) {
                 console.error("Track data error:", data.error);
-                return;
+                return null;
             }
-            data.center_line = data.center_line.map(p => ({
-                ...p,
-                lng: p.lon
-            })).sort((a, b) => a.dist - b.dist);
-            state.trackData = data;
-
-            const slider = document.getElementById('distance-slider');
-            const params = new URLSearchParams(window.location.search);
-            const reportState = (window.KART_CONFIG && window.KART_CONFIG.reportState) || {};
-            const xlimParam = params.get('xlim');
-            let hasCustomXlim = false;
-            if (xlimParam) {
-                const parts = xlimParam.split(',');
-                if (parts.length === 2) {
-                    const min = parseFloat(parts[0]);
-                    const max = parseFloat(parts[1]);
-                    if (!isNaN(min) && !isNaN(max) && !(min === 0 && max === 100)) {
-                        state.globalTelemetryXRange = [min, max];
-                        hasCustomXlim = true;
-                    }
-                }
-            } else if (reportState.xlim && Array.isArray(reportState.xlim) && reportState.xlim.length === 2) {
-                state.globalTelemetryXRange = [parseFloat(reportState.xlim[0]), parseFloat(reportState.xlim[1])];
-                hasCustomXlim = true;
+            if (data.center_line && Array.isArray(data.center_line)) {
+                data.center_line = data.center_line.map(p => ({
+                    ...p,
+                    lng: (p.lng !== undefined) ? p.lng : p.lon
+                })).sort((a, b) => a.dist - b.dist);
             }
-            if (slider && data.lap_length) {
-                slider.max = data.lap_length;
-                slider.step = 0.01;
-                if (!hasCustomXlim && state.sortMode !== 'turn') {
-                    state.globalTelemetryXRange = [0, data.lap_length];
-                }
-            }
-
-            let startDist = 0;
-            const distParam = params.has('dist') ? params.get('dist') : (reportState.dist !== undefined ? String(reportState.dist) : null);
-            if (distParam) {
-                const parsedDist = parseFloat(distParam);
-                if (!isNaN(parsedDist) && parsedDist >= 0 && parsedDist <= (data.lap_length || Infinity)) {
-                    startDist = parsedDist;
-                }
-            }
-            state.playbackDistance = startDist;
-            state.currentTargetDist = startDist;
-            if (slider) {
-                slider.value = startDist;
-            }
-            const display = document.getElementById('distance-display');
-            if (display) {
-                display.textContent = Math.round(startDist) + 'm';
-            }
-
-            state.distanceMarker = new google.maps.Polyline({
-                path: [],
-                geodesic: false,
-                strokeColor: '#facc15',
-                strokeOpacity: 1.0,
-                strokeWeight: 5,
-                zIndex: 2000,
-                map: state.map
-            });
-
-            updateDistanceMarker(startDist);
-
-            state.trackMarkers.forEach(m => {
-                if (m.setMap) m.setMap(null);
-                else m.map = null;
-            });
-            state.trackMarkers = [];
-
-            const points = data.center_line;
-            if (!points || points.length < 2) return;
-
-            addTrackMarker(points[0], points[1], 'START', '#3b82f6');
-
-            if (data.sector_end) {
-                data.sector_end.forEach((endDist, idx) => {
-                    if (idx === data.sector_end.length - 1 && Math.abs(endDist - data.lap_length) < 1.0) return;
-                    addTrackMarkerAtDistance(points, endDist, `S${idx + 2}`, '#f59e0b');
-                });
-            }
-
-            if (data.turns) {
-                const turnSelector = document.getElementById('turn-selector');
-                if (turnSelector) {
-                    turnSelector.innerHTML = '';
-                    data.turns.forEach((turn, idx) => {
-                        const opt = document.createElement('option');
-                        opt.value = idx;
-                        opt.textContent = turn.name || `Turn ${idx + 1}`;
-                        turnSelector.appendChild(opt);
-                    });
-
-                    const urlTurn = params.has('turn') ? params.get('turn') : (reportState.turn !== undefined ? String(reportState.turn) : null);
-                    if (urlTurn !== null) {
-                        const turnIdx = parseInt(urlTurn);
-                        if (!isNaN(turnIdx) && turnIdx >= 0 && turnIdx < data.turns.length) {
-                            turnSelector.value = turnIdx;
-                            state.currentTurnIdx = turnIdx;
-                        }
-                    } else if (state.currentTurnIdx !== undefined) {
-                        turnSelector.value = state.currentTurnIdx;
-                    }
-                }
-
-                if (state.sortMode === 'turn') {
-                    const turn = data.turns[state.currentTurnIdx || 0];
-                    if (turn && !hasCustomXlim) {
-                        let rangeEnd = turn.end;
-                        const nextTurn = data.turns[(state.currentTurnIdx || 0) + 1];
-                        if (nextTurn) {
-                            rangeEnd = nextTurn.start;
-                        } else if (data.lap_length) {
-                            rangeEnd = data.lap_length;
-                        }
-                        const rangeStart = Math.max(0, turn.start - 20);
-                        state.globalTelemetryXRange = [rangeStart, rangeEnd];
-                    }
-                    if (state.map) {
-                        import('./lap_selection.js').then(ui => {
-                            ui.focusMapOnTurn(state.currentTurnIdx || 0);
-                        });
-                    }
-                }
-
-                data.turns.forEach((turn, idx) => {
-                    if (turn.start !== undefined && turn.start !== turn.end) {
-                        addTrackMarkerAtDistance(points, turn.start, `T${idx + 1}`, '#10b981');
-                    }
-                    addTrackMarkerAtDistance(points, turn.end, `T${idx + 1}`, '#10b981');
-                });
-            } else if (data.turn_end) {
-                data.turn_end.forEach((endDist, idx) => {
-                    if (data.sector_end && data.sector_end.some(s => Math.abs(s - endDist) < 2.0)) return;
-                    if (Math.abs(endDist - data.lap_length) < 2.0 || endDist < 2.0) return;
-                    if (data.turn_start && data.turn_start[idx] !== undefined && data.turn_start[idx] !== endDist) {
-                        addTrackMarkerAtDistance(points, data.turn_start[idx], `T${idx + 1}`, '#10b981');
-                    }
-                    addTrackMarkerAtDistance(points, endDist, `T${idx + 1}`, '#10b981');
-                });
-            }
-
-            import('./plots_sync.js').then(plots => {
-                plots.renderExpandablePlots();
-                plots.updateTelemetryPlots(startDist);
-            });
-            if (state.sortMode === 'turn') {
-                import('./lap_selection.js').then(ui => {
-                    ui.renderLapList();
-                    ui.updateFastestSelectedLap();
-                });
-            }
-
-
-            state.map.data.forEach(feature => state.map.data.remove(feature));
-            if (data.geojson) {
-                state.map.data.addGeoJson(data.geojson);
-            }
-
-            updateTrackLimitsVisibility();
-            import('./lap_selection.js').then(ui => {
-                ui.updateFastestSelectedLap();
-                ui.renderLapList();
-            });
-            import('./stats_plots.js').then(stats => stats.renderStatsPlots());
-            import('./plots_sync.js').then(plots => plots.renderExpandablePlots());
+            applyTrackData(data);
+            return data;
+        })
+        .catch(err => {
+            console.error("Failed to fetch track data:", err);
+            trackDataPromise = null;
+            return null;
         });
+    return trackDataPromise;
 }
 
 export function updateDistanceMarker(targetDist) {
@@ -1349,7 +1534,7 @@ export function updateDistanceMarker(targetDist) {
 
     if (idx !== -1) {
         p1 = points[idx];
-        p2 = points[idx + 1];
+        p2 = points[idx + 1] || points[idx];
     } else {
         p1 = points[0];
         p2 = points[1];
@@ -1360,16 +1545,12 @@ export function updateDistanceMarker(targetDist) {
     }
 
     const fraction = (targetDist - p1.dist) / (p2.dist - p1.dist || 0.0001);
-    const pos = google.maps.geometry.spherical.interpolate(
-        new google.maps.LatLng(p1.lat, p1.lng),
-        new google.maps.LatLng(p2.lat, p2.lng),
-        fraction
-    );
+    const pos = safeInterpolate(p1, p2, fraction);
 
     let h1 = p1.heading;
     let h2 = p2.heading;
     if (h1 === undefined || h2 === undefined) {
-        h1 = h2 = google.maps.geometry.spherical.computeHeading(p1, p2);
+        h1 = h2 = safeComputeHeading(p1, p2);
     }
 
     let diff = h2 - h1;
@@ -1378,8 +1559,10 @@ export function updateDistanceMarker(targetDist) {
     const heading = h1 + diff * fraction;
     const halfWidth = 7.5;
 
-    const left = google.maps.geometry.spherical.computeOffset(pos, halfWidth, heading - 90);
-    const right = google.maps.geometry.spherical.computeOffset(pos, halfWidth, heading + 90);
+    const left = safeComputeOffset(pos, halfWidth, heading - 90);
+    const right = safeComputeOffset(pos, halfWidth, heading + 90);
 
-    state.distanceMarker.setPath([left, right]);
+    if (typeof state.distanceMarker.setPath === 'function') {
+        state.distanceMarker.setPath([left, right]);
+    }
 }

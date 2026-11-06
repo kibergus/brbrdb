@@ -23,7 +23,7 @@ import { parseLapTime } from '../utils.js';
 import { getTurnTime, animateSlider, getPointAtDistance } from './telemetry.js';
 import { updateTelemetryPlots, updateAccelerationPlot, updateSlipAnglePlot, renderExpandablePlots, updateExpandablePlotsVisibility, togglePlot, setVisiblePlots } from './plots_sync.js';
 import { renderStatsPlots } from './stats_plots.js';
-import { initMap, loadTrackPoints, calculateBoundsZoom, updateAllPolylineColors, getReferenceLap, updateDistanceMarker, setTrajectoryColorMode, matchesRequestedLap } from './map.js';
+import { initMap, loadTrackPoints, calculateBoundsZoom, updateAllPolylineColors, getReferenceLap, updateDistanceMarker, setTrajectoryColorMode, matchesRequestedLap, createLapPolylines } from './map.js';
 import { debouncedUpdateURL } from './url_sync.js';
 import { GROUP_PALETTE, getGroupColor, hexToRgba } from './palette.js';
 
@@ -652,9 +652,7 @@ export function showTab(tabId) {
                 }
                 updateFastestSelectedLap();
                 // Update map polylines for the Map tab
-                if (state.lapPolylines) {
-                    Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
-                }
+                syncAllLapVisibilities();
                 // Refresh bottom plots to respect Map tab's visibility settings
                 renderExpandablePlots();
                 // Ensure right panel chart is refreshed and resized
@@ -1192,6 +1190,9 @@ export function updateSelectAllCheckboxes() {
     const container = document.getElementById('select-all-groups-container');
     const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
     const lapIds = Object.keys(state.lapPolylines);
+    const totalLaps = (state.lapDataLookup && Object.keys(state.lapDataLookup).length > 0)
+        ? Object.keys(state.lapDataLookup).length
+        : lapIds.length;
 
     if (container) {
         const currentInputs = container.querySelectorAll('input[type="checkbox"]');
@@ -1211,15 +1212,15 @@ export function updateSelectAllCheckboxes() {
         }
     }
 
-    if (lapIds.length === 0) return;
+    if (totalLaps === 0) return;
 
     activeGroups.forEach(group => {
         const selection = state.groupSelections[group] || (state.groupSelections[group] = new Set());
         const master = document.getElementById(`chk-all-${group.toLowerCase()}`);
         if (master) {
             const checkedCount = selection.size;
-            master.checked = checkedCount === lapIds.length && lapIds.length > 0;
-            master.indeterminate = checkedCount > 0 && checkedCount < lapIds.length;
+            master.checked = checkedCount === totalLaps && totalLaps > 0;
+            master.indeterminate = checkedCount > 0 && checkedCount < totalLaps;
         }
     });
 }
@@ -1446,22 +1447,14 @@ export function clearSelection(group) {
     updateSelectAllCheckboxes();
     if (state.activeTab === 'map') {
         updateFastestSelectedLap();
-        if (state.lapPolylines) {
-            Object.keys(state.lapPolylines).forEach(lapId => {
-                updateLapVisibility(lapId);
-            });
-        }
+        syncAllLapVisibilities();
         updateTelemetryPlots(state.currentTargetDist);
         renderExpandablePlots();
     } else if (state.activeTab === 'stats') {
         renderStatsPlots();
     } else {
         updateFastestSelectedLap();
-        if (state.lapPolylines) {
-            Object.keys(state.lapPolylines).forEach(lapId => {
-                updateLapVisibility(lapId);
-            });
-        }
+        syncAllLapVisibilities();
         updateTelemetryPlots(state.currentTargetDist);
         renderExpandablePlots();
         renderStatsPlots();
@@ -1517,22 +1510,14 @@ export function selectLapsByCriteria(group, type, value, targetSessionId = null,
     updateSelectAllCheckboxes();
     if (state.activeTab === 'map') {
         updateFastestSelectedLap();
-        if (state.lapPolylines) {
-            Object.keys(state.lapPolylines).forEach(lapId => {
-                updateLapVisibility(lapId);
-            });
-        }
+        syncAllLapVisibilities();
         updateTelemetryPlots(state.currentTargetDist);
         renderExpandablePlots();
     } else if (state.activeTab === 'stats') {
         renderStatsPlots();
     } else {
         updateFastestSelectedLap();
-        if (state.lapPolylines) {
-            Object.keys(state.lapPolylines).forEach(lapId => {
-                updateLapVisibility(lapId);
-            });
-        }
+        syncAllLapVisibilities();
         updateTelemetryPlots(state.currentTargetDist);
         renderExpandablePlots();
         renderStatsPlots();
@@ -1685,9 +1670,11 @@ export function initAllLapsHandlers() {
         chk.addEventListener('click', (e) => {
             e.preventDefault();
             const selection = state.groupSelections[group] || (state.groupSelections[group] = new Set());
-            const lapIds = Object.keys(state.lapPolylines);
-            if (lapIds.length === 0) return;
-            if (selection.size === lapIds.length) {
+            const totalLaps = (state.lapDataLookup && Object.keys(state.lapDataLookup).length > 0)
+                ? Object.keys(state.lapDataLookup).length
+                : Object.keys(state.lapPolylines || {}).length;
+            if (totalLaps === 0) return;
+            if (selection.size === totalLaps) {
                 clearSelection(group);
             } else {
                 showSelectionMenu(e, group);
@@ -1698,12 +1685,30 @@ export function initAllLapsHandlers() {
 
 export function toggleAllLaps(group) {
     const selection = state.groupSelections[group] || (state.groupSelections[group] = new Set());
-    const lapIds = Object.keys(state.lapPolylines);
-    if (selection.size === lapIds.length) {
+    const totalLaps = (state.lapDataLookup && Object.keys(state.lapDataLookup).length > 0)
+        ? Object.keys(state.lapDataLookup).length
+        : Object.keys(state.lapPolylines || {}).length;
+    if (selection.size === totalLaps) {
         clearSelection(group);
     } else {
         selectLapsByCriteria(group, 'all', 1);
     }
+}
+
+export function syncAllLapVisibilities() {
+    const candidateLapIds = new Set(Object.keys(state.lapPolylines || {}));
+    const activeGroups = state.getActiveGroups ? state.getActiveGroups() : ['A', 'B'];
+    const mapSelections = state.getGroupSelections ? state.getGroupSelections('map') : state.groupSelections;
+    activeGroups.forEach(g => {
+        const visMap = state.isGroupVisible ? state.isGroupVisible(g, 'map') : (state.groupVisibilityMap && state.groupVisibilityMap[g]);
+        if (visMap) {
+            const sel = mapSelections && mapSelections[g];
+            if (sel) {
+                sel.forEach(id => candidateLapIds.add(id));
+            }
+        }
+    });
+    candidateLapIds.forEach(lapId => updateLapVisibility(lapId));
 }
 
 export function updateLapVisibility(lapId) {
@@ -1712,31 +1717,45 @@ export function updateLapVisibility(lapId) {
     const isVisible = activeGroups.some(g => {
         const sel = mapSelections && mapSelections[g];
         const visMap = state.isGroupVisible ? state.isGroupVisible(g, 'map') : (state.groupVisibilityMap && state.groupVisibilityMap[g]);
-        return sel && sel.has(lapId) && visMap;
+        return Boolean(sel && sel.has(lapId) && visMap);
     });
 
-    if (state.lapPolylines && state.lapPolylines[lapId]) {
-        const refLap = getReferenceLap();
-        const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
-        const isRefLap = (lapId === refLapId);
-        const zIndex = (state.trajectoryColorMode === 'delta_t') ? (isRefLap ? 1 : 10) : 1;
-        const targetMap = isVisible ? state.map : null;
+    if (isVisible) {
+        if (!state.lapPolylines || !state.lapPolylines[lapId]) {
+            createLapPolylines(lapId);
+        }
+        if (state.lapPolylines && state.lapPolylines[lapId]) {
+            const refLap = getReferenceLap();
+            const refLapId = state.fastestGroupALapId || (refLap && refLap.lapId ? refLap.lapId : (refLap && refLap.session_id && refLap.lap_num ? `${refLap.session_id}-${refLap.lap_num}` : null)) || state.fastestSelectedLapId;
+            const isRefLap = (lapId === refLapId);
+            const zIndex = (state.trajectoryColorMode === 'delta_t') ? (isRefLap ? 1 : 10) : 1;
+            const targetMap = state.map || null;
 
-        state.lapPolylines[lapId].forEach(p => {
-            const isHitArea = p.strokeOpacity === 0;
-            if (!isHitArea && typeof p.setOptions === 'function') {
-                if (p.zIndex !== zIndex) {
-                    p.setOptions({ zIndex: zIndex });
+            state.lapPolylines[lapId].forEach(p => {
+                const isHitArea = p.strokeOpacity === 0;
+                if (!isHitArea && typeof p.setOptions === 'function') {
+                    if (p.zIndex !== zIndex) {
+                        p.setOptions({ zIndex: zIndex });
+                    }
                 }
-            }
-            if (typeof p.getMap === 'function') {
-                if (p.getMap() !== targetMap) {
+                if (typeof p.getMap === 'function') {
+                    if (p.getMap() !== targetMap) {
+                        p.setMap(targetMap);
+                    }
+                } else if (typeof p.setMap === 'function') {
                     p.setMap(targetMap);
                 }
-            } else {
-                p.setMap(targetMap);
-            }
-        });
+            });
+        }
+    } else {
+        if (state.lapPolylines && state.lapPolylines[lapId]) {
+            state.lapPolylines[lapId].forEach(p => {
+                if (p && typeof p.setMap === 'function') {
+                    p.setMap(null);
+                }
+            });
+            delete state.lapPolylines[lapId];
+        }
     }
 }
 
@@ -1748,7 +1767,7 @@ export function toggleGroupVisibility(group) {
 
     if (state.activeTab === 'map') {
         updateFastestSelectedLap();
-        Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
+        syncAllLapVisibilities();
         renderExpandablePlots();
         updateTelemetryPlots(state.currentTargetDist);
     } else if (state.activeTab === 'stats') {
@@ -1921,18 +1940,14 @@ export function deleteGroup(group) {
     updateSelectAllCheckboxes();
     if (state.activeTab === 'map') {
         updateFastestSelectedLap();
-        if (state.lapPolylines) {
-            Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
-        }
+        syncAllLapVisibilities();
         renderExpandablePlots();
         updateTelemetryPlots(state.currentTargetDist);
     } else if (state.activeTab === 'stats') {
         renderStatsPlots();
     } else {
         updateFastestSelectedLap();
-        if (state.lapPolylines) {
-            Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
-        }
+        syncAllLapVisibilities();
         renderExpandablePlots();
         renderStatsPlots();
         updateTelemetryPlots(state.currentTargetDist);
@@ -1948,18 +1963,14 @@ export function toggleGroupEnabled(group, enabled) {
     updateSelectAllCheckboxes();
     if (state.activeTab === 'map') {
         updateFastestSelectedLap();
-        if (state.lapPolylines) {
-            Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
-        }
+        syncAllLapVisibilities();
         renderExpandablePlots();
         updateTelemetryPlots(state.currentTargetDist);
     } else if (state.activeTab === 'stats') {
         renderStatsPlots();
     } else {
         updateFastestSelectedLap();
-        if (state.lapPolylines) {
-            Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
-        }
+        syncAllLapVisibilities();
         renderExpandablePlots();
         renderStatsPlots();
     }
@@ -2269,9 +2280,7 @@ export function selectLaps(lapsA, lapsB) {
         renderLapList();
         if (state.activeTab === 'map') {
             updateFastestSelectedLap();
-            if (state.lapPolylines) {
-                Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
-            }
+            syncAllLapVisibilities();
             updateAllPolylineColors();
             renderExpandablePlots();
             showRightPanelTab(state.activeRightTab || 'report');
@@ -2279,9 +2288,7 @@ export function selectLaps(lapsA, lapsB) {
             renderStatsPlots();
         } else {
             updateFastestSelectedLap();
-            if (state.lapPolylines) {
-                Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
-            }
+            syncAllLapVisibilities();
             updateAllPolylineColors();
             renderStatsPlots();
             renderExpandablePlots();
@@ -2461,9 +2468,7 @@ export function resetReportView(e) {
     }
 
     // 12. Re-render UI components
-    if (state.lapPolylines) {
-        Object.keys(state.lapPolylines).forEach(lapId => updateLapVisibility(lapId));
-    }
+    syncAllLapVisibilities();
     updateAllPolylineColors();
     renderLapList();
     renderStatsPlots();

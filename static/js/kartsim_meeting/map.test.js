@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { state } from './state.js';
-import { addTrackMarker, addTrackMarkerAtDistance, initTrackMarkers, clearLapPolylines, calculateSegmentColor, setTrajectoryColorMode, loadBaseColumnsForSessions, hasBrakeChannel, loadTrackPoints, LAP_PALETTE, matchesRequestedLap } from './map.js';
+import { addTrackMarker, addTrackMarkerAtDistance, initTrackMarkers, clearLapPolylines, calculateSegmentColor, setTrajectoryColorMode, loadBaseColumnsForSessions, hasBrakeChannel, loadTrackPoints, LAP_PALETTE, matchesRequestedLap, createLapPolylines } from './map.js';
 
 function createMockElement(tagName = 'div') {
     const children = [];
@@ -188,6 +188,35 @@ describe('map.js track markers', () => {
         expect(mockPolyline1.setMap).toHaveBeenCalledWith(null);
         expect(mockPolyline2.setMap).toHaveBeenCalledWith(null);
         expect(state.lapPolylines).toEqual({});
+    });
+
+    it('merges contiguous same-color segments into a single polyline in createLapPolylines', () => {
+        state.trajectoryColorMode = 'pedals';
+        state.globalMaxSpeed = 100;
+        state.lapPolylines = {};
+        state.lapDataLookup = {
+            'lap-merge': {
+                points: [
+                    { throttle: 100, brake: 0 },
+                    { throttle: 100, brake: 0 },
+                    { throttle: 100, brake: 0 },
+                    { throttle: 0, brake: 100 },
+                    { throttle: 0, brake: 100 }
+                ]
+            }
+        };
+
+        createLapPolylines('lap-merge');
+
+        const polylines = state.lapPolylines['lap-merge'];
+        expect(polylines).toBeDefined();
+        // 3 consecutive green segments (p0->p1, p1->p2, p2->p3) are merged into 1 polyline with 4 points
+        expect(polylines[0].opts.path.length).toBe(4);
+        // The red segment (p3->p4) has 2 points
+        expect(polylines[1].opts.path.length).toBe(2);
+        // Last polyline is hitArea spanning all 5 points
+        expect(polylines[polylines.length - 1].opts.strokeOpacity).toBe(0.0);
+        expect(polylines[polylines.length - 1].opts.path.length).toBe(5);
     });
 });
 
