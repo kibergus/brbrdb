@@ -164,6 +164,7 @@ def test_gallery_meeting_breadcrumbs(populated_db_conn: Any) -> None:
         assert 'league=piston_cup' in html
         assert 'Meeting' in html
         assert '/meeting/piston_cup/' in html
+        assert 'data-url="/video_file/piston_cup/2026_05_24_radiator_springs/video1.mp4"' in html
 
 
 def test_gallery_hamburger_menu_session_link(populated_db_conn: Any) -> None:
@@ -289,3 +290,63 @@ def test_serve_photo_dir_traversal_protection() -> None:
     # Path traversal in league parameter
     res2 = client.get('/photo_file/..%2Fclub100/meeting_1/test.jpg', environ_base={'REMOTE_ADDR': '127.0.0.1'})
     assert res2.status_code == 400
+
+
+def test_serve_video_dir_traversal_protection() -> None:
+    client = app.app.test_client()
+    # Path traversal in meeting_folder parameter
+    res1 = client.get('/video_file/club100/..%2F..%2Fetc/test.mp4', environ_base={'REMOTE_ADDR': '127.0.0.1'})
+    assert res1.status_code == 400
+
+    # Path traversal in league parameter
+    res2 = client.get('/video_file/..%2Fclub100/meeting_1/test.mp4', environ_base={'REMOTE_ADDR': '127.0.0.1'})
+    assert res2.status_code == 400
+
+
+def test_serve_video_serving(tmp_path: Any) -> None:
+    client = app.app.test_client()
+    media_dir = tmp_path / "media"
+    video_dir = media_dir / "club100" / "2026_05_24_whilton" / "video"
+    video_dir.mkdir(parents=True)
+    video_file = video_dir / "race.mp4"
+    video_file.write_bytes(b"dummy video content")
+
+    mock_keys_with_video = {
+        'test_key': {
+            'see_videos': True,
+            'see_leagues': ['*'],
+        }
+    }
+    mock_keys_no_video = {
+        'test_key_no_vid': {
+            'see_videos': False,
+            'see_leagues': ['*'],
+        }
+    }
+
+    with patch.dict(database.config, {'media_dir': str(media_dir)}):
+        # 1. Access without see_videos permission -> 403
+        with patch('auth.load_keys', return_value=mock_keys_no_video):
+            client.set_cookie('auth_key', 'test_key_no_vid')
+            res_403 = client.get(
+                '/video_file/club100/2026_05_24_whilton/race.mp4',
+                environ_base={'REMOTE_ADDR': '192.168.1.100'}
+            )
+            assert res_403.status_code == 403
+
+        # 2. Access with see_videos permission -> 200 and correct content
+        with patch('auth.load_keys', return_value=mock_keys_with_video):
+            client.set_cookie('auth_key', 'test_key')
+            res_200 = client.get(
+                '/video_file/club100/2026_05_24_whilton/race.mp4',
+                environ_base={'REMOTE_ADDR': '192.168.1.100'}
+            )
+            assert res_200.status_code == 200
+            assert res_200.data == b"dummy video content"
+
+            # 3. Nonexistent video -> 404
+            res_404 = client.get(
+                '/video_file/club100/2026_05_24_whilton/nonexistent.mp4',
+                environ_base={'REMOTE_ADDR': '192.168.1.100'}
+            )
+            assert res_404.status_code == 404

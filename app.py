@@ -1362,16 +1362,17 @@ def session_view(league: str, class_name: str, date: str, track: str, session_id
         s_meta = s_meta_list[current_idx] if current_idx != -1 else None
         if s_meta:
             raw_videos = db.get_overlapping_videos(s_meta, session_data)
+            meeting_folder = s_meta.meeting_folder or os.path.basename(s_meta.meeting_dir)
             for ov in raw_videos:
                 ov['url'] = url_for(
-                    'gallery.serve_video', league=league, class_name=class_name,
-                    date=date, track=track, filename=ov['filename']
+                    'gallery.serve_video', league=league, meeting_folder=meeting_folder,
+                    filename=ov['filename']
                 )
                 ov['basename'] = os.path.basename(ov['filename'])
                 video_base, _ = os.path.splitext(ov['filename'])
                 ov['thumbnail_url'] = url_for(
-                    'gallery.serve_video', league=league, class_name=class_name,
-                    date=date, track=track, filename=video_base + '.small.jpg'
+                    'gallery.serve_video', league=league, meeting_folder=meeting_folder,
+                    filename=video_base + '.small.jpg'
                 )
 
             # Group videos by source

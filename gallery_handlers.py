@@ -56,33 +56,28 @@ def _require_media_dir() -> str:
 # Photo / video file-serving routes
 # ---------------------------------------------------------------------------
 
-@gallery_blueprint.route('/video_file/<league>/<class_name>/<date>/<track>/<path:filename>')
-def serve_video(league: str, class_name: str, date: str, track: str, filename: str) -> Response:
+@gallery_blueprint.route('/video_file/<league>/<meeting_folder>/<path:filename>')
+def serve_video(league: str, meeting_folder: str, filename: str) -> Response:
     try:
-        race_db.check_for_dir_traversal([league, class_name, date, track, filename])
+        race_db.check_for_dir_traversal([league, meeting_folder, filename])
     except ValueError:
         abort(400, description="Invalid path")
 
     if not auth.get_current_acl().get('see_videos'):
         abort(403, description='Access to video files is restricted')
 
-    sessions = db.find_sessions(leagues=league, classes=class_name, date=date, track=track)
-    if not sessions:
-        abort(404)
-
-    meeting_dir = sessions[0].meeting_dir
-    try:
-        db.check_media_file_permissions(filename, meeting_dir)
-    except ValueError:
-        abort(404)
-
     media_dir = _require_media_dir()
-    meeting_folder = sessions[0].meeting_folder
     video_dir = os.path.join(media_dir, league, meeting_folder, 'video')
     real_media_dir = os.path.realpath(media_dir)
 
     if os.path.exists(video_dir):
         media_path = os.path.join(video_dir, filename)
+        if not os.path.exists(media_path):
+            base_name = os.path.basename(filename)
+            for root, _, files in os.walk(video_dir):
+                if base_name in files:
+                    media_path = os.path.join(root, base_name)
+                    break
         if os.path.exists(media_path):
             real_media_path = os.path.realpath(media_path)
             if os.path.commonpath([real_media_dir, real_media_path]) == real_media_dir:
@@ -628,9 +623,6 @@ def _process_videos(
 
     Returns (videos, available_albums_set).
     """
-    first_session = sessions[0] if sessions else None
-    default_track = first_session.track_name if first_session else 'unknown'
-
     seen: dict[str, dict[str, Any]] = {}
     available_albums: set[str] = set()
 
@@ -657,11 +649,6 @@ def _process_videos(
         base_fn = os.path.basename(filename).lower()
         has_prefix = '/' in filename or '\\' in filename
 
-        primary_session = video_sessions[0] if video_sessions else first_session
-        v_class = (primary_session.class_name[0]
-                   if primary_session and primary_session.class_name else 'cadet')
-        v_track = primary_session.track_name if primary_session else default_track
-
         dir_name = os.path.dirname(filename)
         base_name, _ = os.path.splitext(os.path.basename(filename))
         thumb_filename = (os.path.join(dir_name, base_name + '.small.jpg')
@@ -678,10 +665,10 @@ def _process_videos(
             'end_time': end_time.isoformat() if end_time else None,
             'meeting_id': meeting_id,
             'meeting_folder': meeting_folder,
-            'thumb_url': url_for('gallery.serve_video', league=league, class_name=v_class,
-                                 date=meeting_date, track=v_track, filename=thumb_filename),
-            'url': url_for('gallery.serve_video', league=league, class_name=v_class,
-                           date=meeting_date, track=v_track, filename=filename),
+            'thumb_url': url_for('gallery.serve_video', league=league,
+                                 meeting_folder=meeting_folder, filename=thumb_filename),
+            'url': url_for('gallery.serve_video', league=league,
+                           meeting_folder=meeting_folder, filename=filename),
             'markers': v_markers,
             'sessions': _session_links(video_sessions),
         }
