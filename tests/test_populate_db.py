@@ -183,7 +183,7 @@ def test_populate_database_penalties(db_conn: Any, tmp_path: Any) -> None:
 
         # Check session_results table to see if lap deletion was applied
         cur.execute('''
-            SELECT d.driver_name, r.best_lap_seconds, r.lap_times
+            SELECT d.driver_name, r.best_lap_seconds, r.lap_times, r.deleted_lap_times
             FROM session_results r
             JOIN drivers d ON r.driver_id = d.id
             ORDER BY d.driver_name
@@ -194,11 +194,13 @@ def test_populate_database_penalties(db_conn: Any, tmp_path: Any) -> None:
         assert results[0][0] == 'Driver A'
         assert results[0][1] == pytest.approx(60.0)
         assert results[0][2] == [None, 60.0, 60.5]
+        assert results[0][3] == [None, None, None]
 
         # Driver B: Laps [1:01.0, 1:00.8] -> best (1:00.8) deleted -> lap_times array contains NULL/None, best is 61.0
         assert results[1][0] == 'Driver B'
         assert results[1][1] == pytest.approx(61.0)
         assert results[1][2] == [None, 61.0, None]
+        assert results[1][3] == [None, None, pytest.approx(60.8)]
 
 
 def test_populate_database_sync_and_orphans(db_conn: Any, tmp_path: Any) -> None:

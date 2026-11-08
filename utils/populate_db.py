@@ -202,6 +202,7 @@ def create_schema(conn: Any, drop_first: bool = False) -> None:
                 best_lap_seconds REAL,
                 lap_times REAL[],
                 kart_number TEXT,
+                deleted_lap_times REAL[],
                 CONSTRAINT unique_driver_session UNIQUE (session_id, driver_id)
             );
         ''')
@@ -246,6 +247,7 @@ def create_schema(conn: Any, drop_first: bool = False) -> None:
         cur.execute('ALTER TABLE videos ADD COLUMN IF NOT EXISTS session_id TEXT;')
         cur.execute('ALTER TABLE photos ADD COLUMN IF NOT EXISTS session_id TEXT;')
         cur.execute('ALTER TABLE session_results ADD COLUMN IF NOT EXISTS kart_number TEXT;')
+        cur.execute('ALTER TABLE session_results ADD COLUMN IF NOT EXISTS deleted_lap_times REAL[];')
 
         cur.execute('''
             CREATE TABLE IF NOT EXISTS photo_drivers (
@@ -475,6 +477,7 @@ def populate_single_session(meta_path: str, conn: Any, base_dir: str) -> str:
 
                     # Build lap_times list for DB (NULL/None for deleted laps)
                     db_laps = [None if lap_deleted[i] else laps[i] for i in range(len(laps))]
+                    deleted_lap_times = [laps[i] if lap_deleted[i] else None for i in range(len(laps))]
 
                     # Pre-compute best lap time (excluding Lap 0)
                     non_deleted_laps: list[float] = [
@@ -507,12 +510,12 @@ def populate_single_session(meta_path: str, conn: Any, base_dir: str) -> str:
                         '''
                         INSERT INTO session_results (
                             session_id, driver_id, pos, positions_gained, gap,
-                            champ_points, best_lap_seconds, lap_times, kart_number
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            champ_points, best_lap_seconds, lap_times, kart_number, deleted_lap_times
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         ''',
                         (
                             db_session_id, driver_id, str(pos), positions_gained, gap,
-                            champ_points, best_lap_seconds, db_laps, kart_number
+                            champ_points, best_lap_seconds, db_laps, kart_number, deleted_lap_times
                         )
                     )
 

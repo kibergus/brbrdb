@@ -264,6 +264,10 @@ def _prepare_plot_df(df: pd.DataFrame) -> pd.DataFrame:
     plot_df['Pos_Numeric'] = pd.to_numeric(plot_df.get('Pos', pd.Series(dtype=int)), errors='coerce').fillna(999)
     if 'Name' in plot_df.columns:
         plot_df['Name'] = plot_df['Name'].fillna('').astype(str)
+    if 'LapTimeDeleted' in plot_df.columns:
+        plot_df['LapTimeDeleted'] = plot_df['LapTimeDeleted'].fillna(False).astype(bool)
+    else:
+        plot_df['LapTimeDeleted'] = False
     return plot_df
 
 
@@ -282,11 +286,18 @@ def get_driver_colors(
 
 
 def _get_driver_stats(plot_df: pd.DataFrame) -> tuple[list[str], pd.Series]:
-    """Get finishing position and best lap time sorted by position."""
-    stats = plot_df.sort_values('Lap').groupby('Name').agg({
-        'Pos_Numeric': 'last',
-        'LapTimeSeconds': 'min'
-    }).sort_values('Pos_Numeric')
+    """Get finishing position and best lap time sorted by position. Excludes deleted laps from best lap time."""
+    is_deleted = plot_df.get('LapTimeDeleted', pd.Series(False, index=plot_df.index)).fillna(False).astype(bool)
+    valid_plot_df = plot_df[~is_deleted]
+    if valid_plot_df.empty:
+        valid_plot_df = plot_df
+
+    best_lap_times = valid_plot_df.groupby('Name')['LapTimeSeconds'].min()
+    pos_series = plot_df.sort_values('Lap').groupby('Name')['Pos_Numeric'].last()
+    all_best = plot_df.groupby('Name')['LapTimeSeconds'].min()
+    best_lap_times = best_lap_times.combine_first(all_best)
+
+    stats = pd.DataFrame({'Pos_Numeric': pos_series, 'LapTimeSeconds': best_lap_times}).sort_values('Pos_Numeric')
     return stats.index.tolist(), stats['LapTimeSeconds']
 
 
@@ -477,6 +488,8 @@ def _draw_pace_on_ax(
     # Pace rule: exclude first lap for non-final sessions
     is_race_mask = plot_df['SessionName'].str.contains('final|heat', case=False, na=False, regex=True)
     valid_laps_mask = is_race_mask | (plot_df['Lap'] > 1)
+    if 'LapTimeDeleted' in plot_df.columns:
+        valid_laps_mask = valid_laps_mask & (~plot_df['LapTimeDeleted'].fillna(False).astype(bool))
     pace_df = plot_df[valid_laps_mask]
 
     if pace_df.empty:
@@ -521,12 +534,25 @@ def _draw_overflow_dots(
 
     existing_collections = set(id(c) for c in ax.collections)
 
-    sns.swarmplot(
-        data=overflow, x='Name', y='LapTimeSeconds', order=sorted_drivers,
-        hue=lap_col, palette='spring', hue_norm=hue_norm,
-        size=dot_size, ax=ax, legend=False,
-        warn_thresh=1.0,
-    )
+    is_deleted = overflow.get('LapTimeDeleted', pd.Series(False, index=overflow.index)).fillna(False).astype(bool)
+    valid_overflow = overflow[~is_deleted]
+    deleted_overflow = overflow[is_deleted]
+
+    if not valid_overflow.empty:
+        sns.swarmplot(
+            data=valid_overflow, x='Name', y='LapTimeSeconds', order=sorted_drivers,
+            hue=lap_col, palette='spring', hue_norm=hue_norm,
+            size=dot_size, ax=ax, legend=False,
+            warn_thresh=1.0,
+        )
+
+    if not deleted_overflow.empty:
+        sns.swarmplot(
+            data=deleted_overflow, x='Name', y='LapTimeSeconds', order=sorted_drivers,
+            hue=lap_col, palette='spring', hue_norm=hue_norm,
+            size=max(2, (dot_size + 2) // 2), marker='x', linewidth=1.0, ax=ax, legend=False,
+            warn_thresh=1.0,
+        )
 
     ax.set_ylim(ymin_cur, ymax)
 
@@ -545,18 +571,31 @@ def _draw_violin_on_ax(
     """Shared logic for drawing violin + swarm plots on a specific axis."""
     subset_df = plot_df[plot_df['Name'].isin(sorted_drivers)].copy()
 
-    sns.violinplot(
-        data=subset_df, x='Name', y='LapTimeSeconds', order=sorted_drivers,
-        color='#007acc', linewidth=0, width=0.8, inner=None, ax=ax,
-        density_norm='width'
-    )
+    is_deleted = subset_df.get('LapTimeDeleted', pd.Series(False, index=subset_df.index)).fillna(False).astype(bool)
+    valid_df = subset_df[~is_deleted]
+    deleted_df = subset_df[is_deleted]
 
-    sns.swarmplot(
-        data=subset_df, x='Name', y='LapTimeSeconds', order=sorted_drivers,
-        hue=lap_col, palette='spring', hue_norm=hue_norm,
-        size=dot_size, ax=ax, legend=False,
-        warn_thresh=1.0,
-    )
+    if not valid_df.empty:
+        sns.violinplot(
+            data=valid_df, x='Name', y='LapTimeSeconds', order=sorted_drivers,
+            color='#007acc', linewidth=0, width=0.8, inner=None, ax=ax,
+            density_norm='width'
+        )
+
+        sns.swarmplot(
+            data=valid_df, x='Name', y='LapTimeSeconds', order=sorted_drivers,
+            hue=lap_col, palette='spring', hue_norm=hue_norm,
+            size=dot_size, ax=ax, legend=False,
+            warn_thresh=1.0,
+        )
+
+    if not deleted_df.empty:
+        sns.swarmplot(
+            data=deleted_df, x='Name', y='LapTimeSeconds', order=sorted_drivers,
+            hue=lap_col, palette='spring', hue_norm=hue_norm,
+            size=max(2, (dot_size + 2) // 2), marker='x', linewidth=1.0, ax=ax, legend=False,
+            warn_thresh=1.0,
+        )
 
     if axis_style:
         axis_style(ax)
@@ -1049,7 +1088,12 @@ def plot_split_violins_by_date(
         raise ValueError('Cannot plot violins by date: no unique dates found in dataset.')
 
     # Best lap time per date (for label on x-axis)
-    best_per_date = plot_df.groupby('Date')['LapTimeSeconds'].min()
+    is_deleted = plot_df.get('LapTimeDeleted', pd.Series(False, index=plot_df.index)).fillna(False).astype(bool)
+    valid_plot_df = plot_df[~is_deleted]
+    if valid_plot_df.empty:
+        valid_plot_df = plot_df
+    best_per_date = valid_plot_df.groupby('Date')['LapTimeSeconds'].min()
+    best_per_date = best_per_date.combine_first(plot_df.groupby('Date')['LapTimeSeconds'].min())
 
     # Global range for consistency
     sample = plot_df.sort_values('Date').iloc[0]
@@ -1083,18 +1127,30 @@ def plot_split_violins_by_date(
         hue_norm: Normalize | None = None
     ) -> None:
         subset = plot_df[plot_df['Date'].isin(dates)].copy()
+        is_del = subset.get('LapTimeDeleted', pd.Series(False, index=subset.index)).fillna(False).astype(bool)
+        valid_subset = subset[~is_del]
+        del_subset = subset[is_del]
 
-        sns.violinplot(
-            data=subset, x='Date', y='LapTimeSeconds', order=dates,
-            color='#007acc', linewidth=0, width=0.8, inner=None, ax=ax,
-            density_norm='width'
-        )
-        sns.swarmplot(
-            data=subset, x='Date', y='LapTimeSeconds', order=dates,
-            hue=lap_col, palette='spring', hue_norm=hue_norm,
-            size=4, ax=ax, legend=False,
-            warn_thresh=1.0,
-        )
+        if not valid_subset.empty:
+            sns.violinplot(
+                data=valid_subset, x='Date', y='LapTimeSeconds', order=dates,
+                color='#007acc', linewidth=0, width=0.8, inner=None, ax=ax,
+                density_norm='width'
+            )
+            sns.swarmplot(
+                data=valid_subset, x='Date', y='LapTimeSeconds', order=dates,
+                hue=lap_col, palette='spring', hue_norm=hue_norm,
+                size=4, ax=ax, legend=False,
+                warn_thresh=1.0,
+            )
+
+        if not del_subset.empty:
+            sns.swarmplot(
+                data=del_subset, x='Date', y='LapTimeSeconds', order=dates,
+                hue=lap_col, palette='spring', hue_norm=hue_norm,
+                size=3, marker='x', linewidth=1.0, ax=ax, legend=False,
+                warn_thresh=1.0,
+            )
 
         _style_racing_ax(ax)
         # Format x-axis labels with best lap time
@@ -1171,12 +1227,25 @@ def _draw_overflow_dots_by_date(
 
     existing_collections = set(id(c) for c in ax.collections)
 
-    sns.swarmplot(
-        data=overflow, x='Date', y='LapTimeSeconds', order=sorted_dates,
-        hue=lap_col, palette='spring', hue_norm=hue_norm,
-        size=dot_size, ax=ax, legend=False,
-        warn_thresh=1.0,
-    )
+    is_del = overflow.get('LapTimeDeleted', pd.Series(False, index=overflow.index)).fillna(False).astype(bool)
+    valid_overflow = overflow[~is_del]
+    del_overflow = overflow[is_del]
+
+    if not valid_overflow.empty:
+        sns.swarmplot(
+            data=valid_overflow, x='Date', y='LapTimeSeconds', order=sorted_dates,
+            hue=lap_col, palette='spring', hue_norm=hue_norm,
+            size=dot_size, ax=ax, legend=False,
+            warn_thresh=1.0,
+        )
+
+    if not del_overflow.empty:
+        sns.swarmplot(
+            data=del_overflow, x='Date', y='LapTimeSeconds', order=sorted_dates,
+            hue=lap_col, palette='spring', hue_norm=hue_norm,
+            size=max(2, (dot_size + 2) // 2), marker='x', linewidth=1.0, ax=ax, legend=False,
+            warn_thresh=1.0,
+        )
 
     ax.set_ylim(ymin_cur, ymax)
 
@@ -1559,7 +1628,12 @@ def plot_driver_violins(
             session_labels.append(label)
 
     # Prepare stats for best lap per session (as labels/colors)
-    best_lap_times = plot_df.groupby('SessionLabel')['LapTimeSeconds'].min()
+    is_deleted = plot_df.get('LapTimeDeleted', pd.Series(False, index=plot_df.index)).fillna(False).astype(bool)
+    valid_plot_df = plot_df[~is_deleted]
+    if valid_plot_df.empty:
+        valid_plot_df = plot_df
+    best_lap_times = valid_plot_df.groupby('SessionLabel')['LapTimeSeconds'].min()
+    best_lap_times = best_lap_times.combine_first(plot_df.groupby('SessionLabel')['LapTimeSeconds'].min())
 
     # Re-map columns so we can reuse _draw_violin_on_ax
     plot_df['Name'] = plot_df['SessionLabel']

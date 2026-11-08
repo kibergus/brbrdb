@@ -277,9 +277,12 @@ def test_load_penalties_and_overlapping_videos(tmp_path: Path) -> None:
 
     # Test load with penalties (lap deletion)
     df = db.load(leagues='test_league')
-    # Driver B should have one lap deleted.
+    # Driver B should have one lap deleted with its recorded time preserved.
     driver_b = df[df['Name'] == 'Driver B']
     assert driver_b['LapTimeDeleted'].any()
+    deleted_row = driver_b[driver_b['LapTimeDeleted']].iloc[0]
+    assert deleted_row['LapTimeSeconds'] == pytest.approx(60.8)
+    assert deleted_row['LapTime'] == '1:00.800'
 
     # Test overlapping videos
     sessions = db.find_sessions(leagues='test_league')

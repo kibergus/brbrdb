@@ -188,6 +188,15 @@ class RaceDB:
             password=db_config['password']
         )
 
+        # Ensure deleted_lap_times column exists
+        conn = self._pool.getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute('ALTER TABLE session_results ADD COLUMN IF NOT EXISTS deleted_lap_times REAL[];')
+            conn.commit()
+        finally:
+            self._pool.putconn(conn)
+
     @property
     def conn(self) -> psycopg2.extensions.connection:
         conn = getattr(self._local, 'conn', None)
@@ -544,7 +553,8 @@ class RaceDB:
                 s.weather AS "Weather",
                 s.alphatiming_url AS "AlphaTimingURL",
                 m.meeting_dir,
-                r.kart_number AS "KartNumber"
+                r.kart_number AS "KartNumber",
+                r.deleted_lap_times
             FROM session_results r
             JOIN sessions s ON r.session_id = s.session_id
             JOIN meetings m ON s.meeting_id = m.id
@@ -601,7 +611,7 @@ class RaceDB:
                 session_id, driver_name, pos, pos_gained, gap, champ_points,
                 best_lap_sec, lap_times, league, db_class_arr, meeting_date,
                 track_name, session_name, meeting_name, dt, cond, temp, weather, url, meeting_dir,
-                kart_number
+                kart_number, deleted_lap_times
             ) = r_row
 
             meta_classes = [c.strip() for c in (db_class_arr or []) if c.strip()]
@@ -623,16 +633,55 @@ class RaceDB:
             if not lap_times:
                 continue
 
+            csv_driver_laps: dict[int, float] | None = None
+
             for lap_num, lap_time_sec in enumerate(lap_times):
                 is_deleted = lap_time_sec is None
-                # Emit both deleted and non-deleted laps so consumers can filter
-                # (deleted laps have LapTimeDeleted=True and LapTimeSeconds=0.0)
+                del_sec: float | None = None
+                if is_deleted and lap_num > 0:
+                    has_del = (
+                        deleted_lap_times
+                        and lap_num < len(deleted_lap_times)
+                        and deleted_lap_times[lap_num] is not None
+                    )
+                    if has_del:
+                        del_sec = float(deleted_lap_times[lap_num])
+                    else:
+                        # Fallback: recover deleted lap time from CSV file if present
+                        if csv_driver_laps is None:
+                            csv_driver_laps = {}
+                            resolved_meeting_dir = self._resolve_meeting_dir(meeting_dir)
+                            csv_path = os.path.join(resolved_meeting_dir, f'{session_filename}.csv')
+                            if os.path.exists(csv_path):
+                                try:
+                                    csv_df = _read_cleaned_csv(csv_path)
+                                    driver_rows = csv_df[csv_df['Name'].astype(str).str.strip() == driver_name.strip()]
+                                    if not driver_rows.empty:
+                                        d_row = driver_rows.iloc[0]
+                                        for c in csv_df.columns:
+                                            m_lap = re.match(r'Lap\s*(\d+)', c, re.IGNORECASE)
+                                            if m_lap:
+                                                ln = int(m_lap.group(1))
+                                                parsed_t = sanitize.parse_time(d_row[c])
+                                                if parsed_t is not None:
+                                                    csv_driver_laps[ln] = parsed_t
+                                except Exception:
+                                    pass
+                        del_sec = csv_driver_laps.get(lap_num)
+
+                if is_deleted and del_sec is not None:
+                    actual_lap_sec = del_sec
+                elif lap_time_sec is not None:
+                    actual_lap_sec = float(lap_time_sec)
+                else:
+                    actual_lap_sec = 0.0
+
                 if not is_deleted or lap_num > 0:
-                    lap_time_str = sanitize.format_time(lap_time_sec) if lap_time_sec is not None else ''
+                    lap_time_str = sanitize.format_time(actual_lap_sec) if actual_lap_sec > 0 else ''
                     df_rows.append({
                         'Lap': lap_num,
                         'LapTime': lap_time_str,
-                        'LapTimeSeconds': float(lap_time_sec) if lap_time_sec is not None else 0.0,
+                        'LapTimeSeconds': actual_lap_sec,
                         'LapTimeDeleted': is_deleted,
                         'Name': driver_name,
                         'League': league,

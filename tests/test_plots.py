@@ -103,3 +103,45 @@ def test_gap_plot_truncated_labels() -> None:
     texts = [t.get_text() for t in ax.texts]
     for driver in ['Alice', 'Bob', 'Charlie', 'David']:
         assert driver in texts
+
+
+def test_violin_plot_with_deleted_laps() -> None:
+    df = pd.DataFrame({
+        'SessionID': ['s1'] * 5,
+        'SessionName': ['Qualifying'] * 5,
+        'DateTime': ['2026-08-08 10:00'] * 5,
+        'League': ['fat_pro'] * 5,
+        'Class': ['cadet'] * 5,
+        'Name': ['Alice', 'Alice', 'Alice', 'Bob', 'Bob'],
+        'LapTimeSeconds': [52.0, 50.0, 53.0, 54.0, 55.0],
+        'Lap': [1, 2, 3, 1, 2],
+        'Pos': [1, 1, 1, 2, 2],
+        'LapTimeDeleted': [False, True, False, False, False]
+    })
+
+    # Test _get_driver_stats: Alice's best lap should be 52.0, not the deleted 50.0
+    plot_df = plots._prepare_plot_df(df)
+    sorted_drivers, best_laps = plots._get_driver_stats(plot_df)
+    assert sorted_drivers == ['Alice', 'Bob']
+    assert best_laps['Alice'] == 52.0
+    assert best_laps['Bob'] == 54.0
+
+    # Test plot_split_violins
+    fig = plots.plot_split_violins(df, base_title='Test Session')
+    assert fig is not None
+
+    # Verify that ax has collections for both regular dots and the deleted 'x' marker
+    ax = fig.axes[0]
+    # In matplotlib, swarmplot with marker='x' creates a PathCollection
+    # Check that at least one collection has offsets near y=50.0
+    has_deleted_point = False
+    for col in ax.collections:
+        offsets = np.asarray(col.get_offsets())
+        if offsets.size > 0:
+            y_vals = offsets[:, 1]
+            if np.any(np.isclose(y_vals, 50.0, atol=0.1)):
+                has_deleted_point = True
+                break
+    assert has_deleted_point, "Deleted lap at 50.0 should be plotted"
+
+    plots.plt.close(fig)
