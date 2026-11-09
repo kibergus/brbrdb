@@ -133,3 +133,11 @@ def test_gallery_titles(test_client_with_db: FlaskClient) -> None:
     resp = test_client_with_db.get('/gallery?league=piston_cup&meeting=2026-05-24')
     assert resp.status_code == 200
     assert _extract_title(resp.data) == 'BrBrGallery: 2026-05-24 - Radiator Springs'
+
+    resp = test_client_with_db.get('/gallery?league=piston_cup&meeting=2026-05-24&photo=photo1.jpg')
+    assert resp.status_code == 200
+    assert _extract_title(resp.data) == 'BrBrGallery: photo1.jpg - 2026-05-24 - Radiator Springs'
+
+    resp = test_client_with_db.get('/gallery?league=piston_cup&meeting=2026-05-24&video=video1.mp4')
+    assert resp.status_code == 200
+    assert _extract_title(resp.data) == 'BrBrGallery: video1.mp4 - 2026-05-24 - Radiator Springs'

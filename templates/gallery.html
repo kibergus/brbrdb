@@ -1,6 +1,6 @@
 {% extends "layout.html" %}
 
-{% block title %}BrBrGallery: {{ meeting_date }} - {{ track }}{% endblock %}
+{% block title %}{% if selected_photo %}BrBrGallery: {{ selected_photo }} - {{ meeting_date }} - {{ track }}{% elif selected_video %}BrBrGallery: {{ selected_video }} - {{ meeting_date }} - {{ track }}{% else %}BrBrGallery: {{ meeting_date }} - {{ track }}{% endif %}{% endblock %}
 
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/gallery.css') }}">
@@ -141,7 +141,7 @@
 </div>
 
 {# Lightbox Modal (for Photos) #}
-<div id="lightbox" class="lightbox" data-mode="view">
+<div id="lightbox" class="lightbox" data-mode="view" onclick="handleCloseClick(event)">
     <button type="button" class="lightbox-prev" onclick="navigateLightbox(-1, event)" aria-label="Previous Photo">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
     </button>
@@ -251,6 +251,8 @@
 </div>
 
 <script>
+const baseDocumentTitle = document.title;
+
 function updateFilters() {
     const classVal = document.getElementById('class-select').value;
     const albumSelect = document.getElementById('album-select');
@@ -271,12 +273,74 @@ function updateFilters() {
     }
     url.searchParams.delete('session');
     url.searchParams.delete('session_id');
+    url.searchParams.delete('photo');
+    url.searchParams.delete('video');
 
     window.location.href = url.toString();
 }
 
 let currentPhotoIndex = -1;
 let photoCards = [];
+
+function getBasename(filename) {
+    if (!filename) return '';
+    return filename.split('/').pop().split('\\').pop();
+}
+
+function findPhotoCard(targetFilename) {
+    if (!targetFilename) return null;
+    try {
+        targetFilename = decodeURIComponent(targetFilename).trim();
+    } catch (e) {
+        targetFilename = targetFilename.trim();
+    }
+    const targetBase = targetFilename.split('/').pop().split('\\').pop().toLowerCase();
+    const cards = Array.from(document.querySelectorAll('.gallery-grid .gallery-card:not(.video-card-item)'));
+
+    let match = cards.find(c => c.dataset.filename === targetFilename);
+    if (match) return match;
+
+    match = cards.find(c => (c.dataset.filename || '').toLowerCase() === targetFilename.toLowerCase());
+    if (match) return match;
+
+    match = cards.find(c => {
+        const fn = (c.dataset.filename || '').split('/').pop().split('\\').pop().toLowerCase();
+        return fn === targetBase;
+    });
+    return match || null;
+}
+
+function findVideoCard(targetFilename) {
+    if (!targetFilename) return null;
+    try {
+        targetFilename = decodeURIComponent(targetFilename).trim();
+    } catch (e) {
+        targetFilename = targetFilename.trim();
+    }
+    const targetBase = targetFilename.split('/').pop().split('\\').pop().toLowerCase();
+    const cards = Array.from(document.querySelectorAll('.gallery-grid .gallery-card.video-card-item'));
+
+    let match = cards.find(c => c.dataset.filename === targetFilename);
+    if (match) return match;
+
+    match = cards.find(c => (c.dataset.filename || '').toLowerCase() === targetFilename.toLowerCase());
+    if (match) return match;
+
+    match = cards.find(c => {
+        const fn = (c.dataset.filename || '').split('/').pop().split('\\').pop().toLowerCase();
+        return fn === targetBase;
+    });
+    return match || null;
+}
+
+function removeMediaParam(param) {
+    if (!window.history || !window.history.replaceState) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.has(param)) {
+        url.searchParams.delete(param);
+        window.history.replaceState(null, '', url.toString());
+    }
+}
 
 function openLightboxFromCard(card) {
     photoCards = Array.from(document.querySelectorAll('.gallery-grid .gallery-card:not(.video-card-item)'));
@@ -325,7 +389,8 @@ function enterCropMode(fromHistory = false) {
 
     if (!fromHistory) {
         if (!history.state || history.state.mode !== 'crop') {
-            history.pushState({ modal: 'photo', mode: 'crop', photoIndex: currentPhotoIndex }, '');
+            const currentFn = getBasename((photoCards[currentPhotoIndex] && photoCards[currentPhotoIndex].dataset.filename) || '');
+            history.pushState({ modal: 'photo', mode: 'crop', photoIndex: currentPhotoIndex, filename: currentFn }, '', window.location.href);
         }
     }
 }
@@ -369,6 +434,7 @@ function handleCloseClick(event) {
             history.back();
         } else {
             closeLightbox(true);
+            removeMediaParam('photo');
         }
     }
 }
@@ -866,11 +932,19 @@ function openLightbox(smallUrl, fullUrl, filename, caption, league, meetingFolde
 
     lightbox.classList.add('active');
 
+    const baseFilename = getBasename(filename);
+    const pageUrl = new URL(window.location.href);
+    pageUrl.searchParams.set('photo', baseFilename);
+    pageUrl.searchParams.delete('video');
+    const newUrl = pageUrl.toString();
+
+    document.title = `${baseFilename} - ${baseDocumentTitle}`;
+
     if (!fromHistory) {
         if (!history.state || history.state.modal !== 'photo') {
-            history.pushState({ modal: 'photo', mode: 'view', photoIndex: currentPhotoIndex }, '');
+            history.pushState({ modal: 'photo', mode: 'view', photoIndex: currentPhotoIndex, filename: baseFilename }, '', newUrl);
         } else {
-            history.replaceState({ modal: 'photo', mode: 'view', photoIndex: currentPhotoIndex }, '');
+            history.replaceState({ modal: 'photo', mode: 'view', photoIndex: currentPhotoIndex, filename: baseFilename }, '', newUrl);
         }
     }
 }
@@ -917,7 +991,8 @@ async function sharePhoto(event) {
             await navigator.share({
                 files: [file],
                 title: caption,
-                text: caption
+                text: caption,
+                url: window.location.href
             });
         } else {
             const blobUrl = URL.createObjectURL(blob);
@@ -946,10 +1021,13 @@ function closeLightbox(fromHistory = false) {
     if (closeBtnText) closeBtnText.style.display = 'none';
     const previewPill = document.getElementById('lightbox-preview-pill');
     if (previewPill) previewPill.style.display = 'none';
+    document.title = baseDocumentTitle;
 
     if (!fromHistory) {
         if (history.state && history.state.modal === 'photo') {
             history.back();
+        } else {
+            removeMediaParam('photo');
         }
     }
 }
@@ -959,7 +1037,7 @@ function handleVideoCardClick(card) {
     const thumbUrl = card.dataset.thumb;
     const filename = card.dataset.filename;
     const markersScript = card.querySelector('.video-markers-json');
-    const markers = JSON.parse(markersScript.textContent || '[]');
+    const markers = JSON.parse(markersScript ? markersScript.textContent || '[]' : '[]');
     openVideoLightbox(url, thumbUrl, filename, markers);
 }
 
@@ -1023,9 +1101,19 @@ function openVideoLightbox(url, thumbUrl, filename, markers, fromHistory = false
 
     modal.classList.add('active');
 
+    const baseFilename = getBasename(filename);
+    const pageUrl = new URL(window.location.href);
+    pageUrl.searchParams.set('video', baseFilename);
+    pageUrl.searchParams.delete('photo');
+    const newUrl = pageUrl.toString();
+
+    document.title = `${baseFilename} - ${baseDocumentTitle}`;
+
     if (!fromHistory) {
         if (!history.state || history.state.modal !== 'video') {
-            history.pushState({ modal: 'video' }, '');
+            history.pushState({ modal: 'video', filename: baseFilename }, '', newUrl);
+        } else {
+            history.replaceState({ modal: 'video', filename: baseFilename }, '', newUrl);
         }
     }
 }
@@ -1048,6 +1136,7 @@ function handleVideoCloseClick(event) {
         history.back();
     } else {
         closeVideoLightbox(true);
+        removeMediaParam('video');
     }
 }
 
@@ -1060,9 +1149,13 @@ function closeVideoLightbox(fromHistory = false) {
     if (modal) {
         modal.classList.remove('active');
     }
+    document.title = baseDocumentTitle;
+
     if (!fromHistory) {
         if (history.state && history.state.modal === 'video') {
             history.back();
+        } else {
+            removeMediaParam('video');
         }
     }
 }
@@ -1135,7 +1228,11 @@ window.addEventListener('popstate', function(event) {
     const isPhotoActive = photoLightbox && photoLightbox.classList.contains('active');
     const isVideoActive = videoLightbox && videoLightbox.classList.contains('active');
 
-    if (state && state.modal === 'photo') {
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlPhoto = urlParams.get('photo');
+    const urlVideo = urlParams.get('video');
+
+    if ((state && state.modal === 'photo') || (!state && urlPhoto)) {
         if (isVideoActive) {
             closeVideoLightbox(true);
         }
@@ -1143,28 +1240,37 @@ window.addEventListener('popstate', function(event) {
         if (photoCards.length === 0) {
             photoCards = Array.from(document.querySelectorAll('.gallery-grid .gallery-card:not(.video-card-item)'));
         }
-        const idx = state.photoIndex !== undefined && state.photoIndex >= 0 && state.photoIndex < photoCards.length 
-            ? state.photoIndex 
-            : 0;
 
-        if (!isPhotoActive || currentPhotoIndex !== idx) {
-            if (photoCards[idx]) {
-                currentPhotoIndex = idx;
-                const card = photoCards[idx];
-                openLightbox(
-                    card.dataset.smallUrl,
-                    card.dataset.fullUrl,
-                    card.dataset.filename,
-                    card.dataset.caption,
-                    card.dataset.league,
-                    card.dataset.meetingFolder,
-                    true
-                );
+        let idx = -1;
+        if (state && state.photoIndex !== undefined && state.photoIndex >= 0 && state.photoIndex < photoCards.length) {
+            idx = state.photoIndex;
+        } else {
+            const targetFn = (state && state.filename) || urlPhoto;
+            const card = findPhotoCard(targetFn);
+            if (card) {
+                idx = photoCards.indexOf(card);
             }
+        }
+        if (idx === -1 && photoCards.length > 0) {
+            idx = 0;
+        }
+
+        if (idx >= 0 && (!isPhotoActive || currentPhotoIndex !== idx)) {
+            currentPhotoIndex = idx;
+            const card = photoCards[idx];
+            openLightbox(
+                card.dataset.smallUrl,
+                card.dataset.fullUrl,
+                card.dataset.filename,
+                card.dataset.caption,
+                card.dataset.league,
+                card.dataset.meetingFolder,
+                true
+            );
         }
 
         if (photoLightbox) {
-            if (state.mode === 'crop') {
+            if (state && state.mode === 'crop') {
                 if (photoLightbox.getAttribute('data-mode') !== 'crop') {
                     enterCropMode(true);
                 }
@@ -1174,9 +1280,19 @@ window.addEventListener('popstate', function(event) {
                 }
             }
         }
-    } else if (state && state.modal === 'video') {
+    } else if ((state && state.modal === 'video') || (!state && urlVideo)) {
         if (isPhotoActive) {
             closeLightbox(true);
+        }
+        const videoFn = (state && state.filename) || urlVideo;
+        const card = findVideoCard(videoFn);
+        if (card) {
+            const url = card.dataset.url;
+            const thumbUrl = card.dataset.thumb;
+            const filename = card.dataset.filename;
+            const markersScript = card.querySelector('.video-markers-json');
+            const markers = JSON.parse(markersScript ? markersScript.textContent || '[]' : '[]');
+            openVideoLightbox(url, thumbUrl, filename, markers, true);
         }
     } else {
         if (isPhotoActive) {
@@ -1188,9 +1304,68 @@ window.addEventListener('popstate', function(event) {
     }
 });
 
-// Clean up initial state on page load so reload starts clean
-if (window.history && window.history.replaceState) {
-    window.history.replaceState(null, '');
+function initMediaFromUrl() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const photoParam = urlParams.get('photo');
+    const videoParam = urlParams.get('video');
+
+    if (photoParam) {
+        const card = findPhotoCard(photoParam);
+        if (card) {
+            try {
+                card.scrollIntoView({ block: 'center' });
+            } catch (e) {}
+
+            photoCards = Array.from(document.querySelectorAll('.gallery-grid .gallery-card:not(.video-card-item)'));
+            currentPhotoIndex = photoCards.indexOf(card);
+
+            const baseUrl = new URL(window.location.href);
+            baseUrl.searchParams.delete('photo');
+            baseUrl.searchParams.delete('video');
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState({ modal: null }, '', baseUrl.toString());
+            }
+
+            openLightbox(
+                card.dataset.smallUrl,
+                card.dataset.fullUrl,
+                card.dataset.filename,
+                card.dataset.caption,
+                card.dataset.league,
+                card.dataset.meetingFolder
+            );
+            return;
+        }
+    }
+
+    if (videoParam) {
+        const card = findVideoCard(videoParam);
+        if (card) {
+            try {
+                card.scrollIntoView({ block: 'center' });
+            } catch (e) {}
+
+            const baseUrl = new URL(window.location.href);
+            baseUrl.searchParams.delete('photo');
+            baseUrl.searchParams.delete('video');
+            if (window.history && window.history.replaceState) {
+                window.history.replaceState({ modal: null }, '', baseUrl.toString());
+            }
+
+            handleVideoCardClick(card);
+            return;
+        }
+    }
+
+    if (window.history && window.history.replaceState) {
+        window.history.replaceState({ modal: null }, '');
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initMediaFromUrl);
+} else {
+    initMediaFromUrl();
 }
 </script>
 {% endblock %}

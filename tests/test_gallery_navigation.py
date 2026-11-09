@@ -350,3 +350,80 @@ def test_serve_video_serving(tmp_path: Any) -> None:
                 environ_base={'REMOTE_ADDR': '192.168.1.100'}
             )
             assert res_404.status_code == 404
+
+
+def test_gallery_media_direct_url_photo(populated_db_conn: Any) -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'see_gallery': True,
+            'see_leagues': ['*'],
+        }
+    }
+    with patch('auth.load_keys', return_value=mock_keys):
+        client.set_cookie('auth_key', 'test_key')
+
+        # 1. Access meeting with photo query parameter
+        response = client.get(
+            '/gallery?league=piston_cup&meeting=2026-05-24&photo=photo1.jpg',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert 'data-filename="photo1.jpg"' in html
+        assert 'initMediaFromUrl' in html
+        assert '<title>BrBrGallery: photo1.jpg - 2026-05-24 - Radiator Springs</title>' in html
+
+
+def test_gallery_media_direct_url_video(populated_db_conn: Any) -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'see_gallery': True,
+            'see_leagues': ['*'],
+        }
+    }
+    with patch('auth.load_keys', return_value=mock_keys):
+        client.set_cookie('auth_key', 'test_key')
+
+        # 1. Access meeting with video query parameter
+        response = client.get(
+            '/gallery?league=piston_cup&meeting=2026-05-24&video=video1.mp4',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert 'data-filename="video1.mp4"' in html
+        assert '<title>BrBrGallery: video1.mp4 - 2026-05-24 - Radiator Springs</title>' in html
+
+        # 2. Access meeting with full relative path in video query parameter -> resolves to basename
+        response_path = client.get(
+            '/gallery?league=piston_cup&meeting=2026-05-24&video=SomeAlbum%2Fvideo1.mp4',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response_path.status_code == 200
+        html_path = response_path.get_data(as_text=True)
+        assert 'data-filename="video1.mp4"' in html_path
+        assert '<title>BrBrGallery: video1.mp4 - 2026-05-24 - Radiator Springs</title>' in html_path
+
+
+def test_gallery_media_url_wrong_album_auto_resolves(populated_db_conn: Any) -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'see_gallery': True,
+            'see_leagues': ['*'],
+        }
+    }
+    with patch('auth.load_keys', return_value=mock_keys):
+        client.set_cookie('auth_key', 'test_key')
+
+        # photo1.jpg belongs to 'album1'. Access with mismatched album query param.
+        response = client.get(
+            '/gallery?league=piston_cup&meeting=2026-05-24&album=nonexistent_album&photo=photo1.jpg',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        # Should auto-resolve album to album1 so photo1.jpg is present
+        assert 'data-filename="photo1.jpg"' in html

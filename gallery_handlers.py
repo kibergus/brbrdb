@@ -322,12 +322,52 @@ def _gallery_meeting(league: str, meeting_date: str) -> str:
     available_classes = sorted(list(set(c for s in sessions for c in s.class_name)))
     selected_class = request.args.get('class') or request.args.get('class_name')
     selected_album = request.args.get('album')
+    selected_photo = request.args.get('photo')
+    selected_video = request.args.get('video')
+    if selected_photo:
+        selected_photo = os.path.basename(selected_photo)
+    if selected_video:
+        selected_video = os.path.basename(selected_video)
 
     photos_rows, videos_rows = _fetch_media_rows(league, meeting_date)
     video_markers_map = _build_video_markers_map(sessions, league, meeting_date)
     photo_subfolder_map = _build_photo_subfolder_map(sessions, league)
     folder_to_session = _build_folder_to_session(sessions)
     session_by_id = {s.session_id: s for s in sessions}
+
+    # If a specific photo is requested, ensure album and class filters do not hide it
+    if selected_photo:
+        photo_target = os.path.basename(selected_photo).lower()
+        for row in photos_rows:
+            fn, _, _, _, db_album, db_session_id = row
+            if os.path.basename(fn).lower() == photo_target:
+                matched_s = session_by_id.get(db_session_id) if db_session_id else None
+                alb = db_album or photo_subfolder_map.get(fn.lower())
+                if not alb:
+                    alb = (_clean_session_name(matched_s.session_name)
+                           if matched_s else 'saturday')
+                if selected_album and alb and selected_album.lower() != alb.lower():
+                    selected_album = alb
+                if selected_class and matched_s and matched_s.class_name:
+                    if selected_class not in matched_s.class_name:
+                        selected_class = None
+                break
+
+    # If a specific video is requested, ensure album and class filters do not hide it
+    if selected_video:
+        video_target = os.path.basename(selected_video).lower()
+        for row in videos_rows:
+            fn, _, _, _, _, db_session_id = row
+            if os.path.basename(fn).lower() == video_target:
+                v_sessions = ([session_by_id[db_session_id]]
+                              if db_session_id and db_session_id in session_by_id else [])
+                alb = _determine_video_album(fn, v_sessions)
+                if selected_album and alb and selected_album.lower() != alb.lower():
+                    selected_album = alb
+                if selected_class and v_sessions and v_sessions[0].class_name:
+                    if selected_class not in v_sessions[0].class_name:
+                        selected_class = None
+                break
 
     photos, photo_albums = _process_photos(
         photos_rows, session_by_id, photo_subfolder_map, folder_to_session,
@@ -420,6 +460,8 @@ def _gallery_meeting(league: str, meeting_date: str) -> str:
         available_albums=available_albums,
         selected_class=selected_class,
         selected_album=selected_album,
+        selected_photo=selected_photo,
+        selected_video=selected_video,
         photos=photos,
         videos=videos,
         meeting_url=meeting_url,
