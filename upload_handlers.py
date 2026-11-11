@@ -88,7 +88,7 @@ def create_track_origin(
     """Create a simulator-specific TrackOrigin instance if coordinates are provided."""
     if lat is None or lon is None:
         return None
-    if league == 'acevo':
+    if league in ('acevo', 'ac'):
         try:
             corr = assetto_corsa.get_track_origin(track_name).correction
         except ValueError as e:
@@ -811,7 +811,7 @@ def process_telemetry_derivative_data(
         try:
             if session_info.league == 'kartsim':
                 origin = rfactor.get_track_origin(resolved_track_name)
-            elif session_info.league == 'acevo':
+            elif session_info.league in ('acevo', 'ac'):
                 origin = assetto_corsa.get_track_origin(resolved_track_name)
         except ValueError as e:
             raise NotFound(str(e)) from e

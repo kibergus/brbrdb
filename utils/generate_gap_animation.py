@@ -41,6 +41,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.ticker import MultipleLocator  # noqa: E402
 
 # Import application components
+import aliases  # noqa: E402
 import database  # noqa: E402
 from plots import (  # noqa: E402
     _is_hero,
@@ -324,7 +325,7 @@ def main() -> None:
 
     # Load session data
     hero_names_list = [name.strip() for name in args.hero_names.split(',')] if args.hero_names else None
-    load_names = hero_names_list if league == 'kartsim' else None
+    load_names = hero_names_list if aliases.is_sim_league(league) else None
 
     df = database.db.load(leagues=league, classes=class_name, date=date_str, track=track, driver_names=load_names)
     if df.empty:

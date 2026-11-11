@@ -813,7 +813,7 @@ def render_kartsim_league(league: str, class_name: str | None = None) -> str:
     meeting_conditions: dict[tuple[str, str, str], str] = {}
     meeting_sessions: dict[tuple[str, str, str], list[dict[str, str]]] = {}
     for c, d, t in meetings:
-        sessions = db.find_sessions(leagues=league, classes=c, date=d, track=t)
+        sessions = db.find_sessions(leagues=league, classes=c, date=d, track=t, driver_names=hero_names)
         conds = set()
         pills: list[dict[str, str]] = []
         seen_sids: set[str] = set()

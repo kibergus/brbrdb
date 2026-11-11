@@ -383,6 +383,9 @@ def _render_telemetry_meeting(
     telemetry_sessions = []
     if has_telemetry:
         csv_files = [f for f in os.listdir(telemetry_dir) if f.endswith('.csv')]
+        sanitized_heroes = [sanitize.sanitize_filename(h).lower() for h in hero_names]
+        if sanitized_heroes:
+            csv_files = [f for f in csv_files if any(h in f.lower() for h in sanitized_heroes)]
         seen_sids = set()
         for csv_file in csv_files:
             matched_sid = _match_session(csv_file, sessions)
@@ -392,6 +395,7 @@ def _render_telemetry_meeting(
             if s.session_id in seen_sids:
                 if not filter_session_ids or s.session_id in filter_session_ids:
                     telemetry_sessions.append(s)
+        has_telemetry = bool(telemetry_sessions)
 
     selected_sid_for_render = session_id
     if len(filter_session_ids) > 1:

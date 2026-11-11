@@ -1653,9 +1653,17 @@ def test_create_track_origin() -> None:
     assert isinstance(origin_ace, assetto_corsa.AssettoCorsaTrackOrigin)
     assert origin_ace.correction == assetto_corsa.get_track_origin('Monza').correction
 
-    # acevo with unknown track raises NotFound (404)
+    # ac with known track includes corrections
+    origin_ac = upload_handlers.create_track_origin('ac', 'Monza', 45.61389, 9.28624, 0.0)
+    assert isinstance(origin_ac, assetto_corsa.AssettoCorsaTrackOrigin)
+    assert origin_ac.correction == assetto_corsa.get_track_origin('Monza').correction
+
+    # acevo/ac with unknown track raises NotFound (404)
     with pytest.raises(NotFound) as exc_info:
         upload_handlers.create_track_origin('acevo', 'Unknown Track', 45.61389, 9.28624, 0.0)
+    assert "Unknown track: 'Unknown Track'" in str(exc_info.value)
+    with pytest.raises(NotFound) as exc_info:
+        upload_handlers.create_track_origin('ac', 'Unknown Track', 45.61389, 9.28624, 0.0)
     assert "Unknown track: 'Unknown Track'" in str(exc_info.value)
 
     # other leagues create RFactorTrackOrigin
@@ -1681,6 +1689,18 @@ def test_process_telemetry_derivative_data_unknown_track_raises_not_found() -> N
     with patch('upload_handlers.db.get_track', return_value={}):
         with pytest.raises(NotFound) as exc_info:
             upload_handlers.process_telemetry_derivative_data(records, session_info, '/dummy/dir')
+        assert "Unknown track: 'Unknown Track'" in str(exc_info.value)
+
+        session_info_ac = upload_handlers.CSVSessionMetadata(
+            driver_name='Driver A',
+            track_name='Unknown Track',
+            league='ac',
+            class_name='f1',
+            session_name='Practice',
+            session_start_datetime=datetime.datetime(2026, 10, 22, 8, 56, 35),
+        )
+        with pytest.raises(NotFound) as exc_info:
+            upload_handlers.process_telemetry_derivative_data(records, session_info_ac, '/dummy/dir')
         assert "Unknown track: 'Unknown Track'" in str(exc_info.value)
 
 

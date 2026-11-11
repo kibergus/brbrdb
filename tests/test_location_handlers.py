@@ -1076,6 +1076,63 @@ def test_telemetry_view_session_selector_time(tmp_path: Path) -> None:
         assert '18:09 Practice' in html
 
 
+def test_telemetry_view_filters_sessions_by_hero_driver(tmp_path: Path) -> None:
+    client = flask_app.app.test_client()
+
+    meeting_dir = tmp_path / "meeting"
+    meeting_dir.mkdir()
+    telemetry_dir = meeting_dir / "telemetry"
+    telemetry_dir.mkdir()
+    sample_csv = (
+        "Format,RaceBox CSV\nData Source,KartSim\nConfiguration,Alice\n\n"
+        "Record,Time,Latitude,Longitude,Lap\n1,2026-11-10T10:00:00Z,50.0,-1.0,1\n"
+    )
+    (telemetry_dir / "10_00_practice_driver_b.csv").write_text(sample_csv)
+    (telemetry_dir / "11_00_practice_driver_b.csv").write_text(sample_csv)
+    (telemetry_dir / "12_00_practice_driver_b.csv").write_text(sample_csv)
+    (telemetry_dir / "13_00_practice_katia_guseinova.csv").write_text(sample_csv)
+
+    s1 = MagicMock()
+    s1.session_id = '10_00_practice'
+    s1.session_name = '10:00 Practice'
+    s1.session_start_datetime = '2026-11-10 10:00'
+    s1.meeting_dir = str(meeting_dir)
+
+    s2 = MagicMock()
+    s2.session_id = '11_00_practice'
+    s2.session_name = '11:00 Practice'
+    s2.session_start_datetime = '2026-11-10 11:00'
+    s2.meeting_dir = str(meeting_dir)
+
+    s3 = MagicMock()
+    s3.session_id = '12_00_practice'
+    s3.session_name = '12:00 Practice'
+    s3.session_start_datetime = '2026-11-10 12:00'
+    s3.meeting_dir = str(meeting_dir)
+
+    s4 = MagicMock()
+    s4.session_id = '13_00_practice'
+    s4.session_name = '13:00 Practice'
+    s4.session_start_datetime = '2026-11-10 13:00'
+    s4.meeting_dir = str(meeting_dir)
+
+    sessions = [s1, s2, s3, s4]
+
+    with patch('location_handlers.db.find_sessions', return_value=sessions), \
+         patch('location_handlers.db.load', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.load_penalties', return_value=pd.DataFrame()), \
+         patch('location_handlers.db.list_meetings', return_value=[]), \
+         patch('location_handlers.db.has_telemetry', return_value=True), \
+         patch('location_handlers.plot_handlers.get_hero_names', return_value=['Katia Guseinova']):
+        resp = client.get('/telemetry/kartsim/cadet/2026-11-10/Willow%20Springs%20Reverse')
+        assert resp.status_code == 200
+        html = resp.data.decode('utf-8')
+        assert '13:00 Practice' in html
+        assert '10:00 Practice' not in html
+        assert '11:00 Practice' not in html
+        assert '12:00 Practice' not in html
+
+
 def test_telemetry_view_filter_track_conditions(tmp_path: Path) -> None:
     client = flask_app.app.test_client()
 

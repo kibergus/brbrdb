@@ -38,6 +38,7 @@ _LEAGUE_NAMES = {
     'club100_south': 'Club 100 South',
     'kartsim': 'KartSim',
     'acevo': 'Assetto Corsa Evo',
+    'ac': 'Assetto Corsa',
     'fat': 'FAT Testing',
     'fat_pro': 'FAT Pro',
     'fat_regional': 'FAT Regional',
@@ -68,6 +69,7 @@ _LEAGUE_COLORS = {
     'fat_other': '#1D4296',
     'kartsim': '#3498db',  # blue
     'acevo': '#e74c3c',    # racing red
+    'ac': '#e74c3c',       # racing red
     'fekc': '#9b59b6',  # purple
     'drs': '#55b0cb',   # DRS Cyan
 }
@@ -132,7 +134,7 @@ _CLASS_NAMES = {
     'f1': ClassInfo('F1', 'f1'),
 }
 
-SIM_LEAGUES = {'kartsim', 'acevo'}
+SIM_LEAGUES = {'kartsim', 'acevo', 'ac'}
 
 
 def is_sim_league(league_id: str | None) -> bool:
@@ -141,7 +143,7 @@ def is_sim_league(league_id: str | None) -> bool:
 
 def get_default_class(league: str | None) -> str:
     """Returns the default class ID for a league when none is specified."""
-    if league == 'acevo':
+    if league in ('acevo', 'ac'):
         return 'f1'
     return 'cadet'
 
@@ -155,7 +157,7 @@ def get_league_color(league_id: str) -> str:
 
 
 def get_league_group(league_id: str) -> str:
-    if league_id in ('kartsim', 'acevo'):
+    if league_id in ('kartsim', 'acevo', 'ac'):
         return 'sim'
     if league_id.startswith('club100'):
         return 'club100'
