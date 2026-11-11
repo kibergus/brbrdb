@@ -5,7 +5,7 @@
 {% block head %}
 <link rel="stylesheet" href="{{ url_for('static', filename='css/gallery.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/session.css') }}">
-<script src="{{ url_for('static', filename='js/video_player.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='js/video_player.js') }}"></script>
 {% endblock %}
 
 {% block container_class %}container-fluid{% endblock %}
@@ -112,10 +112,16 @@
 
     {# Render Videos #}
     {% for video in videos %}
-    <div class="gallery-card video-card-item" data-url="{{ video.url }}" data-thumb="{{ video.thumb_url }}" data-filename="{{ video.filename }}" onclick="handleVideoCardClick(this)">
+    <div class="gallery-card video-card-item" data-url="{{ video.url }}" data-thumb="{{ video.thumb_url }}" data-filename="{{ video.filename }}" data-spherical="{{ 'true' if video.spherical else 'false' }}" onclick="handleVideoCardClick(this)">
         <script type="application/json" class="video-markers-json">{{ video.markers | tojson | safe }}</script>
         <div class="gallery-media-wrapper">
             <img src="{{ video.thumb_url }}" alt="{{ video.filename }}" loading="lazy">
+            {% if video.spherical %}
+            <div class="video-360-badge" title="360° Spherical Video">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg>
+                <span>360°</span>
+            </div>
+            {% endif %}
             <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 48px; height: 48px; background: rgba(15, 23, 42, 0.85); border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.5);">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M8 5v14l11-7z"></path></svg>
             </div>
@@ -231,6 +237,10 @@
                             <option value="4">4x</option>
                             <option value="8">8x</option>
                         </select>
+                        <button class="v-btn btn-360" title="Toggle 360 View" onclick="toggle360View('video-lightbox-el')">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg>
+                            <span class="btn-360-text">360°</span>
+                        </button>
                         <button class="v-btn" title="Fullscreen" onclick="toggleFullscreen('video-card-lightbox')">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
                         </button>
@@ -1036,23 +1046,28 @@ function handleVideoCardClick(card) {
     const url = card.dataset.url;
     const thumbUrl = card.dataset.thumb;
     const filename = card.dataset.filename;
+    const isSpherical = card.dataset.spherical === 'true';
     const markersScript = card.querySelector('.video-markers-json');
     const markers = JSON.parse(markersScript ? markersScript.textContent || '[]' : '[]');
-    openVideoLightbox(url, thumbUrl, filename, markers);
+    openVideoLightbox(url, thumbUrl, filename, markers, isSpherical);
 }
 
-function openVideoLightbox(url, thumbUrl, filename, markers, fromHistory = false) {
+function openVideoLightbox(url, thumbUrl, filename, markers, isSpherical = false, fromHistory = false) {
     const modal = document.getElementById('video-lightbox');
     const video = document.getElementById('video-lightbox-el');
     const title = document.getElementById('video-lightbox-title');
     const select = document.getElementById('driver-select-lightbox');
     const markersContainer = document.getElementById('markers-lightbox');
 
+    video.dataset.spherical = isSpherical ? 'true' : 'false';
     video.src = url;
     video.poster = thumbUrl;
     title.textContent = filename;
 
     video.load();
+    if (typeof syncVideo360Mode === 'function') {
+        syncVideo360Mode(video);
+    }
 
     select.innerHTML = '';
     markersContainer.innerHTML = '';
@@ -1292,7 +1307,8 @@ window.addEventListener('popstate', function(event) {
             const filename = card.dataset.filename;
             const markersScript = card.querySelector('.video-markers-json');
             const markers = JSON.parse(markersScript ? markersScript.textContent || '[]' : '[]');
-            openVideoLightbox(url, thumbUrl, filename, markers, true);
+            const isSpherical = card.dataset.spherical === 'true';
+            openVideoLightbox(url, thumbUrl, filename, markers, isSpherical, true);
         }
     } else {
         if (isPhotoActive) {

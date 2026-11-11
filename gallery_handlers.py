@@ -21,14 +21,14 @@ The module exposes ``gallery_blueprint`` which is registered in app.py.
 
 from typing import Any
 import io
+import json
+import logging
 import os
 
 from flask import (
     Blueprint, Response, abort, render_template, request, send_file, url_for
 )
 from PIL import Image as PILImage
-
-import logging
 
 import aliases
 import auth
@@ -650,6 +650,39 @@ def _process_photos(
     return photos, available_albums
 
 
+def _load_meeting_spherical_videos(
+    media_dir: str | None, league: str, meeting_folder: str, meeting_dir: str | None
+) -> set[str]:
+    """Return a set of lowercase basenames for videos marked as spherical."""
+    spherical_set: set[str] = set()
+    if meeting_dir and os.path.exists(meeting_dir):
+        v_json_path = os.path.join(meeting_dir, 'video.json')
+        if os.path.exists(v_json_path):
+            try:
+                with open(v_json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    for k, v in data.items():
+                        if isinstance(v, dict) and v.get('spherical'):
+                            spherical_set.add(os.path.basename(k).lower())
+            except Exception as e:
+                logger.debug('Error reading %s: %s', v_json_path, e)
+
+    if media_dir:
+        video_dir = os.path.join(media_dir, league, meeting_folder, 'video')
+        if os.path.exists(video_dir):
+            for root, _, files in os.walk(video_dir):
+                if 'video.json' in files:
+                    try:
+                        with open(os.path.join(root, 'video.json'), 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            for k, v in data.items():
+                                if isinstance(v, dict) and v.get('spherical'):
+                                    spherical_set.add(os.path.basename(k).lower())
+                    except Exception as e:
+                        logger.debug('Error reading video.json in %s: %s', root, e)
+    return spherical_set
+
+
 def _process_videos(
     videos_rows: list,
     session_by_id: dict,
@@ -667,6 +700,15 @@ def _process_videos(
     """
     seen: dict[str, dict[str, Any]] = {}
     available_albums: set[str] = set()
+
+    media_dir = config.get('media_dir')
+    spherical_basenames: set[str] = set()
+    if videos_rows:
+        first_meeting_dir = videos_rows[0][4]
+        first_meeting_folder = os.path.basename(first_meeting_dir)
+        spherical_basenames = _load_meeting_spherical_videos(
+            media_dir, league, first_meeting_folder, first_meeting_dir
+        )
 
     for filename, start_time, end_time, meeting_id, meeting_dir, db_session_id in videos_rows:
         meeting_folder = os.path.basename(meeting_dir)
@@ -701,6 +743,8 @@ def _process_videos(
             key=lambda m: m['video_time'],
         )
 
+        is_spherical = base_fn in spherical_basenames
+
         video_item = {
             'filename': filename,
             'start_time': start_time.isoformat() if start_time else None,
@@ -713,6 +757,7 @@ def _process_videos(
                            meeting_folder=meeting_folder, filename=filename),
             'markers': v_markers,
             'sessions': _session_links(video_sessions),
+            'spherical': is_spherical,
         }
 
         if base_fn in seen:

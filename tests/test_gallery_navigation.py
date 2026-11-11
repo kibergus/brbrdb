@@ -13,6 +13,7 @@
 # limitations under the License.
 # ==============================================================================
 
+import json
 import os
 from typing import Generator, Any
 from unittest.mock import patch
@@ -427,3 +428,50 @@ def test_gallery_media_url_wrong_album_auto_resolves(populated_db_conn: Any) -> 
         html = response.get_data(as_text=True)
         # Should auto-resolve album to album1 so photo1.jpg is present
         assert 'data-filename="photo1.jpg"' in html
+
+
+def test_gallery_spherical_video_support(populated_db_conn: Any, tmp_path: Any) -> None:
+    client = app.app.test_client()
+    mock_keys = {
+        'test_key': {
+            'see_gallery': True,
+            'see_videos': True,
+            'see_leagues': ['*'],
+        }
+    }
+
+    # Insert a 360 video into DB
+    with database.db.conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO videos (meeting_id, filename, start_time, end_time)
+            VALUES ('bar/2026_05_24_radiator_springs', 'Practice/CAM_20261107114937_0001_D.mov',
+                    '2026-05-24 10:20:00+00', '2026-05-24 10:30:00+00')
+        """)
+    database.db.conn.commit()
+
+    # Mock video.json in media_dir or meeting_dir
+    fake_media = tmp_path / 'media'
+    video_dir = fake_media / 'piston_cup' / '2026_05_24_radiator_springs' / 'video' / 'Practice'
+    video_dir.mkdir(parents=True)
+    with open(video_dir / 'video.json', 'w', encoding='utf-8') as f:
+        json.dump({
+            'CAM_20261107114937_0001_D.mov': {
+                'start': '2026-05-24T10:20:00+00:00',
+                'end': '2026-05-24T10:30:00+00:00',
+                'spherical': True,
+            }
+        }, f)
+
+    with patch('auth.load_keys', return_value=mock_keys), \
+         patch.dict(database.config, {'media_dir': str(fake_media)}), \
+         patch.dict(gallery_handlers.config, {'media_dir': str(fake_media)}):
+        client.set_cookie('auth_key', 'test_key')
+        response = client.get(
+            '/gallery?league=piston_cup&meeting=2026-05-24',
+            environ_base={'REMOTE_ADDR': '192.168.1.100'}
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert 'data-spherical="true"' in html
+        assert 'video-360-badge' in html
+        assert 'btn-360' in html

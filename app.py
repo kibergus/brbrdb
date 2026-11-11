@@ -1374,6 +1374,7 @@ def session_view(league: str, class_name: str, date: str, track: str, session_id
                     'gallery.serve_video', league=league, meeting_folder=meeting_folder,
                     filename=video_base + '.small.jpg'
                 )
+                ov['spherical'] = bool(ov.get('spherical', False))
 
             # Group videos by source
             grouped_videos: dict[str, dict[str, Any]] = {}

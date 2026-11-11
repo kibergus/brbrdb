@@ -1054,7 +1054,8 @@ class RaceDB:
                     'filename': vfilename,
                     'markers': markers,
                     'v_start': v_start,
-                    'duration': (v_end - v_start).total_seconds()
+                    'duration': (v_end - v_start).total_seconds(),
+                    'spherical': bool(vinfo.get('spherical', False)),
                 })
         return overlapping_videos
 

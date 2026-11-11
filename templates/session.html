@@ -264,7 +264,7 @@
         {% endif %}
 
         <div class="video-container" id="container-{{ outer_loop_index }}">
-            <video src="{{ first_video.url }}" id="video-{{ outer_loop_index }}" poster="{{ first_video.thumbnail_url }}" preload="none" onclick="togglePlay('video-{{ outer_loop_index }}')"></video>
+            <video src="{{ first_video.url }}" id="video-{{ outer_loop_index }}" poster="{{ first_video.thumbnail_url }}" preload="none" onclick="togglePlay('video-{{ outer_loop_index }}')" data-spherical="{{ 'true' if first_video.spherical else 'false' }}"></video>
             
             <div class="video-controls-overlay">
                 <div class="progress-area" onclick="seekVideo(event, 'video-{{ outer_loop_index }}')">
@@ -301,6 +301,10 @@
                             <option value="4">4x</option>
                             <option value="8">8x</option>
                         </select>
+                        <button class="v-btn btn-360" title="Toggle 360 View" onclick="toggle360View('video-{{ outer_loop_index }}')">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"></path><path d="M2 12h20"></path></svg>
+                            <span class="btn-360-text">360°</span>
+                        </button>
                         <button class="v-btn" title="Fullscreen" onclick="toggleFullscreen('video-card-{{ outer_loop_index }}')">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
                         </button>
@@ -333,6 +337,7 @@
                             data-filename="{{ video.basename }}"
                             data-source="{{ entry.source_name }}"
                             data-video-time="{{ marker.video_time }}"
+                            data-spherical="{{ 'true' if video.spherical else 'false' }}"
                             style="cursor: pointer; border: none; margin: 0;"
                             onclick="switchVideo(this, '{{ outer_loop_index }}')">
                             L{{ marker.lap }} ({{ format_time(marker.lap_time) }})
@@ -369,7 +374,7 @@
         heroNames: {{ HERO_NAMES | tojson }}
     };
 </script>
-<script src="{{ url_for('static', filename='js/video_player.js') }}"></script>
+<script type="module" src="{{ url_for('static', filename='js/video_player.js') }}"></script>
 <script src="{{ url_for('static', filename='js/session.js') }}"></script>
 
 {% endblock %}
