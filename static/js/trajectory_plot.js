@@ -283,23 +283,42 @@ export class TrajectoryPlot {
     }
 
     _parseBinaryFloat64(arrayBuffer) {
-        if (!arrayBuffer || arrayBuffer.byteLength < 16) {
+        if (!arrayBuffer || arrayBuffer.byteLength < 20) {
             return [];
         }
         const view = new DataView(arrayBuffer);
-        const meanVal = view.getFloat64(0, true);
-        const scale = view.getFloat64(8, true);
-        const deltas = new Int16Array(arrayBuffer.slice(16));
-        const length = deltas.length;
-        const values = new Array(length);
-        let currentQuantized = 0;
-        for (let i = 0; i < length; i++) {
-            if (deltas[i] === -32768) {
-                values[i] = null;
-            } else {
-                currentQuantized += deltas[i];
-                values[i] = meanVal + currentQuantized * scale;
+        const byteLength = arrayBuffer.byteLength;
+        let totalCount = 0;
+        let pos = 0;
+        while (pos + 20 <= byteLength) {
+            const count = view.getUint32(pos + 16, true);
+            const blockBytes = 20 + count * 2;
+            if (pos + blockBytes > byteLength) break;
+            totalCount += count;
+            pos += blockBytes;
+        }
+        const values = new Array(totalCount);
+        let outIdx = 0;
+        pos = 0;
+        while (pos + 20 <= byteLength) {
+            const offset = view.getFloat64(pos, true);
+            const scale = view.getFloat64(pos + 8, true);
+            const count = view.getUint32(pos + 16, true);
+            const blockBytes = 20 + count * 2;
+            if (pos + blockBytes > byteLength) break;
+            let currentQuantized = 0;
+            let deltaPos = pos + 20;
+            for (let i = 0; i < count; i++) {
+                const d = view.getInt16(deltaPos, true);
+                deltaPos += 2;
+                if (d === -32768) {
+                    values[outIdx++] = null;
+                } else {
+                    currentQuantized += d;
+                    values[outIdx++] = offset + currentQuantized * scale;
+                }
             }
+            pos += blockBytes;
         }
         return values;
     }

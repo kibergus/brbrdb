@@ -43,9 +43,10 @@ RUN pip install *.whl && rm *.whl
 
 # Copy all application files (subject to .dockerignore)
 COPY . .
-RUN python setup.py build_ext --inplace
+RUN chmod +x /app/docker-entrypoint.sh && python setup.py build_ext --inplace
 
 # Expose port 5000 internally
 EXPOSE 5000
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "8", "--timeout", "600", "app:app"]

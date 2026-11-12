@@ -10,6 +10,7 @@
 #include <numbers>
 #include <unordered_map>
 #include <brotli/encode.h>
+#include <brotli/decode.h>
 
 namespace telemetry {
 
@@ -115,6 +116,222 @@ static std::string compress_brotli(const std::string& data) {
     return out;
 }
 
+static std::string decompress_brotli(const char* data, size_t size) {
+    if (size == 0) return "";
+    BrotliDecoderState* state = BrotliDecoderCreateInstance(nullptr, nullptr, nullptr);
+    if (!state) return "";
+
+    std::string out;
+    out.reserve(size * 4 + 64);
+    uint8_t chunk[65536];
+
+    size_t available_in = size;
+    const uint8_t* next_in = reinterpret_cast<const uint8_t*>(data);
+    BrotliDecoderResult result = BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT;
+
+    while (result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT) {
+        size_t available_out = sizeof(chunk);
+        uint8_t* next_out = chunk;
+        result = BrotliDecoderDecompressStream(
+            state, &available_in, &next_in, &available_out, &next_out, nullptr
+        );
+        size_t written = sizeof(chunk) - available_out;
+        if (written > 0) {
+            out.append(reinterpret_cast<const char*>(chunk), written);
+        }
+    }
+
+    BrotliDecoderDestroyInstance(state);
+    if (result != BROTLI_DECODER_RESULT_SUCCESS) {
+        return "";
+    }
+    return out;
+}
+
+std::string encode_channel_blocks(
+    const double* values,
+    size_t n,
+    double preferred_scale
+) {
+    if (n == 0) {
+        return compress_brotli("");
+    }
+
+    double scale = preferred_scale;
+    if (!(scale > 0.0) || std::isnan(scale) || std::isinf(scale)) {
+        double min_v = std::numeric_limits<double>::infinity();
+        double max_v = -std::numeric_limits<double>::infinity();
+        bool any_finite = false;
+        for (size_t i = 0; i < n; ++i) {
+            double v = values[i];
+            if (!std::isnan(v) && !std::isinf(v)) {
+                if (v < min_v) min_v = v;
+                if (v > max_v) max_v = v;
+                any_finite = true;
+            }
+        }
+        if (!any_finite || max_v == min_v) {
+            scale = 1.0;
+        } else {
+            scale = (max_v - min_v) / 32760.0;
+            if (!(scale > 0.0)) scale = 1.0;
+        }
+    }
+
+    std::string raw;
+    raw.reserve(20 + n * sizeof(int16_t));
+    std::vector<int16_t> block_deltas;
+    block_deltas.reserve(n);
+
+    size_t idx = 0;
+    while (idx < n) {
+        block_deltas.clear();
+        double block_offset = 0.0;
+        int64_t last_valid_q = 0;
+        bool has_seen_valid = false;
+
+        while (idx < n && block_deltas.size() < 0xFFFFFFFFULL) {
+            double v = values[idx];
+            if (std::isnan(v) || std::isinf(v)) {
+                block_deltas.push_back(-32768);
+                ++idx;
+            } else if (!has_seen_valid) {
+                block_offset = v;
+                last_valid_q = 0;
+                has_seen_valid = true;
+                block_deltas.push_back(0);
+                ++idx;
+            } else {
+                double q_flt = std::round((v - block_offset) / scale);
+                if (q_flt < -9.0e15 || q_flt > 9.0e15) {
+                    // Exceeds safe integer range relative to block_offset: start a new block
+                    break;
+                }
+                int64_t q_val = static_cast<int64_t>(q_flt);
+                int64_t diff = q_val - last_valid_q;
+                if (diff < -32767 || diff > 32767) {
+                    // Step exceeds int16 delta range: close current block and start a new block at idx
+                    break;
+                }
+                block_deltas.push_back(static_cast<int16_t>(diff));
+                last_valid_q = q_val;
+                ++idx;
+            }
+        }
+
+        uint32_t count = static_cast<uint32_t>(block_deltas.size());
+        size_t old_size = raw.size();
+        raw.resize(old_size + 20 + static_cast<size_t>(count) * sizeof(int16_t));
+        std::memcpy(&raw[old_size], &block_offset, sizeof(double));
+        std::memcpy(&raw[old_size + 8], &scale, sizeof(double));
+        std::memcpy(&raw[old_size + 16], &count, sizeof(uint32_t));
+        if (count > 0) {
+            std::memcpy(
+                &raw[old_size + 20],
+                block_deltas.data(),
+                static_cast<size_t>(count) * sizeof(int16_t)
+            );
+        }
+    }
+
+    return compress_brotli(raw);
+}
+
+std::vector<double> decode_channel_blocks(
+    const char* data,
+    size_t size
+) {
+    std::string raw = decompress_brotli(data, size);
+    if (raw.size() < 20) {
+        return {};
+    }
+
+    size_t total_count = 0;
+    size_t pos = 0;
+    while (pos + 20 <= raw.size()) {
+        uint32_t count = 0;
+        std::memcpy(&count, &raw[pos + 16], sizeof(uint32_t));
+        size_t block_bytes = 20 + static_cast<size_t>(count) * sizeof(int16_t);
+        if (pos + block_bytes > raw.size()) break;
+        total_count += count;
+        pos += block_bytes;
+    }
+
+    std::vector<double> values;
+    values.reserve(total_count);
+
+    pos = 0;
+    while (pos + 20 <= raw.size()) {
+        double offset = 0.0;
+        double scale = 1.0;
+        uint32_t count = 0;
+        std::memcpy(&offset, &raw[pos], sizeof(double));
+        std::memcpy(&scale, &raw[pos + 8], sizeof(double));
+        std::memcpy(&count, &raw[pos + 16], sizeof(uint32_t));
+        size_t block_bytes = 20 + static_cast<size_t>(count) * sizeof(int16_t);
+        if (pos + block_bytes > raw.size()) break;
+
+        const char* delta_ptr = &raw[pos + 20];
+        int64_t current_q = 0;
+        for (uint32_t i = 0; i < count; ++i) {
+            int16_t d = 0;
+            std::memcpy(&d, delta_ptr + static_cast<size_t>(i) * sizeof(int16_t), sizeof(int16_t));
+            if (d == -32768) {
+                values.push_back(std::numeric_limits<double>::quiet_NaN());
+            } else {
+                current_q += static_cast<int64_t>(d);
+                values.push_back(offset + static_cast<double>(current_q) * scale);
+            }
+        }
+        pos += block_bytes;
+    }
+
+    return values;
+}
+
+std::string serve_brtc_channel(
+    const std::string& brtc_path,
+    uint64_t col_offset,
+    uint64_t col_length,
+    bool is_speed,
+    bool should_smooth
+) {
+    if (col_length == 0) {
+        return compress_brotli("");
+    }
+    std::ifstream file(brtc_path, std::ios::binary);
+    if (!file.is_open()) {
+        return compress_brotli("");
+    }
+    file.seekg(static_cast<std::streamoff>(col_offset), std::ios::beg);
+    if (!file.good()) {
+        return compress_brotli("");
+    }
+    std::string slice;
+    slice.resize(static_cast<size_t>(col_length));
+    file.read(&slice[0], static_cast<std::streamsize>(col_length));
+    if (static_cast<uint64_t>(file.gcount()) != col_length) {
+        return compress_brotli("");
+    }
+
+    if (!is_speed && !should_smooth) {
+        return slice;
+    }
+
+    std::vector<double> values = decode_channel_blocks(slice.data(), slice.size());
+    if (is_speed) {
+        for (double& v : values) {
+            if (!std::isnan(v)) {
+                v *= 3.6;
+            }
+        }
+    }
+    if (should_smooth) {
+        values = smooth_values(values);
+    }
+    return encode_channel_blocks(values.data(), values.size(), 0.0);
+}
+
 static inline double parse_iso_time_to_seconds(std::string_view sv) {
     // Formats: "YYYY-MM-DDTHH:MM:SS.sssZ" or "HH:MM:SS.sss"
     size_t t_pos = sv.find('T');
@@ -164,12 +381,7 @@ std::string process_telemetry_channel(
     double max_dist_m,
     bool has_ref
 ) {
-    std::string empty_header(16, '\0');
-    double zero_val = 0.0;
-    double one_val = 1.0;
-    std::memcpy(&empty_header[0], &zero_val, sizeof(double));
-    std::memcpy(&empty_header[8], &one_val, sizeof(double));
-    std::string empty_payload = compress_brotli(empty_header);
+    std::string empty_payload = compress_brotli("");
 
     std::ifstream file(csv_path, std::ios::binary);
     if (!file.is_open()) {
@@ -360,74 +572,7 @@ std::string process_telemetry_channel(
         values = smooth_values(values);
     }
 
-    // Compute mean and scale
-    double sum = 0.0;
-    size_t count = 0;
-    for (double v : values) {
-        if (!std::isnan(v)) {
-            sum += v;
-            count++;
-        }
-    }
-
-    double mean_val = 0.0;
-    double scale = 1.0;
-    if (count > 0) {
-        mean_val = sum / static_cast<double>(count);
-        double max_dev = 0.0;
-        double max_diff = 0.0;
-        double prev_val = 0.0;
-        bool has_prev = false;
-        for (double v : values) {
-            if (!std::isnan(v)) {
-                double dev = std::abs(v - mean_val);
-                if (dev > max_dev) max_dev = dev;
-                if (has_prev) {
-                    double diff = std::abs(v - prev_val);
-                    if (diff > max_diff) max_diff = diff;
-                }
-                prev_val = v;
-                has_prev = true;
-            }
-        }
-        double scale_base = max_dev / 32760.0;
-        double scale_delta = max_diff / 32760.0;
-        scale = std::max(scale_base, scale_delta);
-        if (scale == 0.0) scale = 1.0;
-    }
-
-    // Delta encode
-    size_t n = values.size();
-    std::vector<int16_t> deltas(n);
-    int64_t last_valid_q = 0;
-    bool has_seen_valid = false;
-    for (size_t i = 0; i < n; ++i) {
-        if (std::isnan(values[i])) {
-            deltas[i] = -32768;
-        } else {
-            int64_t q_val = static_cast<int64_t>(std::round((values[i] - mean_val) / scale));
-            if (!has_seen_valid) {
-                int64_t clipped = std::clamp(q_val, static_cast<int64_t>(-32767), static_cast<int64_t>(32767));
-                deltas[i] = static_cast<int16_t>(clipped);
-                has_seen_valid = true;
-            } else {
-                int64_t d = q_val - last_valid_q;
-                int64_t clipped = std::clamp(d, static_cast<int64_t>(-32767), static_cast<int64_t>(32767));
-                deltas[i] = static_cast<int16_t>(clipped);
-            }
-            last_valid_q = q_val;
-        }
-    }
-
-    std::string raw_payload;
-    raw_payload.resize(16 + deltas.size() * sizeof(int16_t));
-    std::memcpy(&raw_payload[0], &mean_val, sizeof(double));
-    std::memcpy(&raw_payload[8], &scale, sizeof(double));
-    if (!deltas.empty()) {
-        std::memcpy(&raw_payload[16], deltas.data(), deltas.size() * sizeof(int16_t));
-    }
-
-    return compress_brotli(raw_payload);
+    return encode_channel_blocks(values.data(), values.size(), is_time ? 0.0001 : 0.0);
 }
 
 std::vector<int> detect_lap_crossings(

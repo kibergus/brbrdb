@@ -16,50 +16,23 @@
 """FastMCP server entry point for Telemetry Analysis."""
 from __future__ import annotations
 import base64
-import csv
 import json
 import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Image
 from database import db
+import telemetry_store
 from mcp_server import image_tools, lap_tools, report_tools, track_tools
 
 mcp = FastMCP("brbrdb")
 
 
-# FIXME: This should live in race_db.py
 def read_telemetry_header(csv_path: str) -> tuple[list[str], str | None]:
     """Fast header parser to extract available columns and driver name without reading data rows."""
-    columns: list[str] = []
-    driver_name: str | None = None
-    try:
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.reader(f)
-            metadata_rows = []
-            header = None
-            found_blank = False
-            for row in reader:
-                if not found_blank:
-                    if not row or all(cell.strip() == '' for cell in row):
-                        found_blank = True
-                    else:
-                        metadata_rows.append(row)
-                else:
-                    header = [col.strip() for col in row]
-                    break
-
-            for row in metadata_rows:
-                if row and len(row) >= 2 and row[0] in ('Driver name', 'Configuration'):
-                    driver_name = row[1]
-                    break
-
-            if header:
-                columns = header
-    except (OSError, UnicodeDecodeError):
-        pass
-
-    return columns, driver_name
+    tel_dir = os.path.dirname(csv_path)
+    stem = telemetry_store.strip_telemetry_suffix(os.path.basename(csv_path))
+    return telemetry_store.read_session_header(tel_dir, stem)
 
 
 @mcp.tool()
@@ -96,13 +69,12 @@ def list_sessions(
         telemetry_channels: list[str] = []
         tel_dir = os.path.join(s.meeting_dir, 'telemetry') if s.meeting_dir else ''
         if tel_dir and os.path.exists(tel_dir):
-            for csv_file in sorted(os.listdir(tel_dir)):
-                if csv_file.endswith('.csv') and (csv_file.startswith(s.session_id) or s.session_id in csv_file):
-                    csv_path = os.path.join(tel_dir, csv_file)
-                    cols, tel_driver = read_telemetry_header(csv_path)
+            for stem in telemetry_store.list_driver_stems(tel_dir):
+                if stem.startswith(s.session_id) or s.session_id in stem:
+                    cols, tel_driver = telemetry_store.read_session_header(tel_dir, stem)
                     if cols and not telemetry_channels:
                         skip = {'record', 'time', 'latitude', 'longitude', 'altitude'}
-                        telemetry_channels = [c for c in cols if c not in skip]
+                        telemetry_channels = [c for c in cols if c.lower() not in skip]
 
                     if tel_driver and tel_driver not in drivers:
                         drivers.append(tel_driver)

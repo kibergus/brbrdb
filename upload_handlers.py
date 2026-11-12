@@ -41,6 +41,8 @@ import aliases
 import session_time
 from plot_handlers import invalidate_plot_cache
 import _telemetry_native
+import telemetry_brtc
+import telemetry_store
 
 logger = logging.getLogger(__name__)
 upload_blueprint = Blueprint('upload', __name__)
@@ -76,6 +78,7 @@ class CSVSessionMetadata:
     track_configuration: str | None = None
     origin: track_data.TrackOrigin | None = None
     session_id: str | None = None
+    stream: str = ''
 
 
 def create_track_origin(
@@ -158,6 +161,7 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
     origin_lat = None
     origin_lon = None
     origin_heading = 0.0
+    stream_name = ''
 
     date_str = None
     time_str = None
@@ -168,6 +172,12 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
             continue
         key = row[0].strip().lower()
         val = row[1].strip()
+        if key == 'stream':
+            try:
+                stream_name = telemetry_store.normalize_stream_name(val)
+            except ValueError as e:
+                raise BadRequest(str(e)) from e
+            continue
         if not val:
             continue
         if key == 'driver name':
@@ -264,6 +274,7 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
         track_configuration=track_configuration,
         origin=origin,
         session_id=session_id,
+        stream=stream_name,
     )
 
 
@@ -1729,108 +1740,102 @@ def iter_csv_records(
         yield record
 
 
-@upload_blueprint.route('/api/upload/stream', methods=['POST'])
-def stream_upload() -> Any:
-    """Stream telemetry (CSV or BRT1 binary) directly into the handler.
-    Consumes the stream and populates the database and files continuously.
-    """
-    acl = auth.get_current_acl()
-    if not acl.get('upload_sessions'):
-        raise Forbidden('Forbidden: No session upload permission.')
+@dataclass
+class _UploadSessionContext:
+    metadata: CSVSessionMetadata
+    meeting_dir: str
+    telemetry_dir: str
+    session_filename: str
+    driver_stem: str
+    meta_path: str
+    summary_path: str
+    has_alphatiming: bool
 
-    content_encoding = request.content_encoding or request.headers.get('Content-Encoding')
-    reader = StreamingByteReader(request.stream, content_encoding=content_encoding)
 
-    # Auto-format detection: peek first 7 bytes to check for BRT1 magic chunk
-    is_binary_brt1 = reader.peek(7) == b'\x04\x00\x01BRT1'
-
-    if is_binary_brt1:
-        metadata, channel_names, channel_scales = parse_brt1_stream_header(reader)
-        records_iter = iter_brt1_records(
-            reader, metadata.session_start_datetime, channel_names, channel_scales
-        )
-    else:
-        # Legacy CSV Stream Parser
-        header_lines: list[str] = []
-        while line := reader.readline():
-            if not line.strip():
-                break
-            header_lines.append(line)
-
-        metadata = parse_csv_metadata_rows(csv.reader(header_lines))
-        csv_header_line_str = reader.readline()
-        if not csv_header_line_str:
-            raise BadRequest('No telemetry records found in the streamed CSV.')
-        records_iter = iter_csv_records(reader, csv_header_line_str)
-
-    # ACL validation
-    if not auth.can_upload_session_for_league(acl, metadata.league):
-        raise Forbidden(f'Forbidden: Upload for league {metadata.league!r} is not permitted.')
-    if not auth.can_upload_session_for_driver(acl, metadata.driver_name):
-        raise Forbidden(f'Forbidden: Upload for driver {metadata.driver_name!r} not permitted.')
-
-    # Resolve any car/class name aliases
-    metadata.class_name = aliases.resolve_car_name(metadata.class_name)
-    track_info, metadata.track_name = resolve_track(
-        metadata.track_name, metadata.track_configuration
-    )
-
-    # Prepare directories and file paths
-    time_str = metadata.session_start_datetime.strftime('%H_%M')
-    start_date = metadata.session_start_datetime.strftime('%Y_%m_%d')
-    track_sanitized = sanitize.sanitize_filename(metadata.track_name)
-    meeting_folder = f'{start_date}_{track_sanitized}'
-    meeting_dir = os.path.join(DATA_DIR, metadata.league, metadata.class_name, meeting_folder)
-    os.makedirs(os.path.join(meeting_dir, 'telemetry'), exist_ok=True)
-
+def _build_segment_meta_dict(metadata: CSVSessionMetadata) -> dict[str, Any]:
+    """Build canonical metadata dictionary stored inside BRT1 segment 0x02 chunks."""
+    out: dict[str, Any] = {
+        'Track name': metadata.track_name,
+        'Date': metadata.session_start_datetime.strftime('%Y-%m-%d'),
+        'Time': metadata.session_start_datetime.strftime('%H:%M:%S'),
+        'Driver name': metadata.driver_name,
+        'League': metadata.league,
+        'Class': metadata.class_name,
+        'Session': metadata.session_name,
+    }
     if metadata.session_id:
-        session_filename = sanitize.sanitize_filename(metadata.session_id)
-        if not session_filename or session_filename != metadata.session_id.strip().lower():
-            raise BadRequest(f'Invalid session_id: {metadata.session_id!r}')
-    else:
-        session_filename = f'{time_str}_{sanitize.sanitize_filename(metadata.session_name)}'
+        out['Session ID'] = metadata.session_id
+    if metadata.stream:
+        out['stream'] = metadata.stream
+    if metadata.kart_number is not None:
+        out['kart_number'] = metadata.kart_number
+    if metadata.track_conditions is not None:
+        out['Conditions'] = metadata.track_conditions
+    if metadata.temperature is not None:
+        out['Temperature'] = metadata.temperature
+    if metadata.weather is not None:
+        out['Weather'] = metadata.weather
+    if metadata.distance_to_rear_axle is not None:
+        out['Distance to rear axle'] = metadata.distance_to_rear_axle
+    if metadata.track_configuration is not None:
+        out['Track configuration'] = metadata.track_configuration
+    if metadata.origin is not None:
+        out['Track Origin Latitude'] = metadata.origin.lat
+        out['Track Origin Longitude'] = metadata.origin.lon
+        out['Track Origin Heading'] = metadata.origin.heading
+    return out
 
-    meta_path = os.path.join(meeting_dir, f'{session_filename}_metadata.json')
-    summary_path = os.path.join(meeting_dir, f'{session_filename}.csv')
-    telemetry_path = os.path.join(
-        meeting_dir, 'telemetry', f'{session_filename}_{sanitize.sanitize_filename(metadata.driver_name)}.csv'
+
+def _inherit_existing_driver_metadata(
+    metadata: CSVSessionMetadata,
+    telemetry_dir: str,
+    driver_stem: str,
+) -> None:
+    """Inherit optional calibration/origin metadata from pre-existing driver telemetry when omitted."""
+    existing_meta: dict[str, Any] = {}
+    prim_brtc = telemetry_store.primary_brtc_path(telemetry_dir, driver_stem)
+    act_prim_dir = os.path.join(
+        telemetry_store.active_dir_path(telemetry_dir, driver_stem),
+        telemetry_store.PRIMARY_SUBDIR,
     )
+    csv_path = telemetry_store.legacy_csv_path(telemetry_dir, driver_stem)
 
-    meeting_real = os.path.realpath(meeting_dir)
-    for p in (meta_path, summary_path, telemetry_path):
-        if not os.path.realpath(p).startswith(meeting_real + os.sep):
-            raise BadRequest('Invalid path traversal detected.')
+    if os.path.exists(prim_brtc):
+        try:
+            existing_meta = dict(telemetry_brtc.read_brtc_manifest(prim_brtc).get('metadata') or {})
+        except Exception:
+            existing_meta = {}
 
-    # Check if session already exists and has AlphaTiming data
-    has_alphatiming = False
-    if not aliases.is_sim_league(metadata.league):
-        if os.path.exists(meta_path):
-            with open(meta_path, 'r', encoding='utf-8') as f:
-                existing_meta = json.load(f)
-            if existing_meta.get('alphatiming_url', ''):
-                has_alphatiming = True
+    if not existing_meta and os.path.isdir(act_prim_dir):
+        for fn in sorted(os.listdir(act_prim_dir)):
+            if fn.endswith('.brt1'):
+                try:
+                    raw_m, _, _, _, s_dt = telemetry_store.read_brt1_segment(os.path.join(act_prim_dir, fn))
+                    existing_meta = telemetry_store._normalize_metadata_dict(raw_m, s_dt)
+                    if existing_meta:
+                        break
+                except Exception:
+                    pass
 
-    # If session does not have AlphaTiming data, check permissions for existing drivers before overwriting
-    if not has_alphatiming:
-        df = db.load(
-            leagues=metadata.league,
-            classes=metadata.class_name,
-            date=metadata.session_start_datetime.strftime('%Y-%m-%d'),
-            track=metadata.track_name
-        )
-        if not df.empty:
-            session_df = df[df['SessionID'] == session_filename]
-            if not session_df.empty:
-                existing_drivers = session_df['Name'].unique().tolist()
-                for driver in existing_drivers:
-                    if not auth.can_upload_session_for_driver(acl, driver):
-                        raise Forbidden(
-                            'Forbidden: Cannot overwrite session. You do not '
-                            f'have permission to upload for driver {driver!r} '
-                            'in the existing session.'
-                        )
+    if existing_meta:
+        if metadata.distance_to_rear_axle is None and existing_meta.get('distance_to_rear_axle') is not None:
+            try:
+                metadata.distance_to_rear_axle = float(existing_meta['distance_to_rear_axle'])
+            except (ValueError, TypeError):
+                pass
+        if metadata.track_configuration is None and existing_meta.get('track_configuration'):
+            metadata.track_configuration = str(existing_meta['track_configuration'])
+        if metadata.origin is None and existing_meta.get('track_origin_lat') is not None:
+            metadata.origin = create_track_origin(
+                league=metadata.league,
+                track_name=metadata.track_name,
+                lat=float(existing_meta['track_origin_lat']),
+                lon=float(existing_meta['track_origin_lon']),
+                heading=float(existing_meta.get('track_origin_heading', 0.0)),
+            )
+        return
 
-    existing_lines = load_existing_telemetry_lines(telemetry_path)
+    existing_lines = load_existing_telemetry_lines(csv_path)
     if existing_lines:
         ex_origin_lat = None
         ex_origin_lon = None
@@ -1864,168 +1869,512 @@ def stream_upload() -> Any:
                 heading=ex_origin_heading,
             )
 
-    pruned_and_merged = False
-    written_rows_count = 0
-    last_write_time = time.time()
-    db_session_id = None
-    all_raw_records: list[dict] = []
-    buffered_records: list[dict] = []
 
-    with open(telemetry_path, 'w', newline='', encoding='utf-8') as telemetry_file:
-        writer = csv.writer(telemetry_file)
-        writer.writerow(['Format', 'RaceTools CSV'])
-        writer.writerow(['Track name', metadata.track_name])
-        if metadata.track_configuration is not None:
-            writer.writerow(['Track configuration', metadata.track_configuration])
-        writer.writerow(['Date', metadata.session_start_datetime.strftime('%Y-%m-%d')])
-        writer.writerow(['Time', metadata.session_start_datetime.strftime('%H:%M:%S')])
-        writer.writerow(['Driver name', metadata.driver_name])
-        writer.writerow(['League', metadata.league])
-        writer.writerow(['Class', metadata.class_name])
-        writer.writerow(['Session', metadata.session_name])
-        if metadata.distance_to_rear_axle is not None:
-            writer.writerow(['Distance to rear axle', metadata.distance_to_rear_axle])
-        if metadata.origin is not None:
-            writer.writerow(['Track Origin Latitude', metadata.origin.lat])
-            writer.writerow(['Track Origin Longitude', metadata.origin.lon])
-            writer.writerow(['Track Origin Heading', metadata.origin.heading])
-        writer.writerow([])  # Mandatory separator
+def _load_preexisting_primary_records_for_summary(
+    telemetry_dir: str,
+    driver_stem: str,
+) -> list[dict[str, Any]]:
+    """Load pre-existing primary records (from .brtc, .active/_primary, or .csv) for leaderboard merging."""
+    prim_brtc = telemetry_store.primary_brtc_path(telemetry_dir, driver_stem)
+    csv_p = telemetry_store.legacy_csv_path(telemetry_dir, driver_stem)
+    act_prim_dir = os.path.join(
+        telemetry_store.active_dir_path(telemetry_dir, driver_stem),
+        telemetry_store.PRIMARY_SUBDIR,
+    )
+    seg_paths: list[str] = []
+    if os.path.isdir(act_prim_dir):
+        seg_paths = [
+            os.path.join(act_prim_dir, fn)
+            for fn in sorted(os.listdir(act_prim_dir))
+            if fn.endswith('.brt1')
+        ]
 
-        def flush_data() -> None:
-            nonlocal pruned_and_merged, written_rows_count, last_write_time, db_session_id
-            if not buffered_records:
-                return
+    if not seg_paths and not os.path.exists(prim_brtc) and not os.path.exists(csv_p):
+        return []
 
-            new_records = list(buffered_records)
-            buffered_records.clear()
+    p_meta, p_order, p_cols, _ = telemetry_store._merge_stream_data(
+        existing_brtc=prim_brtc if os.path.exists(prim_brtc) else None,
+        existing_csv=csv_p if os.path.exists(csv_p) else None,
+        segment_paths=seg_paths,
+    )
+    if not p_cols or 'Time' not in p_cols or len(p_cols['Time']) == 0:
+        return []
 
-            if new_records:
-                if not pruned_and_merged:
-                    new_timestamps = []
-                    for r in new_records:
-                        t_val = r.get('Time')
-                        if t_val:
-                            dt = to_naive_datetime(t_val)
-                            if dt is not None:
-                                new_timestamps.append(dt)
+    start_date_str = str(p_meta.get('session_start_date') or '1970-01-01')
+    try:
+        d_obj = datetime.date.fromisoformat(start_date_str[:10])
+    except ValueError:
+        d_obj = datetime.date(1970, 1, 1)
+    midnight = datetime.datetime(d_obj.year, d_obj.month, d_obj.day)
 
-                    if new_timestamps:
-                        min_new_timestamp = min(new_timestamps)
-                        blank_idx = -1
-                        for idx, line in enumerate(existing_lines):
-                            if not line.strip():
-                                blank_idx = idx
-                                break
+    cols_to_read = [c for c in p_order if c in p_cols]
+    n_rows = len(p_cols['Time'])
+    records: list[dict[str, Any]] = []
+    for i in range(n_rows):
+        t_sec = float(p_cols['Time'][i])
+        if math.isnan(t_sec):
+            continue
+        rec: dict[str, Any] = {}
+        for c_name in cols_to_read:
+            val = float(p_cols[c_name][i])
+            if math.isnan(val) or math.isinf(val):
+                rec[c_name] = ''
+            elif c_name == 'Time':
+                dt_sample = midnight + datetime.timedelta(seconds=val)
+                rec['Time'] = dt_sample.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+            elif c_name == 'Lap':
+                rec['Lap'] = str(int(round(val)))
+            else:
+                rec[c_name] = val
+        records.append(rec)
+    return records
 
-                        kept_pre_existing_records = []
-                        if blank_idx != -1 and blank_idx + 1 < len(existing_lines):
-                            existing_header_line = existing_lines[blank_idx + 1]
-                            existing_header_cols = [c.strip() for c in next(csv.reader([existing_header_line]))]
 
-                            if 'Time' in existing_header_cols:
-                                existing_time_idx = existing_header_cols.index('Time')
-                                data_lines = []
-                                for line in existing_lines[blank_idx + 2:]:
-                                    if not line.strip():
-                                        continue
-                                    try:
-                                        row_cols = next(csv.reader([line]))
-                                        valid_cols = (len(row_cols) == len(existing_header_cols))
-                                        if valid_cols and len(row_cols) > existing_time_idx:
-                                            t_val = row_cols[existing_time_idx].strip()
-                                            dt = to_naive_datetime(t_val)
-                                            if dt is not None and dt < min_new_timestamp:
-                                                data_lines.append(line)
-                                    except Exception:
-                                        pass
+def _resolve_upload_session_context(
+    metadata: CSVSessionMetadata,
+    acl: dict[str, Any],
+) -> _UploadSessionContext:
+    """Validate upload ACLs, resolve canonical track/class aliases, and prepare session paths."""
+    if not auth.can_upload_session_for_league(acl, metadata.league):
+        raise Forbidden(f'Forbidden: Upload for league {metadata.league!r} is not permitted.')
+    if not auth.can_upload_session_for_driver(acl, metadata.driver_name):
+        raise Forbidden(f'Forbidden: Upload for driver {metadata.driver_name!r} not permitted.')
 
-                                if data_lines:
-                                    reader_existing = csv.DictReader([existing_header_line] + data_lines)
-                                    derived_cols_to_strip = {
-                                        'Lap', 'Lap Distance', 'Kart Heading', 'Yaw',
-                                        'Slip Angle Rear', 'Slip Angle Front',
-                                        'Lat Force Front', 'Lat Force Rear',
-                                        'Long Force Front', 'Long Force Rear'
-                                    }
-                                    kept_pre_existing_records = [
-                                        {k: v for k, v in row.items() if k not in derived_cols_to_strip}
-                                        for row in reader_existing
-                                    ]
+    metadata.class_name = aliases.resolve_car_name(metadata.class_name)
+    _, metadata.track_name = resolve_track(metadata.track_name, metadata.track_configuration)
 
-                        all_raw_records.extend(kept_pre_existing_records)
-                        all_raw_records.extend(new_records)
-                    else:
-                        all_raw_records.extend(new_records)
+    time_str = metadata.session_start_datetime.strftime('%H_%M')
+    start_date = metadata.session_start_datetime.strftime('%Y_%m_%d')
+    track_sanitized = sanitize.sanitize_filename(metadata.track_name)
+    meeting_folder = f'{start_date}_{track_sanitized}'
+    meeting_dir = os.path.join(DATA_DIR, metadata.league, metadata.class_name, meeting_folder)
+    telemetry_dir = os.path.join(meeting_dir, 'telemetry')
+    os.makedirs(telemetry_dir, exist_ok=True)
 
-                    pruned_and_merged = True
+    if metadata.session_id:
+        session_filename = sanitize.sanitize_filename(metadata.session_id)
+        if not session_filename or session_filename != metadata.session_id.strip().lower():
+            raise BadRequest(f'Invalid Session ID: {metadata.session_id!r}')
+    else:
+        session_filename = f'{time_str}_{sanitize.sanitize_filename(metadata.session_name)}'
+
+    driver_stem = f'{session_filename}_{sanitize.sanitize_filename(metadata.driver_name)}'
+    meta_path = os.path.join(meeting_dir, f'{session_filename}_metadata.json')
+    summary_path = os.path.join(meeting_dir, f'{session_filename}.csv')
+    active_probe = telemetry_store.active_dir_path(telemetry_dir, driver_stem)
+
+    meeting_real = os.path.realpath(meeting_dir)
+    for p in (meta_path, summary_path, active_probe):
+        if not os.path.realpath(p).startswith(meeting_real + os.sep):
+            raise BadRequest('Invalid path traversal detected.')
+
+    has_alphatiming = False
+    if not aliases.is_sim_league(metadata.league):
+        if os.path.exists(meta_path):
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                existing_meta = json.load(f)
+            if existing_meta.get('alphatiming_url', ''):
+                has_alphatiming = True
+
+    if not has_alphatiming:
+        df = db.load(
+            leagues=metadata.league,
+            classes=metadata.class_name,
+            date=metadata.session_start_datetime.strftime('%Y-%m-%d'),
+            track=metadata.track_name,
+        )
+        if not df.empty:
+            session_df = df[df['SessionID'] == session_filename]
+            if not session_df.empty:
+                existing_drivers = session_df['Name'].unique().tolist()
+                for driver in existing_drivers:
+                    if not auth.can_upload_session_for_driver(acl, driver):
+                        raise Forbidden(
+                            'Forbidden: Cannot overwrite session. You do not '
+                            f'have permission to upload for driver {driver!r} '
+                            'in the existing session.'
+                        )
+
+    if metadata.stream == '':
+        _inherit_existing_driver_metadata(metadata, telemetry_dir, driver_stem)
+
+    return _UploadSessionContext(
+        metadata=metadata,
+        meeting_dir=meeting_dir,
+        telemetry_dir=telemetry_dir,
+        session_filename=session_filename,
+        driver_stem=driver_stem,
+        meta_path=meta_path,
+        summary_path=summary_path,
+        has_alphatiming=has_alphatiming,
+    )
+
+
+class _PrimarySummaryUpdater:
+    """Maintains 15s / EOS session leaderboard summary updates for primary telemetry streams."""
+
+    def __init__(self, ctx: _UploadSessionContext, preexisting_records: list[dict[str, Any]]) -> None:
+        self.ctx = ctx
+        self._preexisting = preexisting_records
+        self._pruned_and_merged = False
+        self._all_raw_records: list[dict[str, Any]] = []
+        self._buffered_records: list[dict[str, Any]] = []
+        self.db_session_id: str | None = None
+
+    def add_record(self, rec: dict[str, Any]) -> None:
+        self._buffered_records.append(rec)
+
+    def has_buffered(self) -> bool:
+        return bool(self._buffered_records)
+
+    def flush(self) -> None:
+        if not self._buffered_records:
+            return
+        new_records = list(self._buffered_records)
+        self._buffered_records.clear()
+
+        if not self._pruned_and_merged:
+            new_timestamps = [
+                dt for r in new_records
+                if r.get('Time') and (dt := to_naive_datetime(r.get('Time'))) is not None
+            ]
+            if new_timestamps and self._preexisting:
+                min_new_ts = min(new_timestamps)
+                kept = [
+                    r for r in self._preexisting
+                    if (dt_old := to_naive_datetime(r.get('Time'))) is not None and dt_old < min_new_ts
+                ]
+                self._all_raw_records.extend(kept)
+            self._all_raw_records.extend(new_records)
+            self._pruned_and_merged = True
+        else:
+            self._all_raw_records.extend(new_records)
+
+        if not self._all_raw_records:
+            return
+
+        metadata = self.ctx.metadata
+        _, metadata_json, df_summary = process_telemetry_derivative_data(
+            self._all_raw_records, metadata, DATA_DIR
+        )
+
+        if not self.ctx.has_alphatiming:
+            lock_path = f'{self.ctx.summary_path}.lock'
+            with session_file_lock(lock_path):
+                if os.path.exists(self.ctx.meta_path):
+                    try:
+                        with open(self.ctx.meta_path, 'r', encoding='utf-8') as f:
+                            ex_meta = json.load(f)
+                        ex_dt_str = ex_meta.get('session_start_datetime')
+                        if ex_dt_str:
+                            ex_dt = session_time.parse_session_start_datetime_tolerant(ex_dt_str)
+                            resolved_dt = session_time.resolve_start_datetime_overwrite(
+                                ex_dt, metadata.session_start_datetime, getattr(metadata, 'has_seconds', False)
+                            )
+                            metadata_json['session_start_datetime'] = (
+                                resolved_dt.strftime('%Y-%m-%d %H:%M:%S')
+                                if (getattr(metadata, 'has_seconds', False) or resolved_dt.second)
+                                else resolved_dt.strftime('%Y-%m-%d %H:%M')
+                            )
+                        for k in ('temperature', 'weather', 'track_conditions', 'track_temperature'):
+                            if not metadata_json.get(k) and ex_meta.get(k):
+                                metadata_json[k] = ex_meta[k]
+                    except Exception:
+                        pass
+
+                with open(self.ctx.meta_path, 'w', encoding='utf-8') as f:
+                    json.dump(metadata_json, f, indent=4)
+
+                df_merged_summary = merge_driver_summary(self.ctx.summary_path, df_summary)
+                df_merged_summary.to_csv(self.ctx.summary_path, index=False)
+                self.db_session_id = populate_db.populate_single_session(self.ctx.meta_path, db.conn, DATA_DIR)
+        else:
+            meeting_folder_name = os.path.basename(self.ctx.meeting_dir)
+            self.db_session_id = f'{meeting_folder_name}_{self.ctx.session_filename}'
+
+        invalidate_plot_cache([self.db_session_id, self.ctx.session_filename])
+
+
+def _cleanup_empty_segment(segment_path: str, telemetry_dir: str, driver_stem: str) -> None:
+    """Remove an empty/aborted segment file and tidy empty .active directories."""
+    if os.path.exists(segment_path):
+        try:
+            os.remove(segment_path)
+        except OSError:
+            pass
+    act_dir = telemetry_store.active_dir_path(telemetry_dir, driver_stem)
+    if os.path.isdir(act_dir):
+        for sub in os.listdir(act_dir):
+            sub_p = os.path.join(act_dir, sub)
+            if os.path.isdir(sub_p):
+                try:
+                    if not os.listdir(sub_p):
+                        os.rmdir(sub_p)
+                except OSError:
+                    pass
+        try:
+            if not os.listdir(act_dir):
+                os.rmdir(act_dir)
+        except OSError:
+            pass
+
+
+def _stream_brt1_into_segment(
+    reader: StreamingByteReader,
+    ctx: _UploadSessionContext,
+    channel_names: list[str],
+    channel_scales: list[float],
+    segment_path: str,
+    summary_updater: _PrimarySummaryUpdater | None,
+) -> int:
+    """Stream incoming BRT1 chunks directly into segment_path on disk (shared by primary & aux)."""
+    m = len(channel_names)
+    time_idx = channel_names.index('Time') if 'Time' in channel_names else None
+    current_values = [math.nan] * m
+    sample_count = 0
+    last_flush = time.time()
+    start_naive = ctx.metadata.session_start_datetime.replace(tzinfo=None)
+
+    channels_spec = [
+        {'name': name, 'scale': sc}
+        for name, sc in zip(channel_names, channel_scales)
+    ]
+    header_meta = _build_segment_meta_dict(ctx.metadata)
+    meta_bytes = json.dumps(
+        {'metadata': header_meta, 'channels': channels_spec},
+        separators=(',', ':'),
+        ensure_ascii=False,
+    ).encode('utf-8')
+
+    def _make_summary_record() -> dict[str, Any]:
+        rec: dict[str, Any] = {}
+        for idx, (c_name, c_val) in enumerate(zip(channel_names, current_values)):
+            if math.isnan(c_val):
+                rec[c_name] = ''
+            elif idx == time_idx:
+                dt_rec = start_naive + datetime.timedelta(seconds=c_val)
+                rec[c_name] = dt_rec.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+            elif c_name == 'Lap':
+                rec[c_name] = str(int(round(c_val)))
+            else:
+                rec[c_name] = round(float(c_val), 8)
+        return rec
+
+    with open(segment_path, 'wb') as seg_file:
+        seg_file.write(telemetry_store.pack_brt1_chunk(0x01, b'BRT1'))
+        seg_file.write(telemetry_store.pack_brt1_chunk(0x02, meta_bytes))
+
+        for chunk_type, payload in reader.read_chunks():
+            if chunk_type == 0x03:
+                if len(payload) != m * 8:
+                    raise BadRequest(
+                        f'Invalid chunk length {len(payload)} for baseline chunk with {m} channels '
+                        f'(expected {m * 8}).'
+                    )
+                seg_file.write(telemetry_store.pack_brt1_chunk(0x03, payload))
+                current_values = list(struct.unpack(f'<{m}d', payload))
+                if time_idx is None or not math.isnan(current_values[time_idx]):
+                    sample_count += 1
+                    if summary_updater is not None:
+                        summary_updater.add_record(_make_summary_record())
+            elif chunk_type == 0x04:
+                sample_size = m * 2
+                if sample_size == 0 or len(payload) % sample_size != 0:
+                    raise BadRequest(
+                        f'Invalid chunk length {len(payload)} for delta chunk with {m} channels '
+                        f'(must be multiple of {sample_size}).'
+                    )
+                seg_file.write(telemetry_store.pack_brt1_chunk(0x04, payload))
+                if summary_updater is not None:
+                    for deltas in struct.iter_unpack(f'<{m}h', payload):
+                        for j in range(m):
+                            d_val = deltas[j]
+                            if d_val == -32768:
+                                current_values[j] = math.nan
+                            else:
+                                current_values[j] += d_val * channel_scales[j]
+                        sample_count += 1
+                        summary_updater.add_record(_make_summary_record())
                 else:
-                    all_raw_records.extend(new_records)
+                    sample_count += len(payload) // sample_size
+            elif chunk_type in (0x01, 0x02):
+                pass
+            elif chunk_type == 0xFF:
+                seg_file.write(telemetry_store.pack_brt1_chunk(0xFF, b''))
+                break
+            else:
+                raise BadRequest(f'Unknown BRT1 chunk type: 0x{chunk_type:02x}')
 
-            if all_raw_records:
-                df_telemetry, metadata_json, df_summary = process_telemetry_derivative_data(
-                    all_raw_records, metadata, DATA_DIR
-                )
-
-                new_df = df_telemetry.iloc[written_rows_count:]
-                if not new_df.empty:
-                    new_df.to_csv(telemetry_file, index=False, header=(written_rows_count == 0))
-                    telemetry_file.flush()
-                    written_rows_count = len(df_telemetry)
-
-                if not has_alphatiming:
-                    lock_path = f'{summary_path}.lock'
-                    with session_file_lock(lock_path):
-                        if os.path.exists(meta_path):
-                            try:
-                                with open(meta_path, 'r', encoding='utf-8') as f:
-                                    ex_meta = json.load(f)
-                                ex_dt_str = ex_meta.get('session_start_datetime')
-                                if ex_dt_str:
-                                    ex_dt = session_time.parse_session_start_datetime_tolerant(ex_dt_str)
-                                    resolved_dt = session_time.resolve_start_datetime_overwrite(
-                                        ex_dt, metadata.session_start_datetime, getattr(metadata, 'has_seconds', False)
-                                    )
-                                    metadata_json['session_start_datetime'] = (
-                                        resolved_dt.strftime('%Y-%m-%d %H:%M:%S')
-                                        if (getattr(metadata, 'has_seconds', False) or resolved_dt.second)
-                                        else resolved_dt.strftime('%Y-%m-%d %H:%M')
-                                    )
-                                for k in ('temperature', 'weather', 'track_conditions', 'track_temperature'):
-                                    if not metadata_json.get(k) and ex_meta.get(k):
-                                        metadata_json[k] = ex_meta[k]
-                            except Exception:
-                                pass
-
-                        with open(meta_path, 'w', encoding='utf-8') as f:
-                            json.dump(metadata_json, f, indent=4)
-
-                        df_merged_summary = merge_driver_summary(summary_path, df_summary)
-                        df_merged_summary.to_csv(summary_path, index=False)
-                        db_session_id = populate_db.populate_single_session(meta_path, db.conn, DATA_DIR)
-                else:
-                    meeting_folder_name = os.path.basename(meeting_dir)
-                    db_session_id = f'{meeting_folder_name}_{session_filename}'
-
-                invalidate_plot_cache([db_session_id, session_filename])
-                last_write_time = time.time()
-
-        for record in records_iter:
-            buffered_records.append(record)
             now = time.time()
-            if (now - last_write_time >= STREAM_FLUSH_INTERVAL_SEC) and buffered_records:
-                flush_data()
+            if now - last_flush >= STREAM_FLUSH_INTERVAL_SEC:
+                seg_file.flush()
+                if summary_updater is not None and summary_updater.has_buffered():
+                    summary_updater.flush()
+                last_flush = time.time()
 
-        flush_data()
+        seg_file.flush()
+        if summary_updater is not None and summary_updater.has_buffered():
+            summary_updater.flush()
 
-    if not db_session_id:
+    return sample_count
+
+
+def _stream_csv_into_segment(
+    records_iter: Iterator[dict[str, Any]],
+    csv_header_line_str: str,
+    ctx: _UploadSessionContext,
+    segment_path: str,
+    summary_updater: _PrimarySummaryUpdater | None,
+) -> int:
+    """Transcode incoming CSV telemetry rows directly into a .brt1 segment (zero CSV written to disk)."""
+    raw_fields = [c.strip() for c in next(csv.reader([csv_header_line_str]))]
+    channel_names = [f for f in raw_fields if f and f != 'Record']
+    if not channel_names:
+        return 0
+
+    start_naive = ctx.metadata.session_start_datetime.replace(tzinfo=None)
+    encoder = telemetry_store.BRT1SegmentEncoder(
+        segment_path=segment_path,
+        meta_dict=_build_segment_meta_dict(ctx.metadata),
+        channel_names=channel_names,
+    )
+    sample_count = 0
+    last_flush = time.time()
+
+    try:
+        for record in records_iter:
+            row_vals: list[float] = []
+            for ch in channel_names:
+                raw_v = record.get(ch)
+                if ch == 'Time':
+                    dt = to_naive_datetime(raw_v)
+                    if dt is not None:
+                        row_vals.append((dt - start_naive).total_seconds())
+                    else:
+                        opt = parse_optional_float(raw_v)
+                        row_vals.append(opt if opt is not None else math.nan)
+                else:
+                    opt = parse_optional_float(raw_v)
+                    row_vals.append(opt if opt is not None else math.nan)
+
+            encoder.append_row(row_vals)
+            sample_count += 1
+            if summary_updater is not None:
+                summary_updater.add_record(record)
+
+            now = time.time()
+            if now - last_flush >= STREAM_FLUSH_INTERVAL_SEC:
+                encoder.flush()
+                if summary_updater is not None and summary_updater.has_buffered():
+                    summary_updater.flush()
+                last_flush = time.time()
+
+        encoder.close(write_eos=True)
+        if summary_updater is not None and summary_updater.has_buffered():
+            summary_updater.flush()
+    except Exception:
+        encoder.close(write_eos=False)
+        raise
+
+    return sample_count
+
+
+@upload_blueprint.route('/api/upload/stream', methods=['POST'])
+def stream_upload() -> Any:
+    """Stream telemetry (BRT1 binary or RaceTools CSV; primary or auxiliary stream) into .active/."""
+    acl = auth.get_current_acl()
+    if not acl.get('upload_sessions'):
+        raise Forbidden('Forbidden: No session upload permission.')
+
+    content_encoding = request.content_encoding or request.headers.get('Content-Encoding')
+    reader = StreamingByteReader(request.stream, content_encoding=content_encoding)
+
+    is_binary_brt1 = reader.peek(7) == b'\x04\x00\x01BRT1'
+    channel_names: list[str] = []
+    channel_scales: list[float] = []
+    csv_header_line_str = ''
+
+    if is_binary_brt1:
+        metadata, channel_names, channel_scales = parse_brt1_stream_header(reader)
+    else:
+        header_lines: list[str] = []
+        while line := reader.readline():
+            if not line.strip():
+                break
+            header_lines.append(line)
+
+        metadata = parse_csv_metadata_rows(csv.reader(header_lines))
+        maybe_header = reader.readline()
+        if not maybe_header:
+            raise BadRequest('No telemetry records found in the streamed CSV.')
+        csv_header_line_str = maybe_header
+
+    ctx = _resolve_upload_session_context(metadata, acl)
+    is_primary = (metadata.stream == '')
+
+    preexisting_records = (
+        _load_preexisting_primary_records_for_summary(ctx.telemetry_dir, ctx.driver_stem)
+        if is_primary
+        else []
+    )
+    summary_updater = _PrimarySummaryUpdater(ctx, preexisting_records) if is_primary else None
+    segment_path = telemetry_store.create_active_segment_path(
+        ctx.telemetry_dir, ctx.driver_stem, metadata.stream
+    )
+
+    sample_count = 0
+    try:
+        if is_binary_brt1:
+            sample_count = _stream_brt1_into_segment(
+                reader=reader,
+                ctx=ctx,
+                channel_names=channel_names,
+                channel_scales=channel_scales,
+                segment_path=segment_path,
+                summary_updater=summary_updater,
+            )
+        else:
+            records_iter = iter_csv_records(reader, csv_header_line_str)
+            sample_count = _stream_csv_into_segment(
+                records_iter=records_iter,
+                csv_header_line_str=csv_header_line_str,
+                ctx=ctx,
+                segment_path=segment_path,
+                summary_updater=summary_updater,
+            )
+    except Exception:
+        # Clean up if no valid samples were written before the error
+        try:
+            _, _, _, seg_cols, _ = telemetry_store.read_brt1_segment(segment_path)
+            has_any = any(len(arr) > 0 for arr in seg_cols.values())
+        except Exception:
+            has_any = False
+        if not has_any:
+            _cleanup_empty_segment(segment_path, ctx.telemetry_dir, ctx.driver_stem)
+        elif summary_updater is not None and summary_updater.has_buffered():
+            summary_updater.flush()
+        raise
+
+    if sample_count == 0 or (is_primary and summary_updater is not None and not summary_updater.db_session_id):
+        _cleanup_empty_segment(segment_path, ctx.telemetry_dir, ctx.driver_stem)
         if is_binary_brt1:
             raise BadRequest('No telemetry records found in the binary stream.')
         raise BadRequest('No telemetry records found in the streamed CSV.')
 
-    return jsonify({
+    if is_primary and summary_updater is not None and summary_updater.db_session_id:
+        db_session_id = summary_updater.db_session_id
+    else:
+        meeting_folder_name = os.path.basename(ctx.meeting_dir)
+        db_session_id = f'{meeting_folder_name}_{ctx.session_filename}'
+        invalidate_plot_cache([db_session_id, ctx.session_filename])
+
+    resp_payload: dict[str, Any] = {
         'message': 'Session completed and imported successfully.',
-        'session_id': db_session_id
-    }), 200
+        'session_id': db_session_id,
+    }
+    if metadata.stream:
+        resp_payload['stream'] = metadata.stream
+    return jsonify(resp_payload), 200
 
 
 @upload_blueprint.route('/api/upload/files', methods=['POST'])

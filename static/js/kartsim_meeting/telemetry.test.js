@@ -213,16 +213,17 @@ describe('telemetry.js', () => {
             delete global.window;
         });
 
-        it('fetches and decodes binary channel data correctly', async () => {
-            const meanVal = 10.5;
+        it('fetches and decodes single-block binary channel data correctly', async () => {
+            const offset = 10.5;
             const scale = 0.02;
             const deltas = new Int16Array([100, -50, -32768, 20]);
-            
-            const buffer = new ArrayBuffer(16 + deltas.byteLength);
+
+            const buffer = new ArrayBuffer(20 + deltas.byteLength);
             const view = new DataView(buffer);
-            view.setFloat64(0, meanVal, true);
+            view.setFloat64(0, offset, true);
             view.setFloat64(8, scale, true);
-            const deltaDest = new Int16Array(buffer, 16);
+            view.setUint32(16, deltas.length, true);
+            const deltaDest = new Int16Array(buffer, 20, deltas.length);
             deltaDest.set(deltas);
 
             global.fetch = vi.fn().mockResolvedValue({
@@ -234,8 +235,43 @@ describe('telemetry.js', () => {
             expect(result).toEqual([12.5, 11.5, null, 11.9]);
         });
 
+        it('fetches and decodes multi-block binary channel data with large step jumps', async () => {
+            // Block 1: offset=36000.0, scale=0.0001, deltas=[0, 100, 100] -> [36000.0, 36000.01, 36000.02]
+            // Block 2 (after pit pause): offset=36600.5, scale=0.0005, deltas=[0, -32768, 20] -> [36600.5, null, 36600.51]
+            const d1 = new Int16Array([0, 100, 100]);
+            const d2 = new Int16Array([0, -32768, 20]);
+            const b1Len = 20 + d1.byteLength;
+            const b2Len = 20 + d2.byteLength;
+            const buffer = new ArrayBuffer(b1Len + b2Len);
+            const view = new DataView(buffer);
+
+            view.setFloat64(0, 36000.0, true);
+            view.setFloat64(8, 0.0001, true);
+            view.setUint32(16, d1.length, true);
+            new Int16Array(buffer, 20, d1.length).set(d1);
+
+            view.setFloat64(b1Len, 36600.5, true);
+            view.setFloat64(b1Len + 8, 0.0005, true);
+            view.setUint32(b1Len + 16, d2.length, true);
+            new Int16Array(buffer, b1Len + 20, d2.length).set(d2);
+
+            global.fetch = vi.fn().mockResolvedValue({
+                ok: true,
+                arrayBuffer: () => Promise.resolve(buffer)
+            });
+
+            const result = await fetchTelemetryChannel('session1', 'Time');
+            expect(result.length).toBe(6);
+            expect(result[0]).toBeCloseTo(36000.0, 6);
+            expect(result[1]).toBeCloseTo(36000.01, 6);
+            expect(result[2]).toBeCloseTo(36000.02, 6);
+            expect(result[3]).toBeCloseTo(36600.5, 6);
+            expect(result[4]).toBeNull();
+            expect(result[5]).toBeCloseTo(36600.51, 6);
+        });
+
         it('returns empty array if arrayBuffer is too short', async () => {
-            const buffer = new ArrayBuffer(8);
+            const buffer = new ArrayBuffer(16);
             global.fetch = vi.fn().mockResolvedValue({
                 ok: true,
                 arrayBuffer: () => Promise.resolve(buffer)

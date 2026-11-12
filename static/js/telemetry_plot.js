@@ -41,31 +41,49 @@
     },
 
     /**
-     * Parse delta-encoded binary payload from /api/telemetry/channel endpoint.
-     * Header (16 bytes): meanVal (float64), scale (float64)
-     * Body: Int16Array of cumulative delta quantization values.
+     * Parse multi-block delta-encoded binary payload from /api/telemetry/channel endpoint.
+     * Each block: offset (float64), scale (float64), count (uint32), deltas (int16[count]).
      */
     parseBinaryFloat64: function(arrayBuffer) {
-      if (!arrayBuffer || arrayBuffer.byteLength < 16) {
+      if (!arrayBuffer || arrayBuffer.byteLength < 20) {
         return [];
       }
 
       var view = new DataView(arrayBuffer);
-      var meanVal = view.getFloat64(0, true);
-      var scale = view.getFloat64(8, true);
-      var deltas = new Int16Array(arrayBuffer.slice(16));
+      var byteLength = arrayBuffer.byteLength;
+      var totalCount = 0;
+      var pos = 0;
+      while (pos + 20 <= byteLength) {
+        var cnt = view.getUint32(pos + 16, true);
+        var blkBytes = 20 + cnt * 2;
+        if (pos + blkBytes > byteLength) break;
+        totalCount += cnt;
+        pos += blkBytes;
+      }
 
-      var length = deltas.length;
-      var values = new Array(length);
-      var currentQuantized = 0;
+      var values = new Array(totalCount);
+      var outIdx = 0;
+      pos = 0;
+      while (pos + 20 <= byteLength) {
+        var offset = view.getFloat64(pos, true);
+        var scale = view.getFloat64(pos + 8, true);
+        var count = view.getUint32(pos + 16, true);
+        var blockBytes = 20 + count * 2;
+        if (pos + blockBytes > byteLength) break;
 
-      for (var i = 0; i < length; i++) {
-        if (deltas[i] === -32768) {
-          values[i] = null;
-        } else {
-          currentQuantized += deltas[i];
-          values[i] = meanVal + currentQuantized * scale;
+        var currentQuantized = 0;
+        var deltaPos = pos + 20;
+        for (var i = 0; i < count; i++) {
+          var d = view.getInt16(deltaPos, true);
+          deltaPos += 2;
+          if (d === -32768) {
+            values[outIdx++] = null;
+          } else {
+            currentQuantized += d;
+            values[outIdx++] = offset + currentQuantized * scale;
+          }
         }
+        pos += blockBytes;
       }
       return values;
     },

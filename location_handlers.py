@@ -32,6 +32,7 @@ import auth
 import report_parser
 import upload_handlers
 import _telemetry_native
+import telemetry_store
 
 
 location_blueprint = Blueprint('location', __name__)
@@ -382,13 +383,13 @@ def _render_telemetry_meeting(
     telemetry_dir = os.path.join(meeting_dir, 'telemetry')
     telemetry_sessions = []
     if has_telemetry:
-        csv_files = [f for f in os.listdir(telemetry_dir) if f.endswith('.csv')]
+        stems = telemetry_store.list_driver_stems(telemetry_dir)
         sanitized_heroes = [sanitize.sanitize_filename(h).lower() for h in hero_names]
         if sanitized_heroes:
-            csv_files = [f for f in csv_files if any(h in f.lower() for h in sanitized_heroes)]
+            stems = [st for st in stems if any(h in st.lower() for h in sanitized_heroes)]
         seen_sids = set()
-        for csv_file in csv_files:
-            matched_sid = _match_session(csv_file, sessions)
+        for stem in stems:
+            matched_sid = _match_session(stem, sessions)
             if matched_sid:
                 seen_sids.add(matched_sid)
         for s in sessions:
@@ -1044,25 +1045,26 @@ def telemetry_report_content(report_name: str) -> Response:
 
 
 def _get_display_name(csv_file: str) -> str:
-    """Determine session name from filename: e.g. 14_59_practice_alice_driver.csv"""
-    name_parts = csv_file.replace('.csv', '').split('_')
-    if len(name_parts) >= 2:
+    """Determine session name from filename or stem: e.g. 14_59_practice_alice_driver.csv"""
+    name_parts = telemetry_store.strip_telemetry_suffix(csv_file).split('_')
+    if len(name_parts) >= 3:
         return f'{name_parts[0]}:{name_parts[1]} {name_parts[2].capitalize()}'
     return csv_file
 
 
 def _match_session(csv_file: str, sessions: list) -> str | None:
-    """Find the matching official session ID for this telemetry file."""
+    """Find the matching official session ID for this telemetry file or stem."""
+    stem = telemetry_store.strip_telemetry_suffix(csv_file)
     matching_sid = None
     best_match_len = -1
     for s in sessions:
-        # We look for the longest session_id that is a prefix of the telemetry filename.
+        # We look for the longest session_id that is a prefix of the telemetry stem.
         # To avoid partial matches (e.g. "p" matching "practice"), we check for an underscore.
         sid = getattr(s, 'session_id', None)
         if not isinstance(sid, str):
             continue
-        if csv_file.startswith(sid) and len(sid) > best_match_len:
-            if len(csv_file) == len(sid) or csv_file[len(sid)] in ('_', '.'):
+        if stem.startswith(sid) and len(sid) > best_match_len:
+            if len(stem) == len(sid) or stem[len(sid)] in ('_', '.'):
                 matching_sid = sid
                 best_match_len = len(sid)
     return matching_sid
@@ -1315,36 +1317,39 @@ def get_track_points() -> Response | tuple[Response, int]:
             if not os.path.exists(telemetry_dir):
                 continue
 
-            csv_files = sorted([f for f in os.listdir(telemetry_dir) if f.endswith('.csv')])
-            target_csv = None
+            driver_stems = telemetry_store.list_driver_stems(telemetry_dir)
+            target_stem: str | None = None
             matching_s = next((s for s in sessions if s.session_id == s_sid), None)
-            if s_sid in csv_files:
-                target_csv = s_sid
+            clean_s_sid = telemetry_store.strip_telemetry_suffix(s_sid)
+            if clean_s_sid in driver_stems:
+                target_stem = clean_s_sid
             else:
                 candidates: list[str] = []
-                for f in csv_files:
-                    if matching_s and _match_session(f, [matching_s]) == s_sid:
-                        candidates.append(f)
-                    elif _match_session(f, sessions) == s_sid:
-                        candidates.append(f)
-                    elif s_sid in f:
-                        candidates.append(f)
+                for st in driver_stems:
+                    if matching_s and _match_session(st, [matching_s]) == s_sid:
+                        candidates.append(st)
+                    elif _match_session(st, sessions) == s_sid:
+                        candidates.append(st)
+                    elif s_sid in st or s_sid in f'{st}.csv':
+                        candidates.append(st)
                 if candidates:
                     if sanitized_heroes:
-                        target_csv = next(
-                            (f for f in candidates if any(h in f.lower() for h in sanitized_heroes)),
+                        target_stem = next(
+                            (st for st in candidates if any(h in st.lower() for h in sanitized_heroes)),
                             candidates[0]
                         )
                     else:
-                        target_csv = candidates[0]
-            if not target_csv:
+                        target_stem = candidates[0]
+            if not target_stem:
                 continue
 
-            if sanitized_heroes and not any(h in target_csv.lower() for h in sanitized_heroes):
+            if sanitized_heroes and not any(h in target_stem.lower() for h in sanitized_heroes):
                 continue
 
-            csv_path = os.path.join(telemetry_dir, target_csv)
-            laps, columns, driver_name = parse_telemetry_csv(csv_path, track_data=track_data)
+            target_csv = f'{target_stem}.csv'
+            laps, columns, driver_name = telemetry_store.load_session_laps_and_columns(
+                telemetry_dir, target_stem, track_data=track_data, legacy_csv_parser=parse_telemetry_csv
+            )
             if not laps:
                 continue
             if not auth.can_see_telemetry(acl, league=s_league, driver=driver_name):
@@ -1420,7 +1425,7 @@ def get_track_points() -> Response | tuple[Response, int]:
 
     all_session_data = []
 
-    csv_files = sorted([f for f in os.listdir(telemetry_dir) if f.endswith('.csv')])
+    driver_stems = telemetry_store.list_driver_stems(telemetry_dir)
 
     hero_names = plot_handlers.get_hero_names()
     sanitized_heroes = [sanitize.sanitize_filename(h) for h in hero_names]
@@ -1438,19 +1443,20 @@ def get_track_points() -> Response | tuple[Response, int]:
     valid_sids = {s.session_id for s in sessions}
     parsed_items: list[dict[str, Any]] = []
 
-    for csv_file in csv_files:
+    for stem in driver_stems:
+        csv_file = f'{stem}.csv'
         if sanitized_heroes:
-            # Check if any hero name is part of the filename
-            if not any(h in csv_file.lower() for h in sanitized_heroes):
+            # Check if any hero name is part of the stem
+            if not any(h in stem.lower() for h in sanitized_heroes):
                 continue
 
-        matching_sid = _match_session(csv_file, sessions)
+        matching_sid = _match_session(stem, sessions)
         if track_conditions:
             if not matching_sid or matching_sid not in valid_sids:
                 continue
 
         if filter_session_ids:
-            clean_file = csv_file[:-4] if csv_file.endswith('.csv') else csv_file
+            clean_file = stem
             matches_filter = (
                 (matching_sid and matching_sid in filter_session_ids) or
                 csv_file in filter_session_ids or
@@ -1460,10 +1466,11 @@ def get_track_points() -> Response | tuple[Response, int]:
             if not matches_filter:
                 continue
 
-        csv_path = os.path.join(telemetry_dir, csv_file)
         display_name = _get_display_name(csv_file)
 
-        laps, columns, driver_name = parse_telemetry_csv(csv_path, track_data=track_data)
+        laps, columns, driver_name = telemetry_store.load_session_laps_and_columns(
+            telemetry_dir, stem, track_data=track_data, legacy_csv_parser=parse_telemetry_csv
+        )
         if laps:
             if not auth.can_see_telemetry(acl, league=league, driver=driver_name):
                 continue
@@ -1585,6 +1592,53 @@ def smooth_telemetry_data(values: list[float]) -> list[float]:
     return _telemetry_native.smooth_values(values)
 
 
+def _resolve_target_driver_stem(
+    telemetry_dir: str,
+    sessions: list[Any],
+    session_id: str,
+    csv_file_param: str | None = None,
+    driver_param: str | None = None,
+) -> str | None:
+    """Resolve a requested session_id / csv_file / driver query into a safe driver_stem in telemetry_dir."""
+    driver_stems = telemetry_store.list_driver_stems(telemetry_dir)
+    if not driver_stems:
+        return None
+
+    if csv_file_param:
+        clean_csv = telemetry_store.strip_telemetry_suffix(csv_file_param)
+        if clean_csv in driver_stems:
+            return clean_csv
+
+    clean_sid = telemetry_store.strip_telemetry_suffix(session_id)
+    if session_id in driver_stems:
+        return session_id
+    if clean_sid in driver_stems:
+        return clean_sid
+
+    matching_stems = [
+        st for st in driver_stems
+        if _match_session(st, sessions) == session_id or session_id in st or session_id in f'{st}.csv'
+    ]
+    if not matching_stems:
+        return None
+
+    target_stem: str | None = None
+    if driver_param:
+        clean_driver = sanitize.sanitize_filename(driver_param).lower()
+        target_stem = next((st for st in matching_stems if clean_driver in st.lower()), None)
+    if not target_stem:
+        hero_names = plot_handlers.get_hero_names()
+        sanitized_heroes = [sanitize.sanitize_filename(h) for h in hero_names]
+        if sanitized_heroes:
+            target_stem = next(
+                (st for st in matching_stems if any(h in st.lower() for h in sanitized_heroes)),
+                None,
+            )
+    if not target_stem:
+        target_stem = matching_stems[0]
+    return target_stem
+
+
 @location_blueprint.route('/api/telemetry/channel')
 def get_telemetry_channel() -> Response | tuple[Response, int]:
     # Check see_telemetry permission
@@ -1616,73 +1670,91 @@ def get_telemetry_channel() -> Response | tuple[Response, int]:
     if not os.path.exists(telemetry_dir):
         return jsonify({'error': 'Telemetry directory not found'}), 404
 
-    # Validate that session_id matches a file in the telemetry directory (prevents directory traversal)
     try:
-        csv_files = os.listdir(telemetry_dir)
+        os.listdir(telemetry_dir)
     except OSError:
         return jsonify({'error': 'Failed to read telemetry directory'}), 500
 
-    csv_file_param = request.args.get('csv_file')
-    driver_param = request.args.get('driver')
-
-    target_csv = None
-    if csv_file_param and csv_file_param in csv_files:
-        target_csv = csv_file_param
-    elif session_id in csv_files:
-        target_csv = session_id
-    elif f"{session_id}.csv" in csv_files:
-        target_csv = f"{session_id}.csv"
-    else:
-        matching_files = [
-            csv_f for csv_f in sorted(csv_files)
-            if csv_f.endswith('.csv') and (_match_session(csv_f, sessions) == session_id or session_id in csv_f)
-        ]
-        if matching_files:
-            if driver_param:
-                clean_driver = sanitize.sanitize_filename(driver_param).lower()
-                target_csv = next((f for f in matching_files if clean_driver in f.lower()), None)
-            if not target_csv:
-                hero_names = plot_handlers.get_hero_names()
-                sanitized_heroes = [sanitize.sanitize_filename(h) for h in hero_names]
-                if sanitized_heroes:
-                    target_csv = next(
-                        (f for f in matching_files if any(h in f.lower() for h in sanitized_heroes)),
-                        None
-                    )
-            if not target_csv:
-                target_csv = matching_files[0]
-
-    if not target_csv:
+    target_stem = _resolve_target_driver_stem(
+        telemetry_dir,
+        sessions,
+        session_id,
+        csv_file_param=request.args.get('csv_file'),
+        driver_param=request.args.get('driver'),
+    )
+    if not target_stem:
         return jsonify({'error': 'Unauthorized or invalid session ID'}), 403
 
-    csv_path = os.path.join(telemetry_dir, target_csv)
-
-    driver_name = _telemetry_native.extract_driver_name(csv_path)
+    driver_name = telemetry_store.extract_driver_name(telemetry_dir, target_stem)
     if not auth.can_see_telemetry(acl, league=league, driver=driver_name):
         return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
 
     track_data = db.get_track(track) if track else None
-    ref_lat, ref_lon, max_dist_m = upload_handlers.get_track_coordinate_reference(track_data, [], [])
-    # has_ref is True if authoritative track coordinates were found in the database.
-    # If False, the native C++ scanner calculates the median coordinates from the CSV
-    # to establish a reference point and filter out GPS outlier records.
-    has_ref = (ref_lat is not None and ref_lon is not None)
-
-    should_smooth = (league == 'kartsim' and _should_smooth_channel(channel))
-
-    binary_payload = _telemetry_native.process_telemetry_channel(
-        csv_path,
+    binary_payload = telemetry_store.serve_channel_payload(
+        telemetry_dir,
+        target_stem,
         channel,
-        should_smooth,
-        ref_lat or 0.0,
-        ref_lon or 0.0,
-        max_dist_m or 5000.0,
-        has_ref
+        league=league,
+        track_data=track_data,
     )
 
     response = Response(binary_payload, mimetype='application/octet-stream')
     response.headers['Content-Encoding'] = 'br'
     response.headers['Content-Length'] = str(len(binary_payload))
+    return response
+
+
+@location_blueprint.route('/api/telemetry/export_csv')
+def export_telemetry_csv() -> Response | tuple[Response, int]:
+    """Generate and stream a RaceTools CSV on demand from .brtc / .active/ / legacy .csv."""
+    acl = auth.get_current_acl()
+    session_id = request.args.get('session_id')
+    league = request.args.get('league')
+    class_name = request.args.get('class_name')
+    date = request.args.get('date')
+    track = request.args.get('track')
+
+    if session_id and '/' in session_id:
+        parts = session_id.split('/')
+        if len(parts) == 5:
+            league, class_name, date, track, session_id = parts
+
+    if not auth.can_see_telemetry(acl, league=league):
+        return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
+
+    if not league or not class_name or not date or not track or not session_id:
+        return jsonify({'error': 'Missing parameters'}), 400
+
+    sessions = db.find_sessions(leagues=league, classes=class_name, date=date, track=track)
+    if not sessions:
+        return jsonify({'error': 'Session not found'}), 404
+
+    meeting_dir = sessions[0].meeting_dir
+    telemetry_dir = os.path.join(meeting_dir, 'telemetry')
+    if not os.path.exists(telemetry_dir):
+        return jsonify({'error': 'Telemetry directory not found'}), 404
+
+    target_stem = _resolve_target_driver_stem(
+        telemetry_dir,
+        sessions,
+        session_id,
+        csv_file_param=request.args.get('csv_file'),
+        driver_param=request.args.get('driver'),
+    )
+    if not target_stem:
+        return jsonify({'error': 'Unauthorized or invalid session ID'}), 403
+
+    driver_name = telemetry_store.extract_driver_name(telemetry_dir, target_stem)
+    if not auth.can_see_telemetry(acl, league=league, driver=driver_name):
+        return jsonify({'error': 'Access to the telemetry data is restricted'}), 403
+
+    track_data = db.get_track(track) if track else None
+    csv_text = telemetry_store.export_session_csv(telemetry_dir, target_stem, track_data=track_data)
+    if csv_text is None:
+        return jsonify({'error': 'Telemetry data not found'}), 404
+
+    response = Response(csv_text, mimetype='text/csv')
+    response.headers['Content-Disposition'] = f'attachment; filename="{target_stem}.csv"'
     return response
 
 

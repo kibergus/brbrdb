@@ -21,6 +21,7 @@ import numpy as np
 
 from database import db
 import location_handlers
+import telemetry_store
 from upload_handlers import is_lap_valid
 from mcp_server import image_tools
 
@@ -52,10 +53,9 @@ def _load_all_telemetry_laps(
 
         session_drivers = db.get_session_drivers(s.session_id, s.meeting_folder)
 
-        for csv_file in sorted(os.listdir(tel_dir)):
-            if not csv_file.endswith('.csv'):
-                continue
-            if session_id and (session_id != csv_file and not csv_file.startswith(session_id)):
+        for stem in telemetry_store.list_driver_stems(tel_dir):
+            csv_file = f'{stem}.csv'
+            if session_id and (session_id != csv_file and session_id != stem and not csv_file.startswith(session_id)):
                 continue
 
             csv_path = os.path.join(tel_dir, csv_file)
@@ -63,7 +63,9 @@ def _load_all_telemetry_laps(
                 continue
             seen_csv_paths.add(csv_path)
 
-            laps, columns, csv_driver = location_handlers.parse_telemetry_csv(csv_path)
+            laps, columns, csv_driver = telemetry_store.load_session_laps_and_columns(
+                tel_dir, stem, track_data=track_info
+            )
 
             if not laps:
                 continue

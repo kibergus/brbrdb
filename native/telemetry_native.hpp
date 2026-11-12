@@ -12,6 +12,29 @@ std::string extract_driver_name(const std::string& csv_path);
 // Smooths telemetry values using a 5-sample centered moving average with NaN handling.
 std::vector<double> smooth_values(const std::vector<double>& values);
 
+// Encodes an array of double values into a Brotli-compressed multi-block <offset, scale, count, deltas[]> payload.
+std::string encode_channel_blocks(
+    const double* values,
+    size_t n,
+    double preferred_scale = 0.0
+);
+
+// Decodes a Brotli-compressed multi-block <offset, scale, count, deltas[]> payload back into double values.
+std::vector<double> decode_channel_blocks(
+    const char* data,
+    size_t size
+);
+
+// Serves a column slice from a .brtc container, either via direct byte read or C++ post-processing
+// (Speed * 3.6 and/or 5-sample centered moving average smoothing).
+std::string serve_brtc_channel(
+    const std::string& brtc_path,
+    uint64_t col_offset,
+    uint64_t col_length,
+    bool is_speed,
+    bool should_smooth
+);
+
 // Processes a single telemetry channel from CSV directly into a Brotli-compressed binary payload.
 //
 // Parameters:

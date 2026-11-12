@@ -432,14 +432,15 @@ describe('loadBaseColumnsForSessions', () => {
         };
 
         const createChannelBuffer = (val) => {
-            const meanVal = val;
+            const offset = val;
             const scale = 1.0;
             const deltas = new Int16Array([0]);
-            const buffer = new ArrayBuffer(16 + deltas.byteLength);
+            const buffer = new ArrayBuffer(20 + deltas.byteLength);
             const view = new DataView(buffer);
-            view.setFloat64(0, meanVal, true);
+            view.setFloat64(0, offset, true);
             view.setFloat64(8, scale, true);
-            new Int16Array(buffer, 16).set(deltas);
+            view.setUint32(16, deltas.length, true);
+            new Int16Array(buffer, 20, deltas.length).set(deltas);
             return buffer;
         };
 

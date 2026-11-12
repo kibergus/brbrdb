@@ -9,7 +9,7 @@ ext_modules = [
             "native/bindings.cpp",
         ],
         extra_compile_args=["-O3", "-std=c++20"],
-        extra_link_args=["-lbrotlienc"],
+        extra_link_args=["-lbrotlienc", "-lbrotlidec"],
     ),
 ]
 

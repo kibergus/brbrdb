@@ -16,6 +16,66 @@ PYBIND11_MODULE(_telemetry_native, m) {
           py::arg("values"),
           "Smooth values using 5-sample centered moving average with NaN handling");
 
+    m.def("encode_channel_blocks", [](
+        py::array_t<double, py::array::c_style | py::array::forcecast> values,
+        double preferred_scale
+    ) {
+        py::ssize_t n = values.size();
+        const double* ptr = values.data();
+        std::string result;
+        {
+            py::gil_scoped_release release;
+            result = telemetry::encode_channel_blocks(ptr, static_cast<size_t>(n), preferred_scale);
+        }
+        return py::bytes(result);
+    },
+    py::arg("values"),
+    py::arg("preferred_scale") = 0.0,
+    "Encode double array into Brotli-compressed multi-block <offset, scale, count, deltas[]> payload");
+
+    m.def("decode_channel_blocks", [](py::bytes payload) {
+        char* buffer = nullptr;
+        py::ssize_t length = 0;
+        if (PYBIND11_BYTES_AS_STRING_AND_SIZE(payload.ptr(), &buffer, &length) != 0) {
+            throw std::runtime_error("Failed to extract bytes buffer");
+        }
+        std::vector<double> res;
+        {
+            py::gil_scoped_release release;
+            res = telemetry::decode_channel_blocks(buffer, static_cast<size_t>(length));
+        }
+        py::array_t<double> py_res(res.size());
+        if (!res.empty()) {
+            std::memcpy(py_res.mutable_data(), res.data(), res.size() * sizeof(double));
+        }
+        return py_res;
+    },
+    py::arg("payload"),
+    "Decode Brotli-compressed multi-block <offset, scale, count, deltas[]> payload into double array");
+
+    m.def("serve_brtc_channel", [](
+        const std::string& brtc_path,
+        uint64_t col_offset,
+        uint64_t col_length,
+        bool is_speed,
+        bool should_smooth
+    ) {
+        std::string result;
+        {
+            py::gil_scoped_release release;
+            result = telemetry::serve_brtc_channel(
+                brtc_path, col_offset, col_length, is_speed, should_smooth
+            );
+        }
+        return py::bytes(result);
+    },
+    py::arg("brtc_path"),
+    py::arg("col_offset"),
+    py::arg("col_length"),
+    py::arg("is_speed") = false,
+    py::arg("should_smooth") = false,
+    "Serve a column slice from a .brtc file with optional Speed * 3.6 and smoothing post-processing");
+
     m.def("process_telemetry_channel", [](
         const std::string& csv_path,
         const std::string& channel_name,

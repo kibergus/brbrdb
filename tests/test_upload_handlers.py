@@ -30,6 +30,7 @@ import pandas as pd
 import pytest
 from werkzeug.exceptions import BadRequest, NotFound
 import app
+import telemetry_store
 import upload_handlers
 from upload_handlers import (
     CSVSessionMetadata,
@@ -991,8 +992,14 @@ def test_stream_upload_pruning_and_merging(tmp_path: Path) -> None:
     # - New Point 2 (14:30:02.500Z) from new upload
     # - Point 3 (14:30:02.000Z) should be GONE (deleted).
 
-    with open(telemetry_path, 'r', encoding='utf-8') as f:
-        lines = f.read().splitlines()
+    # Verify new segment was written into .active/_primary and merged view prunes/merges cleanly
+    active_prim = os.path.join(telemetry_dir, '14_30_practice_driver_a.active', '_primary')
+    assert os.path.isdir(active_prim)
+    assert any(fn.endswith('.brt1') for fn in os.listdir(active_prim))
+
+    exported = telemetry_store.export_session_csv(telemetry_dir, '14_30_practice_driver_a', track_data={})
+    assert exported is not None
+    lines = exported.splitlines()
 
     # Find the data start
     blank_idx = -1
@@ -1148,9 +1155,10 @@ def test_stream_upload_preserves_alphatiming_session(tmp_path: Path) -> None:
         saved_summary = f.read()
     assert saved_summary == official_summary_csv
 
-    # Telemetry CSV for Driver A should be created in telemetry directory
-    telemetry_path = os.path.join(meeting_dir, 'telemetry', '14_30_practice_driver_a.csv')
-    assert os.path.exists(telemetry_path)
+    # Telemetry active segment for Driver A should be created (no intermediate CSV written to disk)
+    telemetry_dir = os.path.join(meeting_dir, 'telemetry')
+    assert not os.path.exists(os.path.join(telemetry_dir, '14_30_practice_driver_a.csv'))
+    assert '14_30_practice_driver_a' in telemetry_store.list_driver_stems(telemetry_dir)
 
 
 def test_process_telemetry_derivative_data_resolves_track_alias() -> None:
@@ -1406,12 +1414,14 @@ def test_stream_upload_with_gyroscope_data(tmp_path: Path) -> None:
         )
         assert response.status_code == 200
 
-        # Check that saved telemetry file has gyroscope columns
+        # Check that saved telemetry segment has gyroscope columns (and no .csv written on disk)
         telemetry_dir = tmp_path / 'club100' / 'cadet' / '2026_05_10_rowrah' / 'telemetry'
-        csv_files = list(telemetry_dir.glob('*.csv'))
-        assert len(csv_files) == 1
+        assert list(telemetry_dir.glob('*.csv')) == []
+        stems = telemetry_store.list_driver_stems(str(telemetry_dir))
+        assert len(stems) == 1
 
-        content = csv_files[0].read_text()
+        content = telemetry_store.export_session_csv(str(telemetry_dir), stems[0])
+        assert content is not None
         assert 'Yaw Rate' in content
         assert 'Pitch Rate' in content
         assert 'Roll Rate' in content
@@ -1538,10 +1548,12 @@ def test_stream_upload_with_distance_to_rear_axle(tmp_path: Path) -> None:
 
         meeting_dir = tmp_path / 'club100' / 'cadet' / '2026_05_10_rowrah'
         telemetry_dir = meeting_dir / 'telemetry'
-        csv_files = list(telemetry_dir.glob('*.csv'))
-        assert len(csv_files) == 1
+        assert list(telemetry_dir.glob('*.csv')) == []
+        stems = telemetry_store.list_driver_stems(str(telemetry_dir))
+        assert len(stems) == 1
 
-        content = csv_files[0].read_text()
+        content = telemetry_store.export_session_csv(str(telemetry_dir), stems[0])
+        assert content is not None
         assert 'Distance to rear axle,1.5' in content
 
         meta_files = list(meeting_dir.glob('*_metadata.json'))
@@ -1752,10 +1764,12 @@ def test_stream_upload_preserves_track_origin_headers(tmp_path: Path) -> None:
 
         meeting_dir = tmp_path / 'acevo' / 'f1' / '2026_10_22_monza'
         telemetry_dir = meeting_dir / 'telemetry'
-        csv_files = list(telemetry_dir.glob('*.csv'))
-        assert len(csv_files) == 1
+        assert list(telemetry_dir.glob('*.csv')) == []
+        stems = telemetry_store.list_driver_stems(str(telemetry_dir))
+        assert len(stems) == 1
 
-        content = csv_files[0].read_text()
+        content = telemetry_store.export_session_csv(str(telemetry_dir), stems[0])
+        assert content is not None
         assert 'Track configuration,GP' in content
         assert 'Track Origin Latitude,45.61389' in content
         assert 'Track Origin Longitude,9.28624' in content
@@ -3075,9 +3089,13 @@ def test_stream_upload_multi_driver_session(tmp_path: Path) -> None:
         )
         assert resp_b.status_code == 200
 
-    # Both telemetry files must exist
-    assert os.path.exists(os.path.join(meeting_dir, 'telemetry', '14_30_practice_driver_a.csv'))
-    assert os.path.exists(os.path.join(meeting_dir, 'telemetry', '14_30_practice_driver_b.csv'))
+    # Both telemetry driver stems must exist in .active/ (and zero .csv files written)
+    telemetry_dir = os.path.join(meeting_dir, 'telemetry')
+    assert set(telemetry_store.list_driver_stems(telemetry_dir)) == {
+        '14_30_practice_driver_a',
+        '14_30_practice_driver_b',
+    }
+    assert [f for f in os.listdir(telemetry_dir) if f.endswith('.csv')] == []
 
     # Summary CSV must contain BOTH drivers!
     summary_path = os.path.join(meeting_dir, '14_30_practice.csv')

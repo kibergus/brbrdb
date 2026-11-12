@@ -943,27 +943,43 @@ class RaceDB:
 
     def has_telemetry(self, meeting_dir: str, session_id: str | None = None) -> bool:
         """
-        Check if telemetry CSV files exist for a meeting directory and optional session_id.
+        Check if telemetry files (.brtc, .active/, or legacy .csv) exist for a meeting directory
+        and optional session_id.
         """
         telemetry_dir = os.path.join(meeting_dir, 'telemetry')
         if not os.path.exists(telemetry_dir):
             return False
 
-        csv_files = [f for f in os.listdir(telemetry_dir) if f.endswith('.csv')]
-        if not csv_files:
+        stems: set[str] = set()
+        try:
+            entries = os.listdir(telemetry_dir)
+        except OSError:
+            return False
+
+        for fname in entries:
+            if fname.endswith('.primary.brtc'):
+                stems.add(fname[:-len('.primary.brtc')])
+            elif fname.endswith('.active'):
+                prim_sub = os.path.join(telemetry_dir, fname, '_primary')
+                if os.path.isdir(prim_sub):
+                    try:
+                        if any(f.endswith('.brt1') for f in os.listdir(prim_sub)):
+                            stems.add(fname[:-len('.active')])
+                    except OSError:
+                        pass
+            elif fname.endswith('.csv'):
+                stems.add(fname[:-4])
+
+        if not stems:
             return False
 
         if not session_id:
             return True
 
-        for csv_file in csv_files:
-            if (
-                csv_file == session_id
-                or csv_file.startswith(f'{session_id}_')
-                or csv_file.startswith(f'{session_id}.')
-            ):
+        clean_sid = session_id[:-4] if session_id.endswith('.csv') else session_id
+        for stem in stems:
+            if stem == clean_sid or stem.startswith(f'{clean_sid}_'):
                 return True
-
         return False
 
     def get_video_data(self, meeting_dir: str) -> dict:

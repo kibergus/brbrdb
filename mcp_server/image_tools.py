@@ -27,6 +27,7 @@ import numpy as np
 from database import db
 from mcp_server import lap_tools
 import location_handlers
+import telemetry_store
 
 # Use non-interactive Agg backend to render images in headless server environment without GUI dependencies
 matplotlib.use('Agg')
@@ -44,7 +45,12 @@ def _parse_time_seconds(time_str: str) -> float:
 
 
 def _read_csv_driver(csv_path: str) -> str | None:
-    """Fast header parser to extract driver name from CSV metadata rows."""
+    """Fast header parser to extract driver name from .brtc/.active/ or CSV metadata."""
+    tel_dir = os.path.dirname(csv_path)
+    stem = telemetry_store.strip_telemetry_suffix(os.path.basename(csv_path))
+    drv = telemetry_store.extract_driver_name(tel_dir, stem)
+    if drv:
+        return drv
     try:
         with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.reader(f)
@@ -66,7 +72,7 @@ def find_telemetry_csv(
     date: str,
     driver_name: str | None = None
 ) -> str:
-    """Locate the telemetry CSV path matching session_id, track, date, and optional driver_name."""
+    """Locate the virtual/real telemetry path matching session_id, track, date, and optional driver_name."""
     raw_sessions = db.find_sessions(date=date, track=track, session_id=session_id)
     candidates: list[str] = []
     seen: set[str] = set()
@@ -74,12 +80,16 @@ def find_telemetry_csv(
     for s in raw_sessions:
         tel_dir = os.path.join(s.meeting_dir, 'telemetry') if s.meeting_dir else ''
         if tel_dir and os.path.exists(tel_dir):
-            csv_files = [f for f in sorted(os.listdir(tel_dir)) if f.endswith('.csv')]
-            matched = [f for f in csv_files if session_id in f] if session_id else csv_files
+            stems = telemetry_store.list_driver_stems(tel_dir)
+            matched = (
+                [st for st in stems if session_id in st or session_id in f'{st}.csv']
+                if session_id
+                else stems
+            )
             if not matched:
-                matched = csv_files
-            for csv_file in matched:
-                p = os.path.join(tel_dir, csv_file)
+                matched = stems
+            for st in matched:
+                p = os.path.join(tel_dir, f'{st}.csv')
                 if p not in seen:
                     seen.add(p)
                     candidates.append(p)
@@ -113,13 +123,122 @@ def find_telemetry_csv(
     )
 
 
+def _extract_raw_lap_data_from_brtc(
+    tel_dir: str,
+    stem: str,
+    csv_path: str,
+    laps: list[int],
+    channels: list[str],
+    parsed_laps: list[dict] | None = None,
+) -> dict[int, dict[str, list[float]]]:
+    """Columnar .brtc / .active/ path for extract_raw_lap_data."""
+    avail_cols, csv_driver = telemetry_store.read_session_header(tel_dir, stem)
+
+    dist_col: str | None = None
+    for cand in ('Lap Distance (m)', 'Lap Distance', 'LapDistance'):
+        for col_h in avail_cols:
+            if col_h == cand or col_h.lower() == cand.lower():
+                dist_col = col_h
+                break
+        if dist_col:
+            break
+    if dist_col is None:
+        raise ValueError(f"Distance column not found in telemetry file {csv_path}")
+
+    channel_col_map: dict[str, str] = {}
+    for ch in channels:
+        if ch != 'Delta Time':
+            matched_col = next((h for h in avail_cols if h == ch or h.lower() == ch.lower()), None)
+            if matched_col is None:
+                raise ValueError(f"Channel {ch!r} not found in telemetry columns: {avail_cols}")
+            channel_col_map[ch] = matched_col
+
+    if parsed_laps is None:
+        parsed_laps, _, _ = telemetry_store.load_session_laps_and_columns(tel_dir, stem)
+        meeting_dir = os.path.dirname(tel_dir)
+        sessions = [s for s in db.find_sessions() if s.meeting_dir == meeting_dir]
+        if sessions:
+            matching_sid = location_handlers._match_session(stem, sessions)
+            if matching_sid:
+                s0 = next((s for s in sessions if s.session_id == matching_sid), sessions[0])
+                df_official = db.load(leagues=s0.league, classes=s0.class_name, date=s0.date, track=s0.track_name)
+                location_handlers._override_with_official_laps(parsed_laps, df_official, matching_sid, csv_driver)
+
+    norm_to_raw: dict[int, int] = {}
+    raw_laps_present: set[int] = set()
+    for plap in parsed_laps:
+        norm_to_raw[plap['lap_num']] = plap.get('raw_lap_num', plap['lap_num'])
+        if 'raw_lap_num' in plap:
+            raw_laps_present.add(plap['raw_lap_num'])
+
+    raw_to_requested: dict[int, list[int]] = {}
+    for l_num in laps:
+        if l_num in norm_to_raw:
+            raw_target = norm_to_raw[l_num]
+        elif l_num in raw_laps_present:
+            raw_target = l_num
+        else:
+            raw_target = l_num
+        raw_to_requested.setdefault(raw_target, []).append(l_num)
+
+    needed = ['Time', 'Lap', dist_col]
+    for mapped in channel_col_map.values():
+        if mapped not in needed:
+            needed.append(mapped)
+
+    col_arrays, _, _ = telemetry_store.read_driver_columns(tel_dir, stem, requested_channels=needed)
+    time_arr = col_arrays.get('Time')
+    lap_arr = col_arrays.get('Lap')
+    dist_arr = col_arrays.get(dist_col)
+    if time_arr is None or lap_arr is None or dist_arr is None:
+        raise ValueError(f"Invalid telemetry format in {csv_path}")
+
+    raw_lap_data: dict[int, dict[str, list[float]]] = {
+        l_num: {'dist': [], 'time': []} for l_num in laps
+    }
+    for ch in channels:
+        if ch != 'Delta Time':
+            for l_num in laps:
+                raw_lap_data[l_num][ch] = []
+
+    lap_ints = np.round(np.nan_to_num(lap_arr, nan=-9999.0)).astype(np.int64)
+    n_rows = len(time_arr)
+    for idx in range(n_rows):
+        lap_val = int(lap_ints[idx])
+        if lap_val not in raw_to_requested:
+            continue
+        d_val = float(dist_arr[idx])
+        t_val = float(time_arr[idx])
+        if math.isnan(d_val) or math.isnan(t_val):
+            continue
+        for req_l_num in raw_to_requested[lap_val]:
+            raw_lap_data[req_l_num]['dist'].append(d_val)
+            raw_lap_data[req_l_num]['time'].append(t_val)
+            for ch, mapped_col in channel_col_map.items():
+                arr_c = col_arrays.get(mapped_col)
+                raw_lap_data[req_l_num][ch].append(float(arr_c[idx]) if arr_c is not None else math.nan)
+
+    for l_num in laps:
+        if not raw_lap_data[l_num]['dist']:
+            raise ValueError(f"Lap {l_num} has no telemetry data in {csv_path}")
+
+    return raw_lap_data
+
+
 def extract_raw_lap_data(
     csv_path: str,
     laps: list[int],
     channels: list[str],
     parsed_laps: list[dict] | None = None
 ) -> dict[int, dict[str, list[float]]]:
-    """Read CSV file and extract raw distance, time, and requested channel values per lap."""
+    """Read telemetry (.brtc, .active/, or CSV) and extract raw distance, time, and channel values per lap."""
+    tel_dir = os.path.dirname(csv_path)
+    stem = telemetry_store.strip_telemetry_suffix(os.path.basename(csv_path))
+    if tel_dir and telemetry_store.ensure_readable_brtc(tel_dir, stem) is not None:
+        return _extract_raw_lap_data_from_brtc(
+            tel_dir, stem, csv_path, laps, channels, parsed_laps=parsed_laps
+        )
+
     with open(csv_path, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         rows = list(reader)
@@ -563,67 +682,63 @@ def render_trajectory_plot(
     for idx_l, (date, track, session_id, lap_num, req_driver) in enumerate(parsed_laps):
         csv_path = find_telemetry_csv(session_id, track, date, driver_name=req_driver)
         resolved_drivers.append(_read_csv_driver(csv_path) or req_driver)
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.reader(f)
-            rows = list(reader)
-
-        blank_idx = -1
-        for i, row in enumerate(rows):
-            if not row or all(cell.strip() == '' for cell in row):
-                blank_idx = i
-                break
-
-        if blank_idx == -1 or blank_idx >= len(rows) - 1:
-            raise ValueError(f"Invalid telemetry CSV format in {csv_path}")
-
-        csv_rows = rows[blank_idx + 1:]
-        header = [c.strip() for c in csv_rows[0]]
-        data_rows = csv_rows[1:]
-
-        def find_col(*candidates: str) -> int:
-            for cand in candidates:
-                for idx, h in enumerate(header):
-                    if h == cand or h.lower() == cand.lower():
-                        return idx
-            return -1
-
-        lap_idx = find_col('Lap')
-        dist_idx = find_col('Lap Distance', 'Lap Distance (m)', 'LapDistance')
-        x_idx = find_col('Longitude', 'x')
-        y_idx = find_col('Latitude', 'y', 'z')
-        speed_idx = find_col('Speed')
-        throttle_idx = find_col('Throttle')
-        brake_idx = find_col('Brake')
-        glon_idx = find_col('GForceLon')
-        time_idx = find_col('Time')
-
-        if lap_idx == -1 or dist_idx == -1 or x_idx == -1 or y_idx == -1:
-            raise ValueError(f"Trajectory coordinates missing in {csv_path}")
+        tel_dir = os.path.dirname(csv_path)
+        stem = telemetry_store.strip_telemetry_suffix(os.path.basename(csv_path))
 
         lap_pts: list[dict[str, float]] = []
-        prev_speed = 0.0
-        prev_time = 0.0
+        if tel_dir and telemetry_store.ensure_readable_brtc(tel_dir, stem) is not None:
+            req_cols = [
+                'Lap', 'Lap Distance', 'Lap Distance (m)', 'LapDistance',
+                'Longitude', 'Latitude', 'x', 'y', 'z',
+                'Speed', 'Throttle', 'Brake', 'GForceLon', 'Time',
+            ]
+            col_map, _, _ = telemetry_store.read_driver_columns(tel_dir, stem, requested_channels=req_cols)
 
-        for row in data_rows:
-            if not row or len(row) < len(header):
-                continue
-            try:
-                l_val = int(row[lap_idx])
-                d_val = float(row[dist_idx])
-                x_val = float(row[x_idx])
-                y_val = float(row[y_idx])
+            def _pick_arr(*cands: str) -> np.ndarray | None:
+                for c in cands:
+                    if c in col_map:
+                        return col_map[c]
+                return None
+
+            lap_arr = _pick_arr('Lap')
+            dist_arr = _pick_arr('Lap Distance', 'Lap Distance (m)', 'LapDistance')
+            x_arr = _pick_arr('Longitude', 'x')
+            y_arr = _pick_arr('Latitude', 'y', 'z')
+            speed_arr = _pick_arr('Speed')
+            throttle_arr = _pick_arr('Throttle')
+            brake_arr = _pick_arr('Brake')
+            glon_arr = _pick_arr('GForceLon')
+            time_arr = _pick_arr('Time')
+
+            if lap_arr is None or dist_arr is None or x_arr is None or y_arr is None:
+                raise ValueError(f"Trajectory coordinates missing in {csv_path}")
+
+            prev_speed = 0.0
+            prev_time = 0.0
+            n_pts = len(lap_arr)
+            for r_i in range(n_pts):
+                if math.isnan(float(lap_arr[r_i])) or math.isnan(float(dist_arr[r_i])):
+                    continue
+                l_val = int(round(float(lap_arr[r_i])))
+                d_val = float(dist_arr[r_i])
+                x_val = float(x_arr[r_i])
+                y_val = float(y_arr[r_i])
+                if math.isnan(x_val) or math.isnan(y_val):
+                    continue
                 if -180.0 <= x_val <= 180.0 and -90.0 <= y_val <= 90.0:
                     x_val, y_val = _latlon_to_mercator(x_val, y_val)
 
-                speed_val = float(row[speed_idx]) if speed_idx != -1 else 0.0
-                speed_kmh = speed_val * 3.6
+                sp_raw = float(speed_arr[r_i]) if speed_arr is not None else 0.0
+                speed_kmh = (sp_raw if not math.isnan(sp_raw) else 0.0) * 3.6
+                th_raw = float(throttle_arr[r_i]) if throttle_arr is not None else 0.0
+                throttle_val = th_raw if not math.isnan(th_raw) else 0.0
+                br_raw = float(brake_arr[r_i]) if brake_arr is not None else 0.0
+                brake_val = br_raw if not math.isnan(br_raw) else 0.0
+                t_raw = float(time_arr[r_i]) if time_arr is not None else 0.0
+                t_sec = t_raw if not math.isnan(t_raw) else 0.0
 
-                throttle_val = float(row[throttle_idx]) if throttle_idx != -1 else 0.0
-                brake_val = float(row[brake_idx]) if brake_idx != -1 else 0.0
-
-                t_sec = _parse_time_seconds(row[time_idx]) if time_idx != -1 else 0.0
-                if glon_idx != -1:
-                    acc_val = float(row[glon_idx]) * 9.81
+                if glon_arr is not None and not math.isnan(float(glon_arr[r_i])):
+                    acc_val = float(glon_arr[r_i]) * 9.81
                 else:
                     dt = t_sec - prev_time
                     dv = (speed_kmh / 3.6) - (prev_speed / 3.6)
@@ -633,7 +748,6 @@ def render_trajectory_plot(
 
                 if not has_boundaries and idx_l == 0:
                     full_track_pts.append((x_val, y_val))
-
                 if l_val == lap_num:
                     lap_pts.append({
                         'x': x_val,
@@ -643,10 +757,92 @@ def render_trajectory_plot(
                         'speed': speed_kmh,
                         'acc': acc_val,
                         'throttle': throttle_val,
-                        'brake': brake_val
+                        'brake': brake_val,
                     })
-            except (ValueError, IndexError):
-                continue
+        else:
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                rows = list(reader)
+
+            blank_idx = -1
+            for i, row in enumerate(rows):
+                if not row or all(cell.strip() == '' for cell in row):
+                    blank_idx = i
+                    break
+
+            if blank_idx == -1 or blank_idx >= len(rows) - 1:
+                raise ValueError(f"Invalid telemetry CSV format in {csv_path}")
+
+            csv_rows = rows[blank_idx + 1:]
+            header = [c.strip() for c in csv_rows[0]]
+            data_rows = csv_rows[1:]
+
+            def find_col(*candidates: str) -> int:
+                for cand in candidates:
+                    for idx, h in enumerate(header):
+                        if h == cand or h.lower() == cand.lower():
+                            return idx
+                return -1
+
+            lap_idx = find_col('Lap')
+            dist_idx = find_col('Lap Distance', 'Lap Distance (m)', 'LapDistance')
+            x_idx = find_col('Longitude', 'x')
+            y_idx = find_col('Latitude', 'y', 'z')
+            speed_idx = find_col('Speed')
+            throttle_idx = find_col('Throttle')
+            brake_idx = find_col('Brake')
+            glon_idx = find_col('GForceLon')
+            time_idx = find_col('Time')
+
+            if lap_idx == -1 or dist_idx == -1 or x_idx == -1 or y_idx == -1:
+                raise ValueError(f"Trajectory coordinates missing in {csv_path}")
+
+            prev_speed = 0.0
+            prev_time = 0.0
+
+            for row in data_rows:
+                if not row or len(row) < len(header):
+                    continue
+                try:
+                    l_val = int(row[lap_idx])
+                    d_val = float(row[dist_idx])
+                    x_val = float(row[x_idx])
+                    y_val = float(row[y_idx])
+                    if -180.0 <= x_val <= 180.0 and -90.0 <= y_val <= 90.0:
+                        x_val, y_val = _latlon_to_mercator(x_val, y_val)
+
+                    speed_val = float(row[speed_idx]) if speed_idx != -1 else 0.0
+                    speed_kmh = speed_val * 3.6
+
+                    throttle_val = float(row[throttle_idx]) if throttle_idx != -1 else 0.0
+                    brake_val = float(row[brake_idx]) if brake_idx != -1 else 0.0
+
+                    t_sec = _parse_time_seconds(row[time_idx]) if time_idx != -1 else 0.0
+                    if glon_idx != -1:
+                        acc_val = float(row[glon_idx]) * 9.81
+                    else:
+                        dt = t_sec - prev_time
+                        dv = (speed_kmh / 3.6) - (prev_speed / 3.6)
+                        acc_val = dv / dt if dt > 0.001 else 0.0
+                        prev_speed = speed_kmh
+                        prev_time = t_sec
+
+                    if not has_boundaries and idx_l == 0:
+                        full_track_pts.append((x_val, y_val))
+
+                    if l_val == lap_num:
+                        lap_pts.append({
+                            'x': x_val,
+                            'y': y_val,
+                            'd': d_val,
+                            'time': t_sec,
+                            'speed': speed_kmh,
+                            'acc': acc_val,
+                            'throttle': throttle_val,
+                            'brake': brake_val
+                        })
+                except (ValueError, IndexError):
+                    continue
 
         if not has_boundaries and full_track_pts and (start_m is not None or end_m is not None):
             fx = [p[0] for p in full_track_pts]

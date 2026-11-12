@@ -176,7 +176,7 @@ def test_session_view_shows_upload_button() -> None:
         assert 'Telemetry' in html_no_tel
 
 
-def test_upload_telemetry_post_stream_endpoint() -> None:
+def test_upload_telemetry_post_stream_endpoint(tmp_path: Path) -> None:
     client = app.app.test_client()
     mock_keys = {
         'has_tel_key': {
@@ -210,6 +210,7 @@ def test_upload_telemetry_post_stream_endpoint() -> None:
 
     with (
         patch('auth.load_keys', return_value=mock_keys),
+        patch('upload_handlers.DATA_DIR', str(tmp_path)),
         patch('upload_handlers.process_telemetry_derivative_data', return_value=(
             pd.DataFrame([{'Time': 0.0, 'Speed': 15.2}]),
             {'session_id': 'practice_1'},
@@ -279,7 +280,7 @@ def test_stream_upload_rejects_malicious_session_id() -> None:
             assert 'Invalid Session ID' in data['error'] or 'Invalid path' in data['error']
 
 
-def test_stream_upload_racebox_channels() -> None:
+def test_stream_upload_racebox_channels(tmp_path: Path) -> None:
     client = app.app.test_client()
     mock_keys = {
         'has_tel_key': {
@@ -311,6 +312,7 @@ def test_stream_upload_racebox_channels() -> None:
 
     with (
         patch('auth.load_keys', return_value=mock_keys),
+        patch('upload_handlers.DATA_DIR', str(tmp_path)),
         patch('upload_handlers.process_telemetry_derivative_data', return_value=(
             pd.DataFrame([{'Time': 0.0, 'Speed': 15.2, 'Yaw Rate': -15.0}]),
             {'session_id': 'practice_1'},

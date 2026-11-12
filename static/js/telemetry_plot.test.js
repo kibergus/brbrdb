@@ -40,25 +40,35 @@ describe('telemetry_plot.js', () => {
   });
 
   describe('parseBinaryFloat64', () => {
-    it('correctly decodes delta-quantized binary buffer', () => {
-      // Create a 16-byte header + 3 Int16 values
-      const buffer = new ArrayBuffer(16 + 6);
+    it('correctly decodes single and multi-block delta-quantized binary buffer', () => {
+      // Block 1: 20-byte header + 3 Int16 values; Block 2: 20-byte header + 2 Int16 values
+      const b1Len = 20 + 6;
+      const b2Len = 20 + 4;
+      const buffer = new ArrayBuffer(b1Len + b2Len);
       const view = new DataView(buffer);
-      const meanVal = 50.0;
-      const scale = 0.5;
-      view.setFloat64(0, meanVal, true);
-      view.setFloat64(8, scale, true);
 
-      const deltas = new Int16Array(buffer, 16, 3);
-      deltas[0] = 2;   // 50 + 2*0.5 = 51.0
-      deltas[1] = 4;   // 50 + (2+4)*0.5 = 53.0
-      deltas[2] = -32768; // sentinel for null
+      view.setFloat64(0, 50.0, true);
+      view.setFloat64(8, 0.5, true);
+      view.setUint32(16, 3, true);
+      const deltas1 = new Int16Array(buffer, 20, 3);
+      deltas1[0] = 2;   // 50 + 2*0.5 = 51.0
+      deltas1[1] = 4;   // 50 + (2+4)*0.5 = 53.0
+      deltas1[2] = -32768; // sentinel for null
+
+      view.setFloat64(b1Len, 200.0, true);
+      view.setFloat64(b1Len + 8, 0.25, true);
+      view.setUint32(b1Len + 16, 2, true);
+      const deltas2 = new Int16Array(buffer, b1Len + 20, 2);
+      deltas2[0] = 0;   // 200.0
+      deltas2[1] = 8;   // 200.0 + 8*0.25 = 202.0
 
       const decoded = TelemetryPlot.parseBinaryFloat64(buffer);
-      expect(decoded.length).toBe(3);
+      expect(decoded.length).toBe(5);
       expect(decoded[0]).toBeCloseTo(51.0);
       expect(decoded[1]).toBeCloseTo(53.0);
       expect(decoded[2]).toBeNull();
+      expect(decoded[3]).toBeCloseTo(200.0);
+      expect(decoded[4]).toBeCloseTo(202.0);
     });
   });
 
@@ -87,12 +97,13 @@ describe('telemetry_plot.js', () => {
             json: async () => mockSessionMeta
           });
         }
-        // Channel binary data
-        const buf = new ArrayBuffer(16 + 10);
+        // Channel binary data (20-byte block header + 5 Int16 values)
+        const buf = new ArrayBuffer(20 + 10);
         const view = new DataView(buf);
         view.setFloat64(0, 0.0, true);
         view.setFloat64(8, 1.0, true);
-        const int16s = new Int16Array(buf, 16, 5);
+        view.setUint32(16, 5, true);
+        const int16s = new Int16Array(buf, 20, 5);
         int16s[0] = 400;
         int16s[1] = 50;
         int16s[2] = 50;

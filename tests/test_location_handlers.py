@@ -29,17 +29,28 @@ import app as flask_app
 
 def _decode_channel_payload(data: bytes) -> tuple[float, float, list[float]]:
     decompressed = brotli.decompress(data)
-    mean_val, scale = struct.unpack("<dd", decompressed[:16])
-    deltas = np.frombuffer(decompressed[16:], dtype=np.int16)
-    reconstructed = []
-    curr = 0.0
-    for d in deltas:
-        if d == -32768:
-            reconstructed.append(np.nan)
-        else:
-            curr += int(d)
-            reconstructed.append(mean_val + curr * scale)
-    return mean_val, scale, reconstructed
+    reconstructed: list[float] = []
+    first_offset = 0.0
+    first_scale = 1.0
+    pos = 0
+    block_idx = 0
+    while pos + 20 <= len(decompressed):
+        offset_val, scale, count = struct.unpack("<ddI", decompressed[pos:pos + 20])
+        if block_idx == 0:
+            first_offset = offset_val
+            first_scale = scale
+        pos += 20
+        deltas = np.frombuffer(decompressed[pos:pos + count * 2], dtype=np.int16)
+        pos += count * 2
+        curr = 0.0
+        for d in deltas:
+            if d == -32768:
+                reconstructed.append(np.nan)
+            else:
+                curr += int(d)
+                reconstructed.append(offset_val + curr * scale)
+        block_idx += 1
+    return first_offset, first_scale, reconstructed
 
 
 class MockSession:
@@ -670,8 +681,8 @@ Time,Latitude,Longitude,Record,Lap,Steering Wheel Angle (deg)
     assert response_br.headers.get('Content-Encoding') == 'br'
 
     decompressed_br = brotli.decompress(response_br.data)
-    mean_val, scale = struct.unpack("<dd", decompressed_br[:16])
-    deltas = np.frombuffer(decompressed_br[16:], dtype=np.int16)
+    offset_val, scale, count_br = struct.unpack("<ddI", decompressed_br[:20])
+    deltas = np.frombuffer(decompressed_br[20:20 + count_br * 2], dtype=np.int16)
     assert len(deltas) == 2
 
     # 2. Test that it always returns Brotli even if client sends identity or gzip
@@ -681,8 +692,8 @@ Time,Latitude,Longitude,Record,Lap,Steering Wheel Angle (deg)
     assert response_none.headers.get('Content-Encoding') == 'br'
 
     decompressed_none = brotli.decompress(response_none.data)
-    mean_val_none, scale_none = struct.unpack("<dd", decompressed_none[:16])
-    deltas_none = np.frombuffer(decompressed_none[16:], dtype=np.int16)
+    offset_val_none, scale_none, count_none = struct.unpack("<ddI", decompressed_none[:20])
+    deltas_none = np.frombuffer(decompressed_none[20:20 + count_none * 2], dtype=np.int16)
     assert len(deltas_none) == 2
 
 

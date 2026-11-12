@@ -8,3 +8,5 @@ scratch/
 testdata/
 *.db
 android/
+build/
+*.so
