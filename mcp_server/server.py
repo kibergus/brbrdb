@@ -182,10 +182,12 @@ def get_telemetry_data(
     laps: list[int] | None = None,
     start_m: float | None = None,
     end_m: float | None = None,
+    raw_aux_stream: str | None = None,
 ) -> dict[str, Any]:
     """
     Downloads numeric telemetry samples on the session's 100 Hz primary timeline (with high-rate
-    auxiliary streams such as 500 Hz Spiker:bit EEG/ECG/EMG downsampled via per-bin sample averaging).
+    auxiliary streams such as 500 Hz Spiker:bit EEG/ECG/EMG downsampled via per-bin sample averaging),
+    or at native auxiliary sample rate (~500 Hz) when raw_aux_stream is specified.
 
     Parameters:
     - session_id: Session identifier (from list_sessions)
@@ -197,6 +199,9 @@ def get_telemetry_data(
     - laps: Optional list of lap numbers to filter rows (e.g. [2, 3]). Omit for all rows in the session.
     - start_m: Optional minimum Lap Distance (metres) filter.
     - end_m: Optional maximum Lap Distance (metres) filter.
+    - raw_aux_stream: Optional auxiliary stream name (e.g. "spikerbit") to read native high-frequency
+      (~500 Hz) samples directly from <stem>.aux.<stream>.brtc with Lap and Lap Distance interpolated
+      from the primary timeline.
 
     Returns dictionary containing session metadata, sample_rate_hz, columns, and column-oriented data arrays.
     """
@@ -209,6 +214,7 @@ def get_telemetry_data(
         laps=laps,
         start_m=start_m,
         end_m=end_m,
+        raw_aux_stream=raw_aux_stream,
     )
 
 

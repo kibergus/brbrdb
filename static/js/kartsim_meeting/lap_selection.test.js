@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { showTab, toggleGroupVisibility, showStatsSubTab, resetProgressionLoaded, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, showRightPanelTab, initReportInteractions, resetReportView, selectLaps, handleReportTriggerAction, setTelemetryRange, focusMapOnRange, getDistanceRangeBounds, setSort, selectTurnAndSwitchToMap, getSessionColor, updateSessionSelectorColors, renderLapList, toggleSessionDropdown, selectSessionFromDropdown, SESSION_PALETTE, getSessionOrderIndex, compareLaps, getSortedLaps, selectLapsByCriteria, showSelectionMenu, addGroup, deleteGroup, toggleGroupEnabled, toggleMobileSidebar, centerMapOnCoords, seekToDistance, setPlotXLim, setGroupALaps } from './lap_selection.js';
-import { setTrajectoryColorMode } from './map.js';
+import { setTrajectoryColorMode, setMapType } from './map.js';
 import { state } from './state.js';
 import * as plotsSync from './plots_sync.js';
 
@@ -29,6 +29,7 @@ vi.mock('./map.js', () => ({
     calculateBoundsZoom: vi.fn(() => 15),
     updateAllPolylineColors: vi.fn(),
     getReferenceLap: vi.fn(() => null),
+    setMapType: vi.fn(),
     setTrajectoryColorMode: vi.fn(),
     matchesRequestedLap: vi.fn((set, id) => set.has(id))
 }));
@@ -1533,6 +1534,62 @@ describe('group management: addGroup, deleteGroup, toggleGroupEnabled', () => {
         expect(state.getActiveGroups()).toContain('B');
     });
 });
+
+describe('handleReportTriggerAction companion extensions', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+        state.activePlotChannels = new Set();
+        state.deltaPlotVisible = false;
+        state.speedPlotVisible = false;
+        state.activeStudy = '';
+        state.activeOverlayIds = new Set();
+        state.agentOverlays = new Map();
+        state.trackData = {
+            lap_length: 1000,
+            turns: [
+                { name: '1', start: 50, apex: [80], end: 110 },
+                { name: '2', start: 200, apex: [230], end: 260 },
+                { name: '3', start: 300, apex: [340], end: 380 }
+            ]
+        };
+
+        vi.stubGlobal('document', {
+            getElementById: vi.fn().mockReturnValue(null),
+            querySelector: vi.fn().mockReturnValue(null),
+            querySelectorAll: vi.fn().mockReturnValue([])
+        });
+    });
+
+    it('maps 1-indexed turnNumber to 0-indexed currentTurnIdx while keeping turn 0-indexed', () => {
+        handleReportTriggerAction({ turnNumber: 3 });
+        expect(state.currentTurnIdx).toBe(2);
+
+        handleReportTriggerAction({ turn: 1 });
+        expect(state.currentTurnIdx).toBe(1);
+    });
+
+    it('handles openPlot idempotently without toggling off an already open plot, and applies tcol & mapType', () => {
+        handleReportTriggerAction({
+            openPlot: 'eeg',
+            togglePlot: 'eeg',
+            tcol: 'delta_t',
+            mapType: 'solid_dark',
+            overlays: ['apex_heat']
+        });
+
+        expect(state.activePlotChannels.has('eeg')).toBe(true);
+        expect(plotsSync.togglePlot).not.toHaveBeenCalled();
+        expect(setTrajectoryColorMode).toHaveBeenCalledWith('delta_t');
+        expect(setMapType).toHaveBeenCalledWith('solid_dark');
+        expect(state.activeOverlayIds.has('apex_heat')).toBe(true);
+
+        // Calling openPlot again keeps eeg open
+        handleReportTriggerAction({ openPlot: 'eeg', togglePlot: 'eeg' });
+        expect(state.activePlotChannels.has('eeg')).toBe(true);
+        expect(plotsSync.togglePlot).not.toHaveBeenCalled();
+    });
+});
+
 
 
 

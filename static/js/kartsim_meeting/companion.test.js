@@ -199,5 +199,79 @@ describe('companion.js', () => {
         expect(() => handleCompanionCommand(undefined)).not.toThrow();
         expect(() => handleCompanionCommand('invalid')).not.toThrow();
     });
+
+    it('fetches workspace manifest on COMPANION_READY and workspace_sync without calling handleReportTriggerAction', async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            json: async () => ({
+                study: '2026-04-12_buckmore_eeg',
+                studies: [{ id: '2026-04-12_buckmore_eeg', label: 'EEG Study' }],
+                overlays: [],
+                channels: [],
+                plot_groups: []
+            })
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        vi.stubGlobal('window', {
+            location: { search: '?companion=1' }
+        });
+
+        handleCompanionCommand({
+            type: 'COMPANION_READY',
+            httpBase: 'http://127.0.0.1:45678',
+            study: '2026-04-12_buckmore_eeg',
+            activeOverlays: ['apex_markers']
+        });
+
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock.mock.calls[0][0]).toContain('http://127.0.0.1:45678/api/workspace/manifest');
+        expect(fetchMock.mock.calls[0][0]).toContain('study=2026-04-12_buckmore_eeg');
+        expect(fetchMock.mock.calls[0][0]).toContain('overlays=apex_markers');
+        expect(lapSelection.handleReportTriggerAction).not.toHaveBeenCalled();
+
+        handleCompanionCommand({
+            type: 'workspace_sync',
+            study: '2026-04-12_buckmore_eeg',
+            activeOverlays: []
+        });
+        await Promise.resolve();
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('navigates via window.location.assign when sessionUrl targets a different session, and avoids reload on same session', () => {
+        const assignMock = vi.fn();
+        vi.stubGlobal('window', {
+            location: {
+                origin: 'http://127.0.0.1:5000',
+                pathname: '/leagues/kartsim/senior/2026-04-10/lydd',
+                search: '?companion=1&ws_port=38472',
+                assign: assignMock
+            }
+        });
+
+        // Different session pathname -> navigates preserving companion=1 & ws_port
+        handleCompanionCommand({
+            sessionUrl: '/leagues/kartsim/senior/2026-04-12/buckmore_park?tab=map',
+            dist: 200
+        });
+        expect(assignMock).toHaveBeenCalledTimes(1);
+        expect(assignMock.mock.calls[0][0]).toContain('/leagues/kartsim/senior/2026-04-12/buckmore_park');
+        expect(assignMock.mock.calls[0][0]).toContain('companion=1');
+        expect(assignMock.mock.calls[0][0]).toContain('ws_port=38472');
+        expect(lapSelection.handleReportTriggerAction).not.toHaveBeenCalled();
+
+        // Same session pathname -> zero-reload delegation to handleReportTriggerAction
+        assignMock.mockClear();
+        handleCompanionCommand({
+            sessionUrl: '/leagues/kartsim/senior/2026-04-10/lydd',
+            dist: 315,
+            turnNumber: 3
+        });
+        expect(assignMock).not.toHaveBeenCalled();
+        expect(lapSelection.handleReportTriggerAction).toHaveBeenCalledTimes(1);
+    });
 });
 

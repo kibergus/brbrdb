@@ -215,6 +215,18 @@ export function updateURL() {
             params.delete('dist');
         }
 
+        // 9. Workspace study & active GeoJSON map overlays
+        if (state.activeStudy && String(state.activeStudy).trim()) {
+            params.set('study', String(state.activeStudy).trim());
+        } else {
+            params.delete('study');
+        }
+        if (state.activeOverlayIds && state.activeOverlayIds.size > 0) {
+            params.set('overlays', Array.from(state.activeOverlayIds).join(','));
+        } else {
+            params.delete('overlays');
+        }
+
         const newSearch = params.toString();
         const newURL = window.location.pathname + (newSearch ? '?' + newSearch : '');
         window.history.replaceState(null, '', newURL);

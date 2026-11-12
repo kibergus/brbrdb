@@ -207,6 +207,17 @@ export const state = {
     // Expandable plots state
     activePlotChannels: new Set(),
     plotTraceVisibility: {},
+    customChannels: new Map(),
+    customPlotGroups: new Map(),
+    customChannelPayloads: new Map(),
+    customPlotActiveComponents: {},
+
+    // Companion workspace studies & GeoJSON/heatmap overlays state
+    companionHttpBase: null,
+    activeStudy: '',
+    availableStudies: [],
+    agentOverlays: new Map(),
+    activeOverlayIds: new Set(),
     get currentActivePlotTab() {
         return this.activePlotChannels.size > 0 ? Array.from(this.activePlotChannels)[0] : null;
     },

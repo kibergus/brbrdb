@@ -23,9 +23,10 @@ import { parseLapTime } from '../utils.js';
 import { getTurnTime, animateSlider, getPointAtDistance } from './telemetry.js';
 import { updateTelemetryPlots, updateAccelerationPlot, updateSlipAnglePlot, renderExpandablePlots, updateExpandablePlotsVisibility, togglePlot, setVisiblePlots } from './plots_sync.js';
 import { renderStatsPlots } from './stats_plots.js';
-import { initMap, loadTrackPoints, calculateBoundsZoom, updateAllPolylineColors, getReferenceLap, updateDistanceMarker, setTrajectoryColorMode, matchesRequestedLap, createLapPolylines } from './map.js';
+import { initMap, loadTrackPoints, calculateBoundsZoom, updateAllPolylineColors, getReferenceLap, updateDistanceMarker, setMapType, setTrajectoryColorMode, matchesRequestedLap, createLapPolylines } from './map.js';
 import { debouncedUpdateURL } from './url_sync.js';
 import { GROUP_PALETTE, getGroupColor, hexToRgba } from './palette.js';
+import { setActiveAgentOverlays, toggleAgentOverlay } from './agent_overlays.js';
 
 export function showRightPanelTab(tabId) {
     state.activeRightTab = tabId;
@@ -706,6 +707,12 @@ export function showTab(tabId) {
                             'plot-area-gforce', 'plot-area-slide', 'plot-area-patch_vel',
                             'plot-area-force', 'plot-area-tyre_load', 'plot-area-slip_angle'
                         ];
+                        if (state.activePlotChannels) {
+                            state.activePlotChannels.forEach(ch => {
+                                const areaId = 'plot-area-' + ch;
+                                if (!ids.includes(areaId)) ids.push(areaId);
+                            });
+                        }
                         ids.forEach(id => {
                             const gd = document.getElementById(id);
                             if (gd && gd._fullLayout && gd.offsetParent !== null && window.Plotly && window.Plotly.Plots) {
@@ -2149,8 +2156,13 @@ export function handleReportTriggerAction(data) {
         centerMapOnCoords(data.centerMap.lat, data.centerMap.lng, data.centerMap.zoom);
     }
 
-    // 3. Turn select
-    if (data.turn !== undefined && data.turn !== null && data.turn !== '') {
+    // 3. Turn select (turnNumber is 1-indexed from MCP/companion; turn is 0-indexed)
+    if (data.turnNumber !== undefined && data.turnNumber !== null && data.turnNumber !== '') {
+        const turnNum = parseInt(data.turnNumber, 10);
+        if (!isNaN(turnNum)) {
+            selectTurnAndSwitchToMap(Math.max(0, turnNum - 1));
+        }
+    } else if (data.turn !== undefined && data.turn !== null && data.turn !== '') {
         const turnIdx = parseInt(data.turn, 10);
         if (!isNaN(turnIdx)) {
             selectTurnAndSwitchToMap(turnIdx);
@@ -2164,14 +2176,78 @@ export function handleReportTriggerAction(data) {
         selectLaps(data.lapsA, data.lapsB);
     }
 
-    // 5. Toggle single plot
+    // 5. Idempotent open plot / toggle single plot
+    if (data.openPlot) {
+        const rawList = Array.isArray(data.openPlot) ? data.openPlot : String(data.openPlot).split(',');
+        let plotOpened = false;
+        rawList.forEach(item => {
+            const p = String(item || '').trim().toLowerCase();
+            if (!p) return;
+            if (p === 'delta') {
+                if (!state.deltaPlotVisible) {
+                    state.deltaPlotVisible = true;
+                    plotOpened = true;
+                }
+            } else if (p === 'speed') {
+                if (!state.speedPlotVisible) {
+                    state.speedPlotVisible = true;
+                    plotOpened = true;
+                }
+            } else {
+                let channel = p;
+                if (channel === 'lat_force') channel = 'force';
+                else if (channel === 'lat_patch_vel' || channel === 'long_patch_vel') channel = 'patch_vel';
+                if (!state.activePlotChannels.has(channel)) {
+                    state.activePlotChannels.add(channel);
+                    plotOpened = true;
+                }
+            }
+        });
+        if (plotOpened) {
+            updateExpandablePlotsVisibility();
+        }
+    }
+
     if (data.togglePlot) {
-        togglePlot(data.togglePlot);
+        const skipBecauseOpen = data.openPlot &&
+            String(data.togglePlot).trim().toLowerCase() === String(data.openPlot).trim().toLowerCase();
+        if (!skipBecauseOpen) {
+            togglePlot(data.togglePlot);
+        }
     }
 
     // 6. Set visible plots
     if (data.plots !== undefined || data.plot !== undefined) {
         setVisiblePlots(data.plots !== undefined ? data.plots : data.plot);
+    }
+
+    // 6b. Trajectory color mode & map type
+    const tcolMode = data.tcol || data.trajectoryColor;
+    if (tcolMode) {
+        setTrajectoryColorMode(String(tcolMode).trim());
+    }
+    if (data.mapType) {
+        setMapType(String(data.mapType).trim());
+    }
+
+    // 6c. Workspace study & GeoJSON map overlays
+    if (data.overlays !== undefined) {
+        setActiveAgentOverlays(data.overlays);
+    }
+    if (data.toggleOverlay) {
+        toggleAgentOverlay(data.toggleOverlay);
+    }
+    if (data.study !== undefined && data.study !== null) {
+        const nextStudy = String(data.study).trim();
+        const studyChanged = nextStudy !== String(state.activeStudy || '');
+        state.activeStudy = nextStudy;
+        if (studyChanged || data.overlays !== undefined) {
+            import('./companion.js').then(m => {
+                if (typeof m.refreshWorkspaceManifest === 'function') {
+                    m.refreshWorkspaceManifest(nextStudy);
+                }
+            }).catch(() => {});
+        }
     }
 
     // 7. Collapse / expand side panel
@@ -2309,7 +2385,11 @@ export function initReportInteractions() {
                                    event.data.laps !== undefined || event.data.lapsA !== undefined ||
                                    event.data.mapRange !== undefined || event.data.focusRange !== undefined ||
                                    (event.data.lat !== undefined && event.data.lng !== undefined) ||
-                                   event.data.collapseSidePanel !== undefined || event.data.sidePanel !== undefined;
+                                   event.data.collapseSidePanel !== undefined || event.data.sidePanel !== undefined ||
+                                   event.data.study !== undefined || event.data.overlays !== undefined ||
+                                   event.data.toggleOverlay !== undefined || event.data.openPlot !== undefined ||
+                                   event.data.turnNumber !== undefined || event.data.tcol !== undefined ||
+                                   event.data.trajectoryColor !== undefined || event.data.mapType !== undefined;
             if (isKnownType || (!type && hasKnownPayload)) {
                 handleReportTriggerAction(event.data);
             }
@@ -2323,8 +2403,9 @@ export function initReportInteractions() {
                 const trigger = e.target.closest(
                     '[data-dist], [data-xlim], [data-range], [data-plot-range], [data-map-range], ' +
                     '[data-map-focus], [data-center-map], [data-focus-map], [data-focus-range], [data-zoom-range], ' +
-                    '[data-turn], [data-laps], [data-laps-a], [data-laps-b], [data-tab], [data-rtab], ' +
-                    '[data-toggle-plot], [data-plots], [data-plot], [data-collapse-side-panel], [data-side-panel]'
+                    '[data-turn], [data-turn-number], [data-laps], [data-laps-a], [data-laps-b], [data-tab], [data-rtab], ' +
+                    '[data-toggle-plot], [data-open-plot], [data-plots], [data-plot], [data-collapse-side-panel], [data-side-panel], ' +
+                    '[data-study], [data-overlays], [data-toggle-overlay], [data-tcol], [data-map-type]'
                 );
                 if (!trigger) return;
                 handleReportTriggerAction({
@@ -2333,13 +2414,20 @@ export function initReportInteractions() {
                     mapRange: trigger.dataset.mapRange || trigger.dataset.mapFocus || trigger.dataset.centerMap || trigger.dataset.focusMap,
                     focusRange: trigger.dataset.focusRange || trigger.dataset.zoomRange,
                     turn: trigger.dataset.turn,
+                    turnNumber: trigger.dataset.turnNumber,
                     laps: trigger.dataset.laps,
                     lapsA: trigger.dataset.lapsA,
                     lapsB: trigger.dataset.lapsB,
                     tab: trigger.dataset.tab,
                     rtab: trigger.dataset.rtab,
                     togglePlot: trigger.dataset.togglePlot,
+                    openPlot: trigger.dataset.openPlot,
                     plots: trigger.dataset.plots || trigger.dataset.plot,
+                    tcol: trigger.dataset.tcol,
+                    mapType: trigger.dataset.mapType,
+                    study: trigger.dataset.study,
+                    overlays: trigger.dataset.overlays,
+                    toggleOverlay: trigger.dataset.toggleOverlay,
                     collapseSidePanel: trigger.dataset.collapseSidePanel !== undefined,
                     sidePanel: trigger.dataset.sidePanel
                 });

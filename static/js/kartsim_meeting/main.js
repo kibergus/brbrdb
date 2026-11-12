@@ -24,7 +24,7 @@ import { setMapType, setTrajectoryColorMode, toggleTrajDropdown, updateDistanceM
 import { stepDistance } from './telemetry.js';
 import { initExpandablePlots, setVisiblePlots } from './plots_sync.js';
 import { debouncedUpdateURL } from './url_sync.js';
-import { initCompanionControl } from './companion.js';
+import { initCompanionControl, refreshWorkspaceManifest } from './companion.js';
 
 // Attach functions to window for HTML onclick handlers
 window.showTab = showTab;
@@ -70,6 +70,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const sessionDropdown = document.getElementById('session-dropdown');
         if (sessionDropdown && !sessionDropdown.contains(e.target)) {
             sessionDropdown.classList.remove('open');
+        }
+        const agentOverlaysDropdown = document.getElementById('agent-overlays-dropdown');
+        if (agentOverlaysDropdown && !agentOverlaysDropdown.contains(e.target)) {
+            agentOverlaysDropdown.classList.remove('open');
         }
     });
     const slider = document.getElementById('distance-slider');
@@ -128,6 +132,23 @@ document.addEventListener('DOMContentLoaded', () => {
             sessionSelector.value = sidParam;
         }
     }
+    const initialStudy = params.get('study') || reportState.study;
+    if (initialStudy) {
+        state.activeStudy = String(initialStudy).trim();
+    }
+    const initialOverlays = params.get('overlays') || reportState.overlays;
+    if (initialOverlays) {
+        const ovList = Array.isArray(initialOverlays)
+            ? initialOverlays
+            : String(initialOverlays).split(',');
+        ovList.forEach(item => {
+            const cleaned = String(item || '').trim();
+            if (cleaned && cleaned !== 'none' && cleaned !== 'false') {
+                state.activeOverlayIds.add(cleaned);
+            }
+        });
+    }
+
     showTab(initialTab);
     initExpandablePlots();
     initSidePanelResizer();
@@ -140,6 +161,12 @@ document.addEventListener('DOMContentLoaded', () => {
                             params.get('ws') === '1' ||
                             params.has('ws_url') ||
                             params.has('ws_port');
+
+    if (!isCompanionMode && (state.activeStudy || (state.activeOverlayIds && state.activeOverlayIds.size > 0))) {
+        const wsPort = params.get('ws_port') || '38472';
+        state.companionHttpBase = `http://127.0.0.1:${wsPort}`;
+        refreshWorkspaceManifest();
+    }
 
     if (isReportMode && !isCompanionMode) {
         if (reportState.sidePanelWidth) {
@@ -174,6 +201,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const tabEl = document.querySelector(`.plot-tab[data-tab="${p}"]`);
             if (tabEl) {
                 tabEl.click();
+            } else if (p && p !== 'delta' && p !== 'speed') {
+                state.activePlotChannels.add(p.toLowerCase());
             }
         });
     }

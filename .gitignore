@@ -20,8 +20,9 @@ access_logger.py
 node_modules/
 tests/goldens_diff/goldens/rendered
 
-# Scratch directory
+# Scratch and studies directories
 scratch/
+studies/
 tests/tmp_postgres/
 
 # Compiled native extensions

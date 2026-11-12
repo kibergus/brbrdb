@@ -16,10 +16,12 @@
 from pathlib import Path
 import json
 import uuid
+import numpy as np
 import pandas as pd
 import pytest
 from mcp.server.fastmcp import Image
 from mcp_server import server, image_tools, lap_tools
+import telemetry_brtc
 
 
 def test_list_sessions_all() -> None:
@@ -696,3 +698,107 @@ def test_long_pit_wait_lap_marked_invalid(tmp_path: Path, monkeypatch: pytest.Mo
     lap_nums = [s["lap"] for s in stats]
     assert lap_nums == [1, 2]
     assert 3 not in lap_nums
+
+
+def test_get_telemetry_data_raw_aux_stream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tel_dir = tmp_path / "telemetry"
+    tel_dir.mkdir()
+
+    # Primary GPS stream at 25 Hz over 2.0 seconds (Lap 1: 0..1s -> 0..25m, Lap 2: 1..2s -> 0..30m)
+    n_prim = 51
+    prim_ts = 1000.0 + np.arange(n_prim, dtype=np.float64) * 0.04  # 25 Hz
+    prim_lap = np.where(prim_ts < 1001.0, 1.0, 2.0)
+    prim_dist = np.where(
+        prim_ts < 1001.0,
+        (prim_ts - 1000.0) * 25.0,
+        (prim_ts - 1001.0) * 30.0,
+    )
+    prim_speed = np.where(prim_ts < 1001.0, 90.0, 108.0)
+
+    prim_path = tel_dir / "10_00_practice_kibergus.primary.brtc"
+    telemetry_brtc.write_brtc(
+        str(prim_path),
+        columns={
+            "Time": prim_ts - 1000.0,
+            "Latitude": np.full(n_prim, 51.3, dtype=np.float64),
+            "Longitude": np.full(n_prim, 0.5, dtype=np.float64),
+            "Lap": prim_lap,
+            "Lap Distance": prim_dist,
+            "Speed": prim_speed / 3.6,
+        },
+        metadata={
+            "Format": "RaceTools CSV",
+            "Driver name": "kibergus",
+            "driver_name": "kibergus",
+            "session_start_date": "2026-04-12",
+            "aux_streams": ["spikerbit"],
+        },
+    )
+
+    # Auxiliary EEG stream at 500 Hz over the same 2.0 seconds (1001 samples)
+    n_aux = 1001
+    aux_ts = 1000.0 + np.arange(n_aux, dtype=np.float64) * 0.002  # 500 Hz
+    # 10 Hz alpha wave + 6 Hz theta wave
+    eeg_signal = 15.0 * np.sin(2.0 * np.pi * 10.0 * (aux_ts - 1000.0)) + 8.0 * np.cos(
+        2.0 * np.pi * 6.0 * (aux_ts - 1000.0)
+    )
+
+    aux_path = tel_dir / "10_00_practice_kibergus.aux.spikerbit.brtc"
+    telemetry_brtc.write_brtc(
+        str(aux_path),
+        columns={
+            "Time": aux_ts - 1000.0,
+            "EEG": eeg_signal,
+        },
+        metadata={
+            "stream_name": "spikerbit",
+            "session_start_date": "2026-04-12",
+            "sample_rate_hz": 500.0,
+        },
+    )
+
+    class DummyAuxSession:
+        meeting_dir = str(tmp_path)
+        meeting_folder = "2026-04-12_buckmore"
+        session_id = "10_00_practice"
+        league = "kartsim"
+        class_name = ["senior"]
+        date = "2026-04-12"
+        track_name = "Buckmore Park"
+
+    monkeypatch.setattr("race_db.RaceDB.find_sessions", lambda self, **kwargs: [DummyAuxSession()])
+    monkeypatch.setattr(
+        "race_db.RaceDB.get_track",
+        lambda self, track: {"lap_length": 24.0, "sector_end": [24.0], "turns": []},
+    )
+    monkeypatch.setattr("race_db.RaceDB.load", lambda self, **kwargs: pd.DataFrame())
+
+    # Normalized Lap 1 corresponds to flying raw Lap 2 (30 m/s over 1.0..2.0s)
+    res = server.get_telemetry_data(
+        session_id="10_00_practice",
+        track="Buckmore Park",
+        date="2026-04-12",
+        laps=[1],
+        start_m=6.0,
+        end_m=24.0,
+        raw_aux_stream="spikerbit",
+    )
+
+    assert res["aux_stream"] == "spikerbit"
+    assert res["sample_rate_hz"] == pytest.approx(500.0, rel=0.02)
+    # 6.0m..24.0m at 30 m/s = 0.6s -> ~300 samples at 500 Hz (far denser than 25 Hz GPS!)
+    assert 295 <= res["row_count"] <= 305
+    assert "EEG" in res["columns"]
+    assert "Lap" in res["columns"]
+    assert "Lap Distance" in res["columns"]
+    assert all(lp == 1 for lp in res["data"]["Lap"])
+    assert all(6.0 - 1e-3 <= d <= 24.0 + 1e-3 for d in res["data"]["Lap Distance"])
+
+    # Requesting a missing auxiliary stream lists available streams clearly
+    with pytest.raises(ValueError, match="spikerbit"):
+        server.get_telemetry_data(
+            session_id="10_00_practice",
+            track="Buckmore Park",
+            date="2026-04-12",
+            raw_aux_stream="nonexistent_sensor",
+        )

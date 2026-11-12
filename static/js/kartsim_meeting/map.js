@@ -22,6 +22,7 @@ import { state } from './state.js';
 import { findSegmentIndex, precalculateLapData, fetchTelemetryChannel, getPointAtDistance, getTurnTime } from './telemetry.js';
 import { parseLapTime, attachSmoothWheelZoom } from '../utils.js';
 import { debouncedUpdateURL } from './url_sync.js';
+import { reattachAgentOverlaysOnMapInit } from './agent_overlays.js';
 
 export const LAP_PALETTE = [
     '#00f0ff', // Lap 1: Vivid Electric Cyan
@@ -984,6 +985,7 @@ export function loadTrackPoints(overrideSessionId) {
             state.mapInitialized = true;
             isFetchingTrackPoints = false;
             state.isLoadingTelemetry = false;
+            reattachAgentOverlaysOnMapInit();
 
             import('./lap_selection.js').then(ui => {
                 if (ui.renderGroupVisibilityControls) ui.renderGroupVisibilityControls();
@@ -1133,6 +1135,7 @@ export function initMap() {
         if (!state.mapInitialized && !isFetchingTrackPoints) {
             loadTrackPoints();
         }
+        reattachAgentOverlaysOnMapInit();
     } catch (e) {
         console.error("Error in initMap:", e);
     }

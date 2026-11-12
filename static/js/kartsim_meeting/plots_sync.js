@@ -26,6 +26,7 @@ import { debouncedUpdateURL } from './url_sync.js';
 import { updateAllPolylineColors } from './map.js';
 import { getGroupColor, hexToRgba } from './palette.js';
 import { getSessionColor } from './lap_selection.js';
+import { ensureCustomPlotGroupLoaded, customChannelFieldKey } from './custom_channels.js';
 
 let lastPlotUpdate = 0;
 
@@ -110,6 +111,22 @@ export function ensureChannelLoaded(channel) {
     // permanently blocks future fetches once data is available.
     if (!state.allSessionsData || state.allSessionsData.length === 0) {
         return Promise.resolve();
+    }
+
+    if (state.customPlotGroups && state.customPlotGroups.has(channel)) {
+        const customPromise = (async () => {
+            try {
+                await ensureCustomPlotGroupLoaded(channel);
+                loadedChannels.add(channel);
+            } catch (error) {
+                console.error(`Failed to load custom plot group ${channel}:`, error);
+                throw error;
+            } finally {
+                loadingChannels.delete(channel);
+            }
+        })();
+        loadingChannels.set(channel, customPromise);
+        return customPromise;
     }
 
     const keys = {
@@ -1692,8 +1709,9 @@ export function renderSingleChannelPlot(activeTab) {
     const targetEl = document.getElementById(targetId);
 
     const lazyTabs = ['steering', 'rps', 'gforce', 'gyro', 'slide', 'patch_vel', 'force', 'tyre_load', 'slip_angle'];
+    const isCustomGroup = Boolean(state.customPlotGroups && state.customPlotGroups.has(activeTab));
 
-    if (lazyTabs.includes(activeTab)) {
+    if (lazyTabs.includes(activeTab) || isCustomGroup) {
         if (!loadedChannels.has(activeTab)) {
             if (loadingChannels.has(activeTab)) {
                 return;
@@ -2149,12 +2167,95 @@ export function renderSingleChannelPlot(activeTab) {
                     addTrace(data, lap, 'sa_rear', `rgba(239, 68, 68, ${alpha})`, width, dash, `Rear${suffix}`, 'y', isA && i === 0);
                 });
             });
+        } else if (isCustomGroup) {
+            const customGroup = state.customPlotGroups.get(state.currentActivePlotTab);
+            const groupChannels = (customGroup && Array.isArray(customGroup.channels)) ? customGroup.channels : [];
+            layout.yaxis.title = (customGroup && (customGroup.y_label || customGroup.label)) || state.currentActivePlotTab;
+            layout.showlegend = false;
+
+            if (customGroup && Array.isArray(customGroup.y_range) && customGroup.y_range.length === 2) {
+                layout.yaxis.range = [Number(customGroup.y_range[0]), Number(customGroup.y_range[1])];
+                layout.yaxis.autorange = false;
+            }
+
+            const hasY2 = Boolean(
+                (customGroup && customGroup.y2_label) ||
+                groupChannels.some(c => c && c.yaxis === 'y2')
+            );
+            if (hasY2) {
+                layout.yaxis2 = {
+                    title: (customGroup && customGroup.y2_label) ? customGroup.y2_label : '',
+                    overlaying: 'y',
+                    side: 'right',
+                    gridcolor: 'rgba(255,255,255,0)',
+                    zeroline: false,
+                    color: '#94a3b8',
+                    fixedrange: true
+                };
+                layout.margin.r = 55;
+            }
+
+            state.customPlotActiveComponents = state.customPlotActiveComponents || {};
+            if (!state.customPlotActiveComponents[state.currentActivePlotTab]) {
+                state.customPlotActiveComponents[state.currentActivePlotTab] = {};
+            }
+            const compState = state.customPlotActiveComponents[state.currentActivePlotTab];
+            groupChannels.forEach(ch => {
+                if (compState[ch.channel_id] === undefined) {
+                    compState[ch.channel_id] = true;
+                }
+            });
+
+            const colorMode = (customGroup && customGroup.color_mode === 'lap') ? 'lap' : 'channel';
+            const applyAlpha = (c, a) => (String(c || '').startsWith('#') ? hexToRgba(c, a) : (c || `rgba(56, 189, 248, ${a})`));
+
+            activeGroups.forEach(g => {
+                const laps = groupLapsMap[g] || [];
+                const isA = (g === 'A');
+                const groupDash = g === 'A' ? 'solid' : (g === 'B' ? 'dash' : (g === 'C' ? 'dot' : 'dashdot'));
+                const width = isA ? 2 : 1.5;
+                const baseAlpha = isA ? 1.0 : 0.85;
+                const suffix = isA ? '' : ` (${g})`;
+                const groupColor = getGroupColor(g);
+
+                laps.forEach((lap, i) => {
+                    const alpha = getLapAlpha(i, laps.length, baseAlpha);
+                    groupChannels.forEach((ch, chIdx) => {
+                        if (compState[ch.channel_id] === false) return;
+                        const fieldKey = customChannelFieldKey(ch.channel_id);
+                        const traceColor = colorMode === 'lap'
+                            ? hexToRgba(groupColor, alpha)
+                            : applyAlpha(ch.color || '#38bdf8', alpha);
+                        const traceDash = colorMode === 'lap'
+                            ? (groupChannels.length > 1 ? ['solid', 'dash', 'dot', 'dashdot'][chIdx % 4] : groupDash)
+                            : groupDash;
+                        const valLabel = ch.unit ? `${ch.label} (${ch.unit})` : ch.label;
+                        addTrace(
+                            data,
+                            lap,
+                            fieldKey,
+                            traceColor,
+                            width,
+                            traceDash,
+                            `${ch.label}${suffix}`,
+                            ch.yaxis === 'y2' ? 'y2' : 'y',
+                            false,
+                            valLabel
+                        );
+                    });
+                });
+            });
         }
 
         addCommonPlotElements(layout);
         if (targetEl) {
             Plotly.react(targetEl, data, layout, { responsive: true, displayModeBar: false, scrollZoom: true });
-            if (state.currentActivePlotTab === 'force' || state.currentActivePlotTab === 'gforce' || state.currentActivePlotTab === 'gyro') {
+            const customGroupForLegend = isCustomGroup ? state.customPlotGroups.get(state.currentActivePlotTab) : null;
+            const showCustomLegend = state.currentActivePlotTab === 'force' ||
+                state.currentActivePlotTab === 'gforce' ||
+                state.currentActivePlotTab === 'gyro' ||
+                Boolean(customGroupForLegend && Array.isArray(customGroupForLegend.channels) && customGroupForLegend.channels.length > 1);
+            if (showCustomLegend) {
                 renderCustomLegend(state.currentActivePlotTab, targetEl);
             } else {
                 const existing = targetEl.querySelector('.custom-plot-legend');
@@ -2210,7 +2311,7 @@ export function renderSingleChannelPlot(activeTab) {
     }
 }
 
-export function addTrace(data, lap, field, color, width, dash = 'solid', customName = null, yaxis = 'y', showlegend = false) {
+export function addTrace(data, lap, field, color, width, dash = 'solid', customName = null, yaxis = 'y', showlegend = false, valueLabel = null) {
     const x = [];
     const y = [];
     lap.points.forEach(p => {
@@ -2239,18 +2340,23 @@ export function addTrace(data, lap, field, color, width, dash = 'solid', customN
         }
     }
 
+    const traceMeta = {
+        lapNum: lap.lap_num,
+        isOutlap: !!lap.is_outlap,
+        sessionId: lap.sessionId || lap.session_id,
+        lapKey: lapId
+    };
+    if (valueLabel) {
+        traceMeta.valueLabel = valueLabel;
+    }
+
     data.push({
         x: x, y: y, mode: 'lines',
         name: customName || `Lap ${lap.lap_num} ${field}`,
         line: { color: color, width: width, dash: dash },
         hoverinfo: 'none', yaxis: yaxis === 'y' ? 'y' : yaxis, showlegend: showlegend,
         visible: visible,
-        meta: {
-            lapNum: lap.lap_num,
-            isOutlap: !!lap.is_outlap,
-            sessionId: lap.sessionId || lap.session_id,
-            lapKey: lapId
-        }
+        meta: traceMeta
     });
 }
 
@@ -2719,6 +2825,10 @@ export function updateSpeedYLim(skipRelayoutIfDragging = false) {
 
 export function updateChannelYLim(tab, skipRelayoutIfDragging = false) {
     if (tab === 'pedals') return;
+    const customGroup = state.customPlotGroups ? state.customPlotGroups.get(tab) : null;
+    if (customGroup && Array.isArray(customGroup.y_range) && customGroup.y_range.length === 2) {
+        return;
+    }
     const gd = document.getElementById('plot-area-' + tab);
     if (!gd || !gd.data || gd.data.length === 0 || !gd._fullLayout || typeof gd.emit !== 'function') return;
 
@@ -2772,7 +2882,7 @@ export function updateChannelYLim(tab, skipRelayoutIfDragging = false) {
         return;
     }
 
-    if (tab === 'patch_vel') {
+    if (tab === 'patch_vel' || (customGroup && gd.data.some(t => t.yaxis === 'y2'))) {
         const latTraces = gd.data.filter(t => !t.yaxis || t.yaxis === 'y');
         const lonTraces = gd.data.filter(t => t.yaxis === 'y2');
 
@@ -3170,6 +3280,38 @@ function renderCustomLegend(tab, targetEl) {
                 renderSingleChannelPlot('gyro');
             });
         });
+    } else if (state.customPlotGroups && state.customPlotGroups.has(tab)) {
+        const customGroup = state.customPlotGroups.get(tab);
+        state.customPlotActiveComponents = state.customPlotActiveComponents || {};
+        state.customPlotActiveComponents[tab] = state.customPlotActiveComponents[tab] || {};
+        const compState = state.customPlotActiveComponents[tab];
+        const escHtml = (s) => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+
+        const buttons = (customGroup.channels || []).map((ch) => {
+            const isOn = compState[ch.channel_id] !== false;
+            const c = ch.color || '#38bdf8';
+            const bg = isOn ? (String(c).startsWith('#') ? hexToRgba(c, 0.25) : 'rgba(56, 189, 248, 0.25)') : 'transparent';
+            const border = isOn ? c : 'rgba(255,255,255,0.1)';
+            const textCol = isOn ? '#fff' : '#94a3b8';
+            return `<button class="legend-toggle-btn" type="button" data-comp="${escHtml(ch.channel_id)}" style="background: ${bg}; border: 1px solid ${border}; color: ${textCol}; padding: 4px 8px; border-radius: 4px; font-size: 9px; font-weight: 700; cursor: pointer; transition: all 0.2s; outline: none;">${escHtml(ch.label || ch.channel_id)}</button>`;
+        });
+
+        legendDiv.innerHTML = `
+            <div style="display: flex; gap: 6px; justify-content: center; flex-wrap: wrap;">
+                ${buttons.join('')}
+            </div>
+        `;
+
+        legendDiv.querySelectorAll('.legend-toggle-btn').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const comp = el.getAttribute('data-comp');
+                if (comp) {
+                    compState[comp] = !(compState[comp] !== false);
+                    renderSingleChannelPlot(tab);
+                }
+            });
+        });
     }
 
     targetEl.appendChild(legendDiv);
@@ -3193,6 +3335,7 @@ export function isComponentAvailable(key) {
  * without loading the full channel data.
  */
 export function isChannelAvailable(channel) {
+    if (state.customPlotGroups && state.customPlotGroups.has(channel)) return true;
     if (!state.allSessionsData || state.allSessionsData.length === 0) return false;
 
     const spec = CHANNEL_AVAILABILITY[channel];
