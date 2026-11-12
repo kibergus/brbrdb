@@ -47,6 +47,7 @@ BRTC_FOOTER_SIZE = BRTC_FOOTER_STRUCT.size  # 16 bytes
 
 DEFAULT_TIME_ENCODE_SCALE = 0.0001
 CORE_ALWAYS_ACTIVE_COLUMNS = frozenset({'Record', 'Time', 'Latitude', 'Longitude', 'Lap'})
+FINITE_ACTIVE_COLUMNS = frozenset({'EEG', 'ECG', 'EMG'})
 
 _MANIFEST_CACHE_LOCK = threading.Lock()
 _MANIFEST_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
@@ -54,7 +55,7 @@ _MANIFEST_CACHE_MAX_ENTRIES = 512
 
 
 def _column_has_active_data(col_name: str, values: np.ndarray) -> bool:
-    """Return True if column is a core column or has at least one finite non-zero sample."""
+    """Return True if column is a core column or has at least one active finite sample."""
     if col_name in CORE_ALWAYS_ACTIVE_COLUMNS:
         return True
     if values.size == 0:
@@ -62,6 +63,8 @@ def _column_has_active_data(col_name: str, values: np.ndarray) -> bool:
     finite_mask = np.isfinite(values)
     if not np.any(finite_mask):
         return False
+    if col_name in FINITE_ACTIVE_COLUMNS or ':' in col_name:
+        return True
     return bool(np.any(values[finite_mask] != 0.0))
 
 
@@ -110,7 +113,7 @@ def write_brtc(
                 )
 
     scales = preferred_scales or {}
-    encoded_blobs: list[tuple[str, bytes, bool]] = []
+    encoded_blobs: list[tuple[str, bytes, bool, float]] = []
     for name in ordered_names:
         if name not in columns:
             continue
@@ -120,18 +123,21 @@ def write_brtc(
             pref_scale = DEFAULT_TIME_ENCODE_SCALE
         blob: bytes = _telemetry_native.encode_channel_blocks(arr, pref_scale)
         has_data = _column_has_active_data(name, arr)
-        encoded_blobs.append((name, blob, has_data))
+        encoded_blobs.append((name, blob, has_data, pref_scale))
 
     col_entries: dict[str, dict[str, Any]] = {}
     current_offset = BRTC_HEADER_SIZE
     final_order: list[str] = []
-    for name, blob, has_data in encoded_blobs:
+    for name, blob, has_data, pref_scale in encoded_blobs:
         blob_len = len(blob)
-        col_entries[name] = {
+        entry: dict[str, Any] = {
             'offset': current_offset,
             'length': blob_len,
             'has_data': has_data,
         }
+        if pref_scale > 0.0:
+            entry['preferred_scale'] = pref_scale
+        col_entries[name] = entry
         current_offset += blob_len
         final_order.append(name)
 
@@ -157,7 +163,7 @@ def write_brtc(
     try:
         with open(tmp_path, 'wb') as f:
             f.write(BRTC_HEADER)
-            for _, blob, _ in encoded_blobs:
+            for _, blob, _, _ in encoded_blobs:
                 f.write(blob)
             f.write(manifest_compressed)
             f.write(footer)

@@ -768,13 +768,132 @@ def _deps_aux_stream_align(
     })
 
 
-@register_calculator('aux_stream_align', version=1, deps_fn=_deps_aux_stream_align)
+def _estimate_stream_dt(sorted_times: np.ndarray, default_dt: float = 0.01) -> float:
+    """Estimate regular sampling step dt while ignoring large pit/disconnect gaps."""
+    if len(sorted_times) <= 1:
+        return default_dt
+    diffs = np.diff(sorted_times)
+    diffs = diffs[diffs > 1e-9]
+    if diffs.size == 0:
+        return default_dt
+    p25 = float(np.percentile(diffs, 25))
+    regular = diffs[diffs <= p25 * 4.0]
+    return float(np.median(regular)) if regular.size > 0 else float(np.median(diffs))
+
+
+def _build_primary_time_bins(
+    p_sorted: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Construct non-overlapping Voronoi bins [b_left, b_right) around sorted primary timestamps."""
+    k = len(p_sorted)
+    median_dt_prim = _estimate_stream_dt(p_sorted, default_dt=0.01)
+
+    half_dt = 0.5 * median_dt_prim
+    b_left = np.empty(k, dtype=np.float64)
+    b_right = np.empty(k, dtype=np.float64)
+    b_left[0] = p_sorted[0] - half_dt
+    b_right[-1] = p_sorted[-1] + half_dt
+
+    if k > 1:
+        steps = p_sorted[1:] - p_sorted[:-1]
+        midpoints = 0.5 * (p_sorted[:-1] + p_sorted[1:])
+        contiguous = (steps > 0.0) & (steps <= 2.5 * median_dt_prim)
+        b_right[:-1] = np.where(contiguous, midpoints, p_sorted[:-1] + half_dt)
+        b_left[1:] = np.where(contiguous, midpoints, p_sorted[1:] - half_dt)
+
+    degenerate = b_right <= b_left
+    if np.any(degenerate):
+        b_left[degenerate] = p_sorted[degenerate] - half_dt
+        b_right[degenerate] = p_sorted[degenerate] + half_dt
+
+    return b_left, b_right, median_dt_prim
+
+
+def _align_aux_column_to_primary_bins(
+    p_sorted: np.ndarray,
+    b_left: np.ndarray,
+    b_right: np.ndarray,
+    median_dt_prim: float,
+    t_sorted: np.ndarray,
+    raw_vals: np.ndarray,
+) -> np.ndarray:
+    """Downsample high-rate aux channels via exact bin averaging; interpolate coarser aux streams."""
+    k = len(p_sorted)
+    aligned_sorted = np.full(k, np.nan, dtype=np.float64)
+    valid_v = np.isfinite(raw_vals)
+    if not np.any(valid_v):
+        return aligned_sorted
+
+    tv = t_sorted[valid_v]
+    vv = raw_vals[valid_v]
+
+    median_dt_col = _estimate_stream_dt(tv, default_dt=math.inf)
+
+    # High-rate auxiliary stream (e.g. 500 Hz Spiker:bit -> 100 Hz primary): average all samples in each bin
+    if median_dt_col <= 0.5 * median_dt_prim:
+        idx_l = np.searchsorted(tv, b_left, side='left')
+        idx_r = np.searchsorted(tv, b_right, side='left')
+        counts = idx_r - idx_l
+        has_bin_samples = counts > 0
+        if np.any(has_bin_samples):
+            csum = np.empty(len(vv) + 1, dtype=np.float64)
+            csum[0] = 0.0
+            np.cumsum(vv, dtype=np.float64, out=csum[1:])
+            aligned_sorted[has_bin_samples] = (
+                csum[idx_r[has_bin_samples]] - csum[idx_l[has_bin_samples]]
+            ) / counts[has_bin_samples]
+        return aligned_sorted
+
+    # Lower- or equal-rate auxiliary stream: linear interpolation within gap_threshold
+    tnan = t_sorted[~valid_v]
+    if tnan.size > 0:
+        nan_in_bin = (
+            np.searchsorted(tnan, b_right, side='left')
+            - np.searchsorted(tnan, b_left, side='left')
+        ) > 0
+    else:
+        nan_in_bin = np.zeros(k, dtype=bool)
+
+    gap_threshold = max(2.0, median_dt_col * 10.0) if math.isfinite(median_dt_col) else 2.0
+    in_range = (
+        (~nan_in_bin)
+        & (p_sorted >= float(tv[0]) - 0.05)
+        & (p_sorted <= float(tv[-1]) + 0.05)
+    )
+    if len(tv) > 1 and np.any(in_range):
+        r_idx = np.searchsorted(tv, p_sorted, side='right')
+        l_idx = np.clip(r_idx - 1, 0, len(tv) - 1)
+        r_clamped = np.clip(r_idx, 0, len(tv) - 1)
+        span_tv = tv[r_clamped] - tv[l_idx]
+        in_range = in_range & (span_tv <= gap_threshold)
+    if np.any(in_range):
+        aligned_sorted[in_range] = np.interp(p_sorted[in_range], tv, vv)
+
+    return aligned_sorted
+
+
+@register_calculator('aux_stream_align', version=2, deps_fn=_deps_aux_stream_align)
 def _calc_aux_stream_align(ctx: CalculatorContext) -> list[str]:
     if not ctx.aux_brtc_paths:
         return []
     prim_time = ctx.primary_cols.get('Time')
     if prim_time is None or len(prim_time) == 0:
         return []
+
+    valid_prim_mask = np.isfinite(prim_time)
+    valid_prim_indices = np.flatnonzero(valid_prim_mask)
+    has_valid_prim = valid_prim_indices.size > 0
+    if has_valid_prim:
+        p_valid = prim_time[valid_prim_indices]
+        p_order = np.argsort(p_valid, kind='mergesort')
+        p_sorted = p_valid[p_order]
+        b_left, b_right, median_dt_prim = _build_primary_time_bins(p_sorted)
+    else:
+        p_order = np.empty(0, dtype=np.int64)
+        p_sorted = np.empty(0, dtype=np.float64)
+        b_left = np.empty(0, dtype=np.float64)
+        b_right = np.empty(0, dtype=np.float64)
+        median_dt_prim = 0.01
 
     prim_date_str = str(ctx.metadata.get('session_start_date') or '')
     prim_date: datetime.date | None = None
@@ -815,43 +934,26 @@ def _calc_aux_stream_align(ctx: CalculatorContext) -> list[str]:
         order = np.argsort(t_src, kind='mergesort')
         t_sorted = t_src[order]
 
-        # Build gap mask so disconnected intervals are NaN instead of linearly bridged across minutes
-        gap_threshold = 2.0
-        if len(t_sorted) > 1:
-            pos_diffs = np.diff(t_sorted)
-            pos_diffs = pos_diffs[pos_diffs > 0.0]
-            if pos_diffs.size > 0:
-                gap_threshold = max(2.0, float(np.median(pos_diffs)) * 10.0)
-
-        in_range = (
-            np.isfinite(prim_time)
-            & (prim_time >= float(t_sorted[0]) - 0.05)
-            & (prim_time <= float(t_sorted[-1]) + 0.05)
-        )
-        if len(t_sorted) > 1 and np.any(in_range):
-            right_idx = np.searchsorted(t_sorted, prim_time, side='right')
-            left_idx = np.clip(right_idx - 1, 0, len(t_sorted) - 1)
-            right_clamped = np.clip(right_idx, 0, len(t_sorted) - 1)
-            span = t_sorted[right_clamped] - t_sorted[left_idx]
-            in_range = in_range & (span <= gap_threshold)
-
         for col_name in aux_manifest.get('column_order', list(aux_cols.keys())):
             if col_name == 'Time' or col_name not in aux_cols:
                 continue
             raw_vals = aux_cols[col_name][valid_t_mask][order]
-            valid_v = np.isfinite(raw_vals)
             out_name = (
                 col_name
                 if (col_name not in ctx.primary_cols and col_name not in ctx.derived_cols)
                 else f'{stream_name}:{col_name}'
             )
             aligned = np.full(len(prim_time), np.nan, dtype=np.float64)
-            if np.any(valid_v) and np.any(in_range):
-                tv = t_sorted[valid_v]
-                vv = raw_vals[valid_v]
-                v_mask = in_range & (prim_time >= float(tv[0]) - 0.05) & (prim_time <= float(tv[-1]) + 0.05)
-                if np.any(v_mask):
-                    aligned[v_mask] = np.interp(prim_time[v_mask], tv, vv)
+            if has_valid_prim:
+                aligned_sorted = _align_aux_column_to_primary_bins(
+                    p_sorted=p_sorted,
+                    b_left=b_left,
+                    b_right=b_right,
+                    median_dt_prim=median_dt_prim,
+                    t_sorted=t_sorted,
+                    raw_vals=raw_vals,
+                )
+                aligned[valid_prim_indices[p_order]] = aligned_sorted
             ctx.derived_cols[out_name] = aligned
             written.append(out_name)
 
@@ -893,13 +995,16 @@ def is_derived_manifest_fresh(
     if not isinstance(recorded, dict):
         return False
     expected = expected_calculator_provenance(metadata, track_info, aux_brtc_paths)
+    has_aux = bool(aux_brtc_paths)
     for name, exp_info in expected.items():
         rec_info = recorded.get(name)
         if not isinstance(rec_info, dict):
             return False
-        if rec_info.get('version') != exp_info['version']:
-            return False
         if rec_info.get('deps_hash') != exp_info['deps_hash']:
+            return False
+        if rec_info.get('version') != exp_info['version']:
+            if name == 'aux_stream_align' and not has_aux and not (rec_info.get('columns') or []):
+                continue
             return False
     return True
 

@@ -134,11 +134,47 @@ async def test_fastmcp_tool_registration() -> None:
     assert "list_sessions" in tool_names
     assert "get_track_info" in tool_names
     assert "get_telemetry_plot" in tool_names
+    assert "get_telemetry_data" in tool_names
     assert "get_stats" in tool_names
     assert "get_aggregates" in tool_names
     assert "get_pace_summary" in tool_names
     assert "get_trajectory_plot" in tool_names
     assert "get_session_consistency_image" in tool_names
+
+
+def test_get_telemetry_data_success_and_validation() -> None:
+    data = server.get_telemetry_data(
+        session_id="18_54_practice",
+        track="Lydd",
+        date="2026-07-12",
+        channels=["Speed", "Throttle"],
+        laps=[23],
+        start_m=10.0,
+        end_m=60.0,
+    )
+    assert data["session_id"] == "18_54_practice"
+    assert data["row_count"] > 0
+    assert data["columns"] == ["Time", "Lap", "Lap Distance", "Speed", "Throttle"]
+    assert len(data["data"]["Time"]) == data["row_count"]
+    assert all(lp == 23 for lp in data["data"]["Lap"])
+    assert all(10.0 <= d <= 60.0 for d in data["data"]["Lap Distance"])
+
+    with pytest.raises(ValueError, match="start_m must be strictly less than end_m"):
+        server.get_telemetry_data(
+            session_id="18_54_practice",
+            track="Lydd",
+            date="2026-07-12",
+            start_m=100.0,
+            end_m=50.0,
+        )
+
+    with pytest.raises(ValueError, match="Channel 'UnknownChan' not found"):
+        server.get_telemetry_data(
+            session_id="18_54_practice",
+            track="Lydd",
+            date="2026-07-12",
+            channels=["UnknownChan"],
+        )
 
 
 def test_get_stats_whole_lap() -> None:

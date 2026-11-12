@@ -31,7 +31,7 @@ import pytest
 
 import _telemetry_native
 import app as flask_app
-from mcp_server import image_tools
+from mcp_server import image_tools, server as mcp_server
 import telemetry_brtc
 import telemetry_calculators
 import telemetry_store
@@ -503,3 +503,324 @@ def test_legacy_csv_archive_edge_cases(tmp_path: Path) -> None:
         assert drv == 'Driver B'
         matched_after, _ = compact_sessions.compact_archive(str(tmp_path), dry_run=True)
         assert matched_after == 0
+
+
+def _pack_batched_spikerbit_brt1(
+    metadata: dict[str, Any],
+    channel_name: str,
+    rows: list[list[float]],
+    batch_size: int = 10,
+) -> bytes:
+    """Pack a Spiker:bit BRT1 stream using batched 0x04 delta chunks (40B = 10x2 int16) + Brotli."""
+    channels = [
+        {'name': 'Time', 'scale': 0.0001},
+        {'name': channel_name, 'scale': 1.0},
+    ]
+    scales = [0.0001, 1.0]
+    raw = bytearray()
+    raw.extend(telemetry_store.pack_brt1_chunk(0x01, b'BRT1'))
+    meta_bytes = json.dumps({'metadata': metadata, 'channels': channels}).encode('utf-8')
+    raw.extend(telemetry_store.pack_brt1_chunk(0x02, meta_bytes))
+
+    # Initial 0x03 baseline chunk (16 bytes = 2 x float64)
+    raw.extend(telemetry_store.pack_brt1_chunk(0x03, struct.pack('<2d', *rows[0])))
+    current = list(rows[0])
+
+    delta_buf = bytearray()
+    in_batch = 0
+    for row in rows[1:]:
+        q0 = int(round((row[0] - current[0]) / scales[0]))
+        q1 = int(round((row[1] - current[1]) / scales[1]))
+        delta_buf.extend(struct.pack('<2h', q0, q1))
+        current[0] += q0 * scales[0]
+        current[1] += q1 * scales[1]
+        in_batch += 1
+        if in_batch == batch_size:
+            raw.extend(telemetry_store.pack_brt1_chunk(0x04, bytes(delta_buf)))
+            delta_buf.clear()
+            in_batch = 0
+    if delta_buf:
+        raw.extend(telemetry_store.pack_brt1_chunk(0x04, bytes(delta_buf)))
+    raw.extend(telemetry_store.pack_brt1_chunk(0xFF, b''))
+    return brotli.compress(bytes(raw), quality=4, lgwin=22)
+
+
+def test_spikerbit_500hz_ingest_preservation_bin_averaging_and_mcp(tmp_path: Path) -> None:
+    """End-to-end verification of SPIKERBIT.md 500 Hz upload, raw preservation, 100 Hz bin averaging, and MCP."""
+    client = flask_app.app.test_client()
+    mock_keys = {
+        'spiker_key': {
+            'upload_sessions': {'leagues': ['acevo'], 'drivers': ['Max']},
+            'see_leagues': ['*'],
+            'see_telemetry': {'leagues': ['*'], 'drivers': ['*']},
+        }
+    }
+
+    prim_meta = {
+        'Track name': 'Spa-Francorchamps',
+        'Date': '2026-11-11',
+        'Time': '20:00:00',
+        'Driver name': 'Max',
+        'League': 'acevo',
+        'Class': 'GT3',
+        'Session': 'Practice',
+        'Session ID': 'optional-session-id',
+        'kart_number': '42',
+    }
+    spiker_meta = dict(prim_meta, stream='spikerbit')
+
+    # Primary vehicle stream at 100 Hz (dt = 0.01s) from t = 0.00s to t = 0.39s (40 samples)
+    prim_channels = [
+        {'name': 'Time', 'scale': 0.0001},
+        {'name': 'Latitude', 'scale': 1e-7},
+        {'name': 'Longitude', 'scale': 1e-7},
+        {'name': 'Speed', 'scale': 0.01},
+        {'name': 'Lap', 'scale': 1.0},
+        {'name': 'Lap Distance', 'scale': 0.01},
+    ]
+    prim_rows = [
+        [round(i * 0.01, 4), 50.4372 + i * 1e-5, 5.9714 + i * 1e-5, 40.0 + i * 0.5, 1.0, float(i * 2.0)]
+        for i in range(40)
+    ]
+
+    # Spiker:bit 500 Hz segments (dt = 0.002s) with mid-session mode switches:
+    # - Seg 1 (0.000 .. 0.098s, 50 samples): EEG = 500 + (k // 5) * 10 + (k % 5) * 2
+    #   For primary bin i=1 at t=0.01s -> Voronoi bin [0.005, 0.015) captures samples at
+    #   t = [0.006, 0.008, 0.010, 0.012, 0.014] (k = 3,4,5,6,7):
+    #   values = [506, 508, 510, 512, 514] -> exact mean = 510.0!
+    #   Let's also include asymmetric values so point interpolation at t=0.010 would differ from bin mean:
+    #   add +25 to k=7 (t=0.014s, not at t=0.010s!), shifting the 5-sample bin mean by +5.0 (515.0 vs 510.0)!
+    eeg_seg1_rows: list[list[float]] = []
+    for k in range(50):
+        t_k = round(k * 0.002, 4)
+        val_k = float(500 + (k // 5) * 10 + (k % 5) * 2 + (25 if k == 7 else 0))
+        eeg_seg1_rows.append([t_k, val_k])
+
+    # - Seg 2 (0.100 .. 0.198s, 50 samples): ECG all 0.0 (railed lead-off -> must STILL be marked active!)
+    ecg_seg2_rows = [[round(0.100 + k * 0.002, 4), 0.0] for k in range(50)]
+
+    # - Seg 3 (0.200 .. 0.298s, 50 samples): EMG = [300, 310, 320, 330, 340] repeating
+    emg_seg3_rows = [[round(0.200 + k * 0.002, 4), float(300 + (k % 5) * 10)] for k in range(50)]
+
+    # - Seg 4 (0.300 .. 0.398s, 50 samples): switch back to EEG = 600.0 (must NOT bridge EEG across 0.10..0.29s!)
+    eeg_seg4_rows = [[round(0.300 + k * 0.002, 4), 600.0] for k in range(50)]
+
+    with (
+        patch('auth.load_keys', return_value=mock_keys),
+        patch('upload_handlers.DATA_DIR', str(tmp_path)),
+        patch('upload_handlers.db.get_track', return_value={}),
+        patch('upload_handlers.db.load', return_value=pd.DataFrame()),
+        patch('upload_handlers.populate_db.populate_single_session', return_value='optional_session_id'),
+    ):
+        r_prim = client.post(
+            '/api/upload/stream',
+            data=brotli.compress(_pack_brt1_stream(prim_meta, prim_channels, prim_rows), quality=4),
+            headers={'X-API-Key': 'spiker_key', 'Content-Encoding': 'br'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'},
+        )
+        assert r_prim.status_code == 200
+
+        for ch_name, seg_rows in [
+            ('EEG', eeg_seg1_rows),
+            ('ECG', ecg_seg2_rows),
+            ('EMG', emg_seg3_rows),
+        ]:
+            r_aux = client.post(
+                '/api/upload/stream',
+                data=_pack_batched_spikerbit_brt1(spiker_meta, ch_name, seg_rows),
+                headers={'X-API-Key': 'spiker_key', 'Content-Encoding': 'br'},
+                environ_base={'REMOTE_ADDR': '192.168.1.100'},
+            )
+            assert r_aux.status_code == 200
+
+    # Verify Class="GT3" normalized to "gt3" and hyphenated Session ID normalized to "optional_session_id"
+    meeting_dir = tmp_path / 'acevo' / 'gt3' / '2026_11_11_spa_francorchamps'
+    tel_dir = meeting_dir / 'telemetry'
+    stem = 'optional_session_id_max'
+    assert (tel_dir / f'{stem}.active' / 'aux_spikerbit').is_dir()
+
+    # Verify live (uncompacted) MCP discovery & 100 Hz bin-averaged download
+    mock_session = MagicMock()
+    mock_session.session_id = 'optional_session_id'
+    mock_session.session_name = 'Practice'
+    mock_session.short_name = 'Practice'
+    mock_session.date = '2026-11-11'
+    mock_session.track_name = 'Spa-Francorchamps'
+    mock_session.league = 'acevo'
+    mock_session.class_name = ['gt3']
+    mock_session.meeting_dir = str(meeting_dir)
+    mock_session.meeting_folder = meeting_dir.name
+
+    with (
+        patch('auth.load_keys', return_value=mock_keys),
+        patch('race_db.RaceDB.find_sessions', return_value=[mock_session]),
+        patch('race_db.RaceDB.get_session_drivers', return_value=['Max']),
+        patch('race_db.RaceDB.get_track', return_value={'lap_length': 7004.0, 'sector_end': [], 'turns': []}),
+        patch('race_db.RaceDB.load', return_value=pd.DataFrame()),
+    ):
+        sessions_live = json.loads(mcp_server.list_sessions(track='Spa-Francorchamps', date='2026-11-11'))
+        assert len(sessions_live) == 1
+        assert {'EEG', 'ECG', 'EMG'}.issubset(set(sessions_live[0]['telemetry_channels']))
+
+        live_dl = mcp_server.get_telemetry_data(
+            session_id='optional_session_id',
+            track='Spa-Francorchamps',
+            date='2026-11-11',
+            channels=['Speed', 'EEG', 'ECG', 'EMG'],
+        )
+        assert live_dl['sample_rate_hz'] == pytest.approx(100.0, abs=0.1)
+        assert live_dl['row_count'] == 40
+        # Bin i=1 (t=0.01s, bin [0.005, 0.015)) has samples [506, 508, 510, 512, 539] -> mean = 515.0 (NOT 510.0!)
+        assert live_dl['data']['EEG'][1] == pytest.approx(515.0, abs=0.01)
+        # During ECG mode (i=15, t=0.15s): ECG == 0.0 and EEG is None (not bridged)
+        assert live_dl['data']['ECG'][15] == pytest.approx(0.0, abs=0.01)
+        assert live_dl['data']['EEG'][15] is None
+        # During EMG mode (i=25, t=0.25s): 5 samples [300,310,320,330,340] -> mean == 320.0
+        assert live_dl['data']['EMG'][25] == pytest.approx(320.0, abs=0.01)
+
+    # First compaction (150 raw 500 Hz samples -> .aux.spikerbit.brtc)
+    with patch('telemetry_store.db.get_track', return_value={}):
+        assert telemetry_store.compact_driver_session(str(tel_dir), stem) is True
+
+    aux_brtc = tel_dir / f'{stem}.aux.spikerbit.brtc'
+    assert aux_brtc.exists()
+    aux_man_1 = telemetry_brtc.read_brtc_manifest(str(aux_brtc))
+    assert aux_man_1['row_count'] == 150
+    assert aux_man_1['columns']['EEG']['preferred_scale'] == pytest.approx(1.0)
+    assert aux_man_1['columns']['ECG']['has_data'] is True
+
+    # Upload 4th segment (switching back to EEG at t=0.300..0.398s) and re-compact
+    with (
+        patch('auth.load_keys', return_value=mock_keys),
+        patch('upload_handlers.DATA_DIR', str(tmp_path)),
+        patch('upload_handlers.db.get_track', return_value={}),
+        patch('upload_handlers.db.load', return_value=pd.DataFrame()),
+    ):
+        r_seg4 = client.post(
+            '/api/upload/stream',
+            data=_pack_batched_spikerbit_brt1(spiker_meta, 'EEG', eeg_seg4_rows),
+            headers={'X-API-Key': 'spiker_key', 'Content-Encoding': 'br'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'},
+        )
+        assert r_seg4.status_code == 200
+
+    with patch('telemetry_store.db.get_track', return_value={}):
+        assert telemetry_store.compact_driver_session(str(tel_dir), stem) is True
+
+    # Verify all 200 native 500 Hz samples preserved in .aux.spikerbit.brtc with exact scale=1.0
+    aux_man_2 = telemetry_brtc.read_brtc_manifest(str(aux_brtc))
+    assert aux_man_2['row_count'] == 200
+    for ch in ('EEG', 'ECG', 'EMG'):
+        assert aux_man_2['columns'][ch]['preferred_scale'] == pytest.approx(1.0)
+    raw_aux_cols = telemetry_brtc.read_brtc_columns(str(aux_brtc), manifest=aux_man_2)
+    assert np.allclose(raw_aux_cols['EEG'][:50], [r[1] for r in eeg_seg1_rows], atol=1e-6)
+    assert np.all(np.isnan(raw_aux_cols['EEG'][50:150]))
+    assert np.allclose(raw_aux_cols['EEG'][150:200], 600.0, atol=1e-6)
+
+    # Verify HTTP JSON-RPC /api/mcp download after compaction
+    with (
+        patch('auth.load_keys', return_value=mock_keys),
+        patch('race_db.RaceDB.find_sessions', return_value=[mock_session]),
+        patch('race_db.RaceDB.get_session_drivers', return_value=['Max']),
+        patch('race_db.RaceDB.get_track', return_value={'lap_length': 7004.0, 'sector_end': [], 'turns': []}),
+        patch('race_db.RaceDB.load', return_value=pd.DataFrame()),
+    ):
+        mcp_resp = client.post(
+            '/api/mcp',
+            headers={'X-API-Key': 'spiker_key'},
+            json={
+                'jsonrpc': '2.0',
+                'id': 99,
+                'method': 'tools/call',
+                'params': {
+                    'name': 'get_telemetry_data',
+                    'arguments': {
+                        'session_id': 'optional_session_id',
+                        'track': 'Spa-Francorchamps',
+                        'date': '2026-11-11',
+                        'channels': ['EEG', 'ECG', 'EMG'],
+                        'laps': [1],
+                        'start_m': 2.0,
+                        'end_m': 70.0,
+                    },
+                },
+            },
+            environ_base={'REMOTE_ADDR': '192.168.1.100'},
+        )
+        assert mcp_resp.status_code == 200
+        rpc_body = mcp_resp.get_json()
+        payload = json.loads(rpc_body['result']['content'][0]['text'])
+        assert payload['columns'] == ['Time', 'Lap', 'Lap Distance', 'EEG', 'ECG', 'EMG']
+        # First sliced row is i=1 (start_m=2.0 -> t=0.01s): bin mean 515.0
+        assert payload['data']['EEG'][0] == pytest.approx(515.0, abs=0.01)
+        # Middle rows (0.11s..0.29s) stay None despite EEG resuming at 600.0 in [0.30s..0.39s]!
+        idx_t015 = payload['data']['Time'].index(round(72000.15, 4))
+        assert payload['data']['EEG'][idx_t015] is None
+        assert payload['data']['ECG'][idx_t015] == pytest.approx(0.0, abs=0.01)
+        idx_t035 = payload['data']['Time'].index(round(72000.35, 4))
+        assert payload['data']['EEG'][idx_t035] == pytest.approx(600.0, abs=0.01)
+
+
+def test_spikerbit_mid_session_segment_without_session_id_attaches_to_primary(tmp_path: Path) -> None:
+    """Verify auxiliary stream without Session ID attaches to ongoing primary session even across minute rollover."""
+    client = flask_app.app.test_client()
+    mock_keys = {
+        'spiker_key': {
+            'upload_sessions': {'leagues': ['acevo'], 'drivers': ['Max']},
+            'see_leagues': ['*'],
+            'see_telemetry': True,
+        }
+    }
+    prim_meta = {
+        'Track name': 'Spa-Francorchamps',
+        'Date': '2026-11-11',
+        'Time': '20:00:00',
+        'Driver name': 'Max',
+        'League': 'acevo',
+        'Class': 'GT3',
+        'Session': 'Practice',
+    }
+    prim_channels = [
+        {'name': 'Time', 'scale': 0.0001},
+        {'name': 'Latitude', 'scale': 1e-7},
+        {'name': 'Longitude', 'scale': 1e-7},
+        {'name': 'Speed', 'scale': 0.01},
+        {'name': 'Lap', 'scale': 1.0},
+        {'name': 'Lap Distance', 'scale': 0.01},
+    ]
+    # Primary samples around 20:03:15 (t = 195.00s, 195.01s relative to 20:00:00)
+    prim_rows = [
+        [195.00, 50.4372, 5.9714, 45.0, 1.0, 100.0],
+        [195.01, 50.4373, 5.9715, 46.0, 1.0, 100.5],
+        [195.02, 50.4374, 5.9716, 47.0, 1.0, 101.0],
+    ]
+    # Spiker:bit mode-switch segment started at 20:03:15.000 with Time relative to 20:03:15 (no Session ID!)
+    aux_meta = dict(prim_meta, Time='20:03:15.000', stream='spikerbit')
+    aux_rows = [[round(k * 0.002, 4), float(400 + k)] for k in range(15)]
+
+    with (
+        patch('auth.load_keys', return_value=mock_keys),
+        patch('upload_handlers.DATA_DIR', str(tmp_path)),
+        patch('upload_handlers.db.get_track', return_value={}),
+        patch('upload_handlers.db.load', return_value=pd.DataFrame()),
+        patch('upload_handlers.populate_db.populate_single_session', return_value='2026_11_11_spa_20_00_practice'),
+    ):
+        assert client.post(
+            '/api/upload/stream',
+            data=_pack_brt1_stream(prim_meta, prim_channels, prim_rows),
+            headers={'X-API-Key': 'spiker_key'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'},
+        ).status_code == 200
+        assert client.post(
+            '/api/upload/stream',
+            data=_pack_batched_spikerbit_brt1(aux_meta, 'ECG', aux_rows),
+            headers={'X-API-Key': 'spiker_key', 'Content-Encoding': 'br'},
+            environ_base={'REMOTE_ADDR': '192.168.1.100'},
+        ).status_code == 200
+
+    tel_dir = tmp_path / 'acevo' / 'gt3' / '2026_11_11_spa_francorchamps' / 'telemetry'
+    stem = '20_00_practice_max'
+    assert (tel_dir / f'{stem}.active' / 'aux_spikerbit').is_dir()
+    cols, _, _ = telemetry_store.read_driver_columns(str(tel_dir), stem, requested_channels=['Time', 'ECG'])
+    # At t = 195.01s (bin [195.005, 195.015)), k = 3,4,5,6,7 -> [403, 404, 405, 406, 407] -> mean = 405.0!
+    assert cols['ECG'][1] == pytest.approx(405.0, abs=0.01)

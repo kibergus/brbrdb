@@ -59,6 +59,7 @@ DATA_DIR = os.path.realpath(os.path.expanduser(config['data_dir']))
 
 MAX_METADATA_SIZE = 200 * 1024 * 1024  # 200 MB
 STREAM_FLUSH_INTERVAL_SEC = 15.0
+_SAFE_SESSION_ID_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
 @dataclass
@@ -79,6 +80,7 @@ class CSVSessionMetadata:
     origin: track_data.TrackOrigin | None = None
     session_id: str | None = None
     stream: str = ''
+    subsecond_us: int = 0
 
 
 def create_track_origin(
@@ -195,8 +197,11 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
         elif key == 'session':
             session_name = val
         elif key in ('session id', 'session_id'):
-            sanitized = sanitize.sanitize_filename(val)
-            if not sanitized or sanitized != val.strip().lower():
+            raw_sid = val.strip()
+            if not _SAFE_SESSION_ID_RE.match(raw_sid):
+                raise BadRequest(f'Invalid Session ID: {val!r}')
+            sanitized = sanitize.sanitize_filename(raw_sid)
+            if not sanitized:
                 raise BadRequest(f'Invalid Session ID: {val!r}')
             session_id = sanitized
         elif key == 'kart_number':
@@ -222,6 +227,7 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
             origin_heading = float(val)
 
     has_seconds = False
+    subsecond_us = 0
     if date_str and time_str:
         date_clean = date_str.strip()
         time_clean = time_str.strip()
@@ -229,6 +235,9 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
             session_start_datetime_str = date_clean
         else:
             session_start_datetime_str = f'{date_clean} {time_clean}'
+        m_frac = re.search(r':\d{2}\.(\d+)', session_start_datetime_str)
+        if m_frac:
+            subsecond_us = int((m_frac.group(1) + '000000')[:6])
         try:
             session_start_datetime, has_seconds = session_time.parse_session_start_datetime(
                 session_start_datetime_str, track_name=track_name, db=db
@@ -275,6 +284,7 @@ def parse_csv_metadata_rows(metadata_rows: Iterable[Iterable[str]]) -> CSVSessio
         origin=origin,
         session_id=session_id,
         stream=stream_name,
+        subsecond_us=subsecond_us,
     )
 
 
@@ -1754,10 +1764,14 @@ class _UploadSessionContext:
 
 def _build_segment_meta_dict(metadata: CSVSessionMetadata) -> dict[str, Any]:
     """Build canonical metadata dictionary stored inside BRT1 segment 0x02 chunks."""
+    time_val = metadata.session_start_datetime.strftime('%H:%M:%S')
+    if metadata.subsecond_us > 0:
+        frac = f'{metadata.subsecond_us:06d}'.rstrip('0')
+        time_val = f'{time_val}.{frac}'
     out: dict[str, Any] = {
         'Track name': metadata.track_name,
         'Date': metadata.session_start_datetime.strftime('%Y-%m-%d'),
-        'Time': metadata.session_start_datetime.strftime('%H:%M:%S'),
+        'Time': time_val,
         'Driver name': metadata.driver_name,
         'League': metadata.league,
         'Class': metadata.class_name,
@@ -1930,6 +1944,59 @@ def _load_preexisting_primary_records_for_summary(
     return records
 
 
+def _match_existing_aux_session_filename(
+    meeting_dir: str,
+    telemetry_dir: str,
+    default_session_filename: str,
+    session_san: str,
+    driver_san: str,
+    incoming_dt: datetime.datetime,
+) -> str:
+    """Associate an auxiliary upload lacking an explicit Session ID with an ongoing primary session."""
+    default_stem = f'{default_session_filename}_{driver_san}'
+    if (
+        os.path.exists(os.path.join(meeting_dir, f'{default_session_filename}_metadata.json'))
+        or os.path.isdir(telemetry_store.active_dir_path(telemetry_dir, default_stem))
+        or os.path.exists(telemetry_store.primary_brtc_path(telemetry_dir, default_stem))
+        or os.path.exists(telemetry_store.legacy_csv_path(telemetry_dir, default_stem))
+    ):
+        return default_session_filename
+
+    pattern = re.compile(rf'^(\d{{2}}_\d{{2}}_{re.escape(session_san)})_{re.escape(driver_san)}$')
+    best_match: tuple[int, float, str] | None = None
+    for stem in telemetry_store.list_driver_stems(telemetry_dir):
+        m = pattern.match(stem)
+        if not m:
+            continue
+        cand_session = m.group(1)
+        cand_dt: datetime.datetime | None = None
+        cand_meta_p = os.path.join(meeting_dir, f'{cand_session}_metadata.json')
+        if os.path.exists(cand_meta_p):
+            try:
+                with open(cand_meta_p, 'r', encoding='utf-8') as f:
+                    cm = json.load(f)
+                if cm.get('session_start_datetime'):
+                    cand_dt = session_time.parse_session_start_datetime_tolerant(cm['session_start_datetime'])
+            except Exception:
+                cand_dt = None
+        if cand_dt is None:
+            try:
+                hh = int(cand_session[0:2])
+                mm = int(cand_session[3:5])
+                cand_dt = incoming_dt.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            except ValueError:
+                continue
+
+        delta_s = (incoming_dt - cand_dt).total_seconds()
+        if -120.0 <= delta_s <= 7200.0:
+            is_active = os.path.isdir(telemetry_store.active_dir_path(telemetry_dir, stem))
+            rank = (0 if is_active else 1, abs(delta_s), cand_session)
+            if best_match is None or rank < best_match:
+                best_match = rank
+
+    return best_match[2] if best_match is not None else default_session_filename
+
+
 def _resolve_upload_session_context(
     metadata: CSVSessionMetadata,
     acl: dict[str, Any],
@@ -1951,14 +2018,28 @@ def _resolve_upload_session_context(
     telemetry_dir = os.path.join(meeting_dir, 'telemetry')
     os.makedirs(telemetry_dir, exist_ok=True)
 
+    driver_san = sanitize.sanitize_filename(metadata.driver_name)
     if metadata.session_id:
-        session_filename = sanitize.sanitize_filename(metadata.session_id)
-        if not session_filename or session_filename != metadata.session_id.strip().lower():
+        raw_sid = metadata.session_id.strip()
+        if not _SAFE_SESSION_ID_RE.match(raw_sid):
+            raise BadRequest(f'Invalid Session ID: {metadata.session_id!r}')
+        session_filename = sanitize.sanitize_filename(raw_sid)
+        if not session_filename:
             raise BadRequest(f'Invalid Session ID: {metadata.session_id!r}')
     else:
-        session_filename = f'{time_str}_{sanitize.sanitize_filename(metadata.session_name)}'
+        session_san = sanitize.sanitize_filename(metadata.session_name)
+        session_filename = f'{time_str}_{session_san}'
+        if metadata.stream != '':
+            session_filename = _match_existing_aux_session_filename(
+                meeting_dir=meeting_dir,
+                telemetry_dir=telemetry_dir,
+                default_session_filename=session_filename,
+                session_san=session_san,
+                driver_san=driver_san,
+                incoming_dt=metadata.session_start_datetime.replace(tzinfo=None),
+            )
 
-    driver_stem = f'{session_filename}_{sanitize.sanitize_filename(metadata.driver_name)}'
+    driver_stem = f'{session_filename}_{driver_san}'
     meta_path = os.path.join(meeting_dir, f'{session_filename}_metadata.json')
     summary_path = os.path.join(meeting_dir, f'{session_filename}.csv')
     active_probe = telemetry_store.active_dir_path(telemetry_dir, driver_stem)

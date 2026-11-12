@@ -878,6 +878,14 @@ def _merge_stream_data(
         acc_meta = dict(manifest.get('metadata') or {})
         acc_order = list(manifest.get('column_order') or [])
         acc_cols = telemetry_brtc.read_brtc_columns(existing_brtc, manifest=manifest)
+        for col_name, col_info in (manifest.get('columns') or {}).items():
+            if isinstance(col_info, dict) and col_info.get('preferred_scale'):
+                try:
+                    sc_existing = float(col_info['preferred_scale'])
+                    if sc_existing > 0.0:
+                        pref_scales[col_name] = sc_existing
+                except (ValueError, TypeError):
+                    pass
         d_str = str(acc_meta.get('session_start_date') or '')
         if d_str:
             try:
@@ -1146,11 +1154,17 @@ def _write_derived_from_primary(
         track_info=track_info,
         aux_brtc_paths=aux_map,
     )
+    derived_scales = {
+        c: 0.001
+        for c in d_cols
+        if c in telemetry_brtc.FINITE_ACTIVE_COLUMNS or c.endswith((':EEG', ':ECG', ':EMG'))
+    }
     return telemetry_brtc.write_brtc(
         deriv_brtc,
         columns=d_cols,
         metadata=prim_meta,
         column_order=d_order,
+        preferred_scales=derived_scales,
         laps=laps,
         calculators=provenance,
     )
@@ -1215,8 +1229,25 @@ def ensure_readable_brtc(
             except Exception:
                 fresh = False
         if not fresh:
-            with compaction_lock(telemetry_dir, driver_stem):
-                _write_derived_from_primary(prim_on_disk, deriv_on_disk, p_manifest, resolved_track, aux_map)
+            try:
+                with compaction_lock(telemetry_dir, driver_stem):
+                    _write_derived_from_primary(prim_on_disk, deriv_on_disk, p_manifest, resolved_track, aux_map)
+            except OSError:
+                eph_dir_ro = _ephemeral_dir_for(telemetry_dir, driver_stem)
+                os.makedirs(eph_dir_ro, exist_ok=True)
+                eph_deriv_ro = os.path.join(eph_dir_ro, deriv_name)
+                need_eph = True
+                if os.path.exists(eph_deriv_ro):
+                    try:
+                        d_eph = telemetry_brtc.read_brtc_manifest(eph_deriv_ro)
+                        need_eph = not telemetry_calculators.is_derived_manifest_fresh(
+                            d_eph, int(p_manifest.get('row_count', 0)), p_meta, resolved_track, aux_map
+                        )
+                    except Exception:
+                        need_eph = True
+                if need_eph:
+                    _write_derived_from_primary(prim_on_disk, eph_deriv_ro, p_manifest, resolved_track, aux_map)
+                return prim_on_disk, eph_deriv_ro
         return prim_on_disk, deriv_on_disk
 
     # Active uncompacted segments exist -> build or reuse ephemeral .brtc in /tmp

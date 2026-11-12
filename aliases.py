@@ -257,4 +257,4 @@ def resolve_car_name(raw_name: str) -> str:
     """Returns the canonical class ID for *raw_name*, falling back to the
     original value (lowercased and stripped) if no alias is defined."""
     key = raw_name.strip().lower()
-    return CAR_NAME_ALIASES.get(key, raw_name.strip())
+    return CAR_NAME_ALIASES.get(key, key)

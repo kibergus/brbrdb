@@ -23,7 +23,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP, Image
 from database import db
 import telemetry_store
-from mcp_server import image_tools, lap_tools, report_tools, track_tools
+from mcp_server import image_tools, lap_tools, report_tools, session_tools, track_tools
 
 mcp = FastMCP("brbrdb")
 
@@ -65,19 +65,13 @@ def list_sessions(
     results = []
     for s in raw_sessions:
         drivers = db.get_session_drivers(s.session_id, s.meeting_folder)
-
-        telemetry_channels: list[str] = []
         tel_dir = os.path.join(s.meeting_dir, 'telemetry') if s.meeting_dir else ''
-        if tel_dir and os.path.exists(tel_dir):
-            for stem in telemetry_store.list_driver_stems(tel_dir):
-                if stem.startswith(s.session_id) or s.session_id in stem:
-                    cols, tel_driver = telemetry_store.read_session_header(tel_dir, stem)
-                    if cols and not telemetry_channels:
-                        skip = {'record', 'time', 'latitude', 'longitude', 'altitude'}
-                        telemetry_channels = [c for c in cols if c.lower() not in skip]
-
-                    if tel_driver and tel_driver not in drivers:
-                        drivers.append(tel_driver)
+        telemetry_channels, drivers = session_tools.collect_session_telemetry_channels_and_drivers(
+            tel_dir=tel_dir,
+            session_id=s.session_id,
+            drivers=drivers,
+            driver_filter=driver_name,
+        )
 
         if driver_name and not any(d.strip().lower() == driver_name.strip().lower() for d in drivers):
             continue
@@ -176,6 +170,46 @@ def get_telemetry_plot(
         first_sid, all_lap_keys, channels, dists_grid, interp_lap_data, labels=labels
     )
     return Image(data=base64.b64decode(b64_image), format="png")
+
+
+@mcp.tool()
+def get_telemetry_data(
+    session_id: str,
+    track: str,
+    date: str,
+    channels: list[str] | None = None,
+    driver_name: str | None = None,
+    laps: list[int] | None = None,
+    start_m: float | None = None,
+    end_m: float | None = None,
+) -> dict[str, Any]:
+    """
+    Downloads numeric telemetry samples on the session's 100 Hz primary timeline (with high-rate
+    auxiliary streams such as 500 Hz Spiker:bit EEG/ECG/EMG downsampled via per-bin sample averaging).
+
+    Parameters:
+    - session_id: Session identifier (from list_sessions)
+    - track: Track name (e.g. "Lydd", "Spa-Francorchamps")
+    - date: ISO date string (YYYY-MM-DD)
+    - channels: Optional list of channel names (e.g. ["Speed", "EEG"]). Omit to return all active channels.
+      Note: Speed is returned in km/h; missing/inactive samples are returned as null.
+    - driver_name: Optional full driver name (case-insensitive) when a session has multiple drivers.
+    - laps: Optional list of lap numbers to filter rows (e.g. [2, 3]). Omit for all rows in the session.
+    - start_m: Optional minimum Lap Distance (metres) filter.
+    - end_m: Optional maximum Lap Distance (metres) filter.
+
+    Returns dictionary containing session metadata, sample_rate_hz, columns, and column-oriented data arrays.
+    """
+    return session_tools.get_telemetry_data_impl(
+        session_id=session_id,
+        track=track,
+        date=date,
+        channels=channels,
+        driver_name=driver_name,
+        laps=laps,
+        start_m=start_m,
+        end_m=end_m,
+    )
 
 
 @mcp.tool()
