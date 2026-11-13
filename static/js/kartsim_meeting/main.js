@@ -22,7 +22,8 @@ import { state } from './state.js';
 import { showTab, showRightPanelTab, showStatsSubTab, setSort, selectTurnAndSwitchToMap, toggleAllLaps, toggleGroupVisibility, toggleGroupManagementPopup, togglePlay, setPlaybackSpeed, toggleDeltaPlot, toggleSpeedPlot, initAllLapsHandlers, initReportInteractions, onSessionChange, toggleSidePanel, collapseSidePanel, expandSidePanel, initSidePanelResizer, updateSessionSelectorColors, toggleSessionDropdown, selectSessionFromDropdown, toggleMobileSidebar, toggleMobileRightPanel, seekToDistance, setPlotXLim, setGroupALaps, centerMapOnCoords, focusMapOnRange, handleReportTriggerAction } from './lap_selection.js';
 import { setMapType, setTrajectoryColorMode, toggleTrajDropdown, updateDistanceMarker } from './map.js';
 import { stepDistance } from './telemetry.js';
-import { initExpandablePlots, setVisiblePlots } from './plots_sync.js';
+import { initExpandablePlots, setVisiblePlots, updateExpandablePlotsVisibility } from './plots_sync.js';
+import { normalizePlotGroupId } from './plot_toolbar.js';
 import { debouncedUpdateURL } from './url_sync.js';
 import { initCompanionControl, refreshWorkspaceManifest } from './companion.js';
 
@@ -191,20 +192,22 @@ document.addEventListener('DOMContentLoaded', () => {
         toggleSpeedPlot();
     }
     if (activePlot) {
+        let addedAny = false;
         activePlot.split(',').forEach(plotPart => {
-            let p = plotPart.trim();
-            if (p === 'lat_force') {
-                p = 'force';
-            } else if (p === 'lat_patch_vel' || p === 'long_patch_vel') {
-                p = 'patch_vel';
-            }
-            const tabEl = document.querySelector(`.plot-tab[data-tab="${p}"]`);
-            if (tabEl) {
-                tabEl.click();
-            } else if (p && p !== 'delta' && p !== 'speed') {
-                state.activePlotChannels.add(p.toLowerCase());
+            const p = normalizePlotGroupId(plotPart);
+            if (!p || p === '*') return;
+            if (p === 'delta') {
+                if (!state.deltaPlotVisible) toggleDeltaPlot();
+            } else if (p === 'speed') {
+                if (!state.speedPlotVisible) toggleSpeedPlot();
+            } else {
+                state.activePlotChannels.add(p);
+                addedAny = true;
             }
         });
+        if (addedAny) {
+            updateExpandablePlotsVisibility();
+        }
     }
 
     // Restore Group A/B visibility state from URL or reportState

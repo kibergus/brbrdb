@@ -23,11 +23,13 @@ import { state } from './state.js';
 import {
     loadedChannels,
     loadingChannels,
-    togglePlot,
+    isBuiltinPlotChannel,
+    isChannelAvailable,
     updateExpandablePlotsVisibility,
     updateTabAvailability,
     renderSingleChannelPlot
 } from './plots_sync.js';
+import { normalizePlotGroupId } from './plot_toolbar.js';
 
 export function customChannelFieldKey(channelId) {
     return `_custom_${String(channelId)}`;
@@ -223,40 +225,12 @@ export function applyCustomChannelPayloadToLaps(channelPayload) {
 
 function mountDynamicPlotGroupElements() {
     if (typeof document === 'undefined') return;
-    const tabsContainer = document.querySelector('.plot-tabs');
     const plotContent = document.getElementById('plot-content');
-    if (!tabsContainer || !plotContent) return;
+    if (!plotContent) return;
 
     const desiredGroupIds = new Set(state.customPlotGroups ? state.customPlotGroups.keys() : []);
 
-    // Restore static built-in tabs previously overridden by a custom group with the same ID
-    document.querySelectorAll('.plot-tab[data-tab]').forEach((btn) => {
-        if (typeof btn.getAttribute !== 'function') return;
-        const gId = btn.getAttribute('data-tab');
-        if (btn.getAttribute('data-custom-override') === '1' && (!gId || !desiredGroupIds.has(gId))) {
-            const defLabel = btn.getAttribute('data-default-label');
-            if (defLabel) {
-                btn.textContent = defLabel;
-            }
-            if (typeof btn.removeAttribute === 'function') {
-                btn.removeAttribute('data-custom-override');
-            } else {
-                btn.setAttribute('data-custom-override', '');
-            }
-        }
-    });
-
-    // Unmount stale dynamic tabs & plot areas no longer in the active study
-    tabsContainer.querySelectorAll('.dynamic-plot-tab').forEach((btn) => {
-        const gId = btn.getAttribute('data-tab');
-        if (!gId || !desiredGroupIds.has(gId)) {
-            if (gId && state.activePlotChannels && state.activePlotChannels.has(gId)) {
-                state.activePlotChannels.delete(gId);
-            }
-            btn.remove();
-        }
-    });
-
+    // Unmount stale dynamic plot areas no longer in the active study
     plotContent.querySelectorAll('.dynamic-plot-area').forEach((area) => {
         const gId = area.getAttribute('data-custom-group') || area.id.replace(/^plot-area-/, '');
         if (!gId || !desiredGroupIds.has(gId)) {
@@ -267,29 +241,8 @@ function mountDynamicPlotGroupElements() {
         }
     });
 
-    // Mount or update current study's dynamic tabs & plot areas
-    for (const [groupId, groupDef] of state.customPlotGroups.entries()) {
-        let btn = document.getElementById(`tab-btn-${groupId}`);
-        if (!btn) {
-            btn = document.createElement('button');
-            btn.type = 'button';
-            btn.className = 'plot-tab dynamic-plot-tab';
-            btn.setAttribute('data-tab', groupId);
-            btn.id = `tab-btn-${groupId}`;
-            btn.addEventListener('click', () => {
-                togglePlot(groupId);
-            });
-            tabsContainer.appendChild(btn);
-        } else if (!String(btn.className || '').includes('dynamic-plot-tab') && typeof btn.setAttribute === 'function') {
-            if (!btn.getAttribute('data-default-label')) {
-                btn.setAttribute('data-default-label', btn.textContent || groupId.toUpperCase());
-            }
-            btn.setAttribute('data-custom-override', '1');
-        }
-        btn.textContent = groupDef.label || groupId.toUpperCase();
-        btn.style.display = '';
-        btn.classList.toggle('active', Boolean(state.activePlotChannels && state.activePlotChannels.has(groupId)));
-
+    // Mount plot areas for all custom groups (regardless of whether their toolbar item is top-level or in a folder)
+    for (const [groupId] of state.customPlotGroups.entries()) {
         let area = document.getElementById(`plot-area-${groupId}`);
         if (!area) {
             area = document.createElement('div');
@@ -318,7 +271,9 @@ function normalizeManifestGroups(manifestChannels, manifestPlotGroups) {
             label: rawCh.label ? String(rawCh.label) : chId,
             unit: rawCh.unit ? String(rawCh.unit) : '',
             color: rawCh.color ? String(rawCh.color) : '#38bdf8',
-            group: rawCh.group ? String(rawCh.group).toLowerCase() : ''
+            group: rawCh.group ? normalizePlotGroupId(rawCh.group) : '',
+            folder: rawCh.folder ? String(rawCh.folder).trim().toLowerCase() : '',
+            folder_label: rawCh.folder_label ? String(rawCh.folder_label).trim() : ''
         };
         channelMap.set(chId, normCh);
     }
@@ -328,8 +283,8 @@ function normalizeManifestGroups(manifestChannels, manifestPlotGroups) {
 
     for (const rawGroup of manifestPlotGroups || []) {
         if (!rawGroup || !rawGroup.id) continue;
-        const gId = String(rawGroup.id).trim().toLowerCase();
-        if (!gId) continue;
+        const gId = normalizePlotGroupId(rawGroup.id);
+        if (!gId || gId === '*' || gId === 'speed' || gId === 'delta') continue;
         const normChannels = (rawGroup.channels || []).map((item) => {
             const obj = typeof item === 'string' ? { channel_id: item } : (item || {});
             const cId = String(obj.channel_id || obj.id || '').trim();
@@ -347,6 +302,8 @@ function normalizeManifestGroups(manifestChannels, manifestPlotGroups) {
         groupMap.set(gId, {
             id: gId,
             label: rawGroup.label ? String(rawGroup.label) : gId.toUpperCase(),
+            folder: rawGroup.folder ? String(rawGroup.folder).trim().toLowerCase() : '',
+            folder_label: rawGroup.folder_label ? String(rawGroup.folder_label).trim() : '',
             y_label: rawGroup.y_label ? String(rawGroup.y_label) : '',
             y2_label: rawGroup.y2_label ? String(rawGroup.y2_label) : '',
             y_range: Array.isArray(rawGroup.y_range) && rawGroup.y_range.length === 2 ? rawGroup.y_range : null,
@@ -358,17 +315,24 @@ function normalizeManifestGroups(manifestChannels, manifestPlotGroups) {
     // Synthesize fallback groups for any channels not yet covered by explicit plot_groups
     for (const ch of channelMap.values()) {
         if (coveredChannelIds.has(ch.channel_id)) continue;
-        const gId = ch.group || ch.channel_id.toLowerCase();
+        const gId = ch.group || normalizePlotGroupId(ch.channel_id);
+        if (!gId || gId === '*' || gId === 'speed' || gId === 'delta') continue;
         if (!groupMap.has(gId)) {
             groupMap.set(gId, {
                 id: gId,
                 label: ch.group_label || (ch.group ? ch.group.toUpperCase() : ch.label),
+                folder: ch.folder || '',
+                folder_label: ch.folder_label || '',
                 y_label: ch.unit ? `${ch.label} (${ch.unit})` : ch.label,
                 y2_label: '',
                 y_range: null,
                 color_mode: ch.group ? 'channel' : 'lap',
                 channels: []
             });
+        } else {
+            const existingGroup = groupMap.get(gId);
+            if (!existingGroup.folder && ch.folder) existingGroup.folder = ch.folder;
+            if (!existingGroup.folder_label && ch.folder_label) existingGroup.folder_label = ch.folder_label;
         }
         groupMap.get(gId).channels.push({
             channel_id: ch.channel_id,
@@ -383,13 +347,23 @@ function normalizeManifestGroups(manifestChannels, manifestPlotGroups) {
 }
 
 /**
- * Synchronizes `state.customChannels` and `state.customPlotGroups` from the workspace manifest,
- * invalidating cached payloads whose `mtime` or `url` changed and mounting/unmounting dynamic plot tabs.
+ * Synchronizes `state.customChannels`, `state.customPlotGroups`, and `state.customPlotLayout`
+ * from the workspace manifest, invalidating cached payloads whose `mtime` or `url` changed
+ * and updating the 2-level plot toolbar.
  */
-export function syncCustomChannelsManifest(manifestChannels = [], manifestPlotGroups = []) {
+export function syncCustomChannelsManifest(
+    manifestChannels = [],
+    manifestPlotGroups = [],
+    manifestPlotLayout = undefined
+) {
     state.customChannels = state.customChannels || new Map();
     state.customPlotGroups = state.customPlotGroups || new Map();
     state.customChannelPayloads = state.customChannelPayloads || new Map();
+    if (manifestPlotLayout !== undefined) {
+        state.customPlotLayout = (Array.isArray(manifestPlotLayout) && manifestPlotLayout.length > 0)
+            ? manifestPlotLayout
+            : null;
+    }
 
     const { channelMap, groupMap } = normalizeManifestGroups(manifestChannels, manifestPlotGroups);
     const invalidatedChannelIds = new Set();
@@ -425,10 +399,12 @@ export function syncCustomChannelsManifest(manifestChannels = [], manifestPlotGr
 
     // Detect removed or modified plot groups so loadedChannels is invalidated properly
     const invalidatedGroups = new Set();
+    const removedGroupIds = [];
     for (const [oldGroupId] of state.customPlotGroups.entries()) {
         if (!groupMap.has(oldGroupId)) {
             loadedChannels.delete(oldGroupId);
             loadingChannels.delete(oldGroupId);
+            removedGroupIds.push(oldGroupId);
         }
     }
 
@@ -446,6 +422,16 @@ export function syncCustomChannelsManifest(manifestChannels = [], manifestPlotGr
 
     state.customChannels = channelMap;
     state.customPlotGroups = groupMap;
+
+    // Deactivate removed custom groups (including those that lived inside folders) unless backed by a native built-in
+    for (const oldGroupId of removedGroupIds) {
+        if (state.activePlotChannels && state.activePlotChannels.has(oldGroupId)) {
+            const backedByBuiltin = isBuiltinPlotChannel(oldGroupId) && isChannelAvailable(oldGroupId);
+            if (!backedByBuiltin) {
+                state.activePlotChannels.delete(oldGroupId);
+            }
+        }
+    }
 
     mountDynamicPlotGroupElements();
     updateExpandablePlotsVisibility();

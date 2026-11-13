@@ -209,6 +209,7 @@ export const state = {
     plotTraceVisibility: {},
     customChannels: new Map(),
     customPlotGroups: new Map(),
+    customPlotLayout: null,
     customChannelPayloads: new Map(),
     customPlotActiveComponents: {},
 

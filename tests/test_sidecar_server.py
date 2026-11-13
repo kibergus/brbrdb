@@ -278,6 +278,7 @@ def test_sidecar_studies_manifest_cors_and_path_jailing(
     assert "escape" not in ov_ids
     assert [c["channel_id"] for c in manifest["channels"]] == ["trail_brake"]
     assert [g["id"] for g in manifest["plot_groups"]] == ["braking"]
+    assert manifest["plot_layout"] is None
 
     # 4. Path jailing on /files/<subpath>: valid file 200, .. traversal 403, symlink escape 403
     ok_status, _, ok_bytes = _http_request(
@@ -345,6 +346,13 @@ def test_sidecar_mcp_tools_and_websocket_live_sync(
                         "study": "2026-04-12_eeg",
                         "id": "eeg",
                         "label": "EEG",
+                        "folder": "neuro",
+                        "folder_label": "EEG & Load",
+                        "layout": [
+                            "pedals",
+                            {"folder": "neuro", "label": "EEG & Load", "items": ["eeg", "cognition"]},
+                            {"folder": "more", "label": "•••", "overflow": True, "items": ["gforce", "*"]},
+                        ],
                         "y_label": "Band Power (uV^2)",
                         "channels": [
                             {"channel_id": "eeg_alpha", "label": "Alpha", "color": "#a855f7"},
@@ -366,6 +374,40 @@ def test_sidecar_mcp_tools_and_websocket_live_sync(
             received_types.add(str(frame.get("type", "")))
         assert "workspace_sync" in received_types
         assert "telemetry_jump" in received_types
+
+        # Registering a second group without `layout` preserves existing `layout` and exposes folder metadata
+        _, _, reg2_raw = _http_request(
+            f"{base_url}/mcp",
+            method="POST",
+            body={
+                "jsonrpc": "2.0",
+                "id": 31,
+                "method": "tools/call",
+                "params": {
+                    "name": "register_plot_group",
+                    "arguments": {
+                        "study": "2026-04-12_eeg",
+                        "id": "cognition",
+                        "label": "Cognition",
+                        "folder": "neuro",
+                        "folder_label": "EEG & Load",
+                        "channels": [{"channel_id": "cog_load", "label": "Load"}],
+                    },
+                },
+            },
+        )
+        assert json.loads(reg2_raw.decode("utf-8"))["result"].get("isError") is not True
+        assert ws.recv_json(timeout=4.0)["type"] == "workspace_sync"
+
+        _, _, eeg_man_raw = _http_request(f"{base_url}/api/workspace/manifest?study=2026-04-12_eeg")
+        eeg_man = json.loads(eeg_man_raw.decode("utf-8"))
+        assert isinstance(eeg_man["plot_layout"], list)
+        assert eeg_man["plot_layout"][0] == "pedals"
+        assert eeg_man["plot_layout"][1]["folder"] == "neuro"
+        pg_by_id = {g["id"]: g for g in eeg_man["plot_groups"]}
+        assert pg_by_id["eeg"]["folder"] == "neuro"
+        assert pg_by_id["eeg"]["folder_label"] == "EEG & Load"
+        assert pg_by_id["cognition"]["folder"] == "neuro"
 
         # 3. set_telemetry_view broadcasts 1-indexed turnNumber, study, overlays, and plots
         _, _, view_raw = _http_request(

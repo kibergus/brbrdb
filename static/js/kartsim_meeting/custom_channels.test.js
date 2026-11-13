@@ -268,7 +268,7 @@ describe('custom_channels.js & custom plot groups', () => {
                 label: 'Alpha (8-13 Hz)',
                 unit: 'uV^2',
                 color: '#a855f7',
-                group: 'eeg',
+                group: 'eeg_bands',
                 url: 'http://127.0.0.1:38472/files/study_eeg/channels/eeg.json',
                 mtime
             },
@@ -277,15 +277,15 @@ describe('custom_channels.js & custom plot groups', () => {
                 label: 'Theta (4-8 Hz)',
                 unit: 'uV^2',
                 color: '#06b6d4',
-                group: 'eeg',
+                group: 'eeg_bands',
                 url: 'http://127.0.0.1:38472/files/study_eeg/channels/eeg.json',
                 mtime
             }
         ];
         const manifestGroups = [
             {
-                id: 'eeg',
-                label: 'EEG',
+                id: 'eeg_bands',
+                label: 'EEG Bands',
                 y_label: 'Band Power (uV^2)',
                 color_mode: 'channel',
                 channels: [
@@ -298,15 +298,15 @@ describe('custom_channels.js & custom plot groups', () => {
         syncCustomChannelsManifest(manifestChannels(1.0), manifestGroups);
 
         // Dynamic button and plot area mounted
-        expect(idMap.get('tab-btn-eeg')).toBeDefined();
-        expect(idMap.get('tab-btn-eeg').textContent).toBe('EEG');
-        expect(idMap.get('plot-area-eeg')).toBeDefined();
+        expect(idMap.get('tab-btn-eeg_bands')).toBeDefined();
+        expect(idMap.get('tab-btn-eeg_bands').textContent).toBe('EEG Bands');
+        expect(idMap.get('plot-area-eeg_bands')).toBeDefined();
 
-        // Load and render EEG plot
-        state.activePlotChannels.add('eeg');
-        await ensureCustomPlotGroupLoaded('eeg');
-        loadedChannels.add('eeg');
-        renderSingleChannelPlot('eeg');
+        // Load and render EEG Bands plot
+        state.activePlotChannels.add('eeg_bands');
+        await ensureCustomPlotGroupLoaded('eeg_bands');
+        loadedChannels.add('eeg_bands');
+        renderSingleChannelPlot('eeg_bands');
 
         // Multi-channel file fetched only once for both channels
         expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -326,54 +326,63 @@ describe('custom_channels.js & custom plot groups', () => {
         // Updating mtime invalidates cache and reloads new values
         alphaPeak = 40.0;
         syncCustomChannelsManifest(manifestChannels(2.0), manifestGroups);
-        expect(loadedChannels.has('eeg')).toBe(false);
+        expect(loadedChannels.has('eeg_bands')).toBe(false);
 
-        await ensureCustomPlotGroupLoaded('eeg');
+        await ensureCustomPlotGroupLoaded('eeg_bands');
         expect(fetchMock).toHaveBeenCalledTimes(2);
         expect(state.lapDataLookup['sess_1-14'].points[1][customChannelFieldKey('eeg_alpha')]).toBeCloseTo(25.0);
 
-        // Switching to an empty study unmounts the EEG tab and plot area cleanly
+        // Switching to an empty study unmounts the EEG Bands tab and plot area cleanly
         syncCustomChannelsManifest([], []);
-        expect(idMap.get('tab-btn-eeg')).toBeUndefined();
-        expect(idMap.get('plot-area-eeg')).toBeUndefined();
-        expect(state.activePlotChannels.has('eeg')).toBe(false);
+        expect(idMap.get('tab-btn-eeg_bands')).toBeUndefined();
+        expect(idMap.get('plot-area-eeg_bands')).toBeUndefined();
+        expect(state.activePlotChannels.has('eeg_bands')).toBe(false);
     });
 
-    it('supports native EEG/ECG/EMG columns and cleanly restores static built-in #tab-btn-eeg after custom override unmount', async () => {
+    it('supports native EEG/ECG/EMG columns, places EEG in •••, and cleanly restores static built-in #tab-btn-ecg after custom override unmount', async () => {
         const { isChannelAvailable } = await import('./plots_sync.js');
+        const { collectAvailablePlotGroups } = await import('./plot_toolbar.js');
 
-        // Without EEG column, built-in eeg is unavailable
+        // Without EEG/ECG columns, built-in eeg and ecg are unavailable
         state.allSessionsData = [{ session_id: 'sess_1', columns: ['Speed', 'Throttle'], laps: [] }];
         expect(isChannelAvailable('eeg')).toBe(false);
         expect(isChannelAvailable('ecg')).toBe(false);
 
-        // With native EEG column from Spiker:bit, built-in eeg becomes available
+        // With native EEG and ECG columns from Spiker:bit, both become available
         state.allSessionsData = [
             {
                 session_id: 'sess_1',
-                columns: ['Speed', 'Throttle', 'EEG'],
+                columns: ['Speed', 'Throttle', 'EEG', 'ECG'],
                 laps: [{ lap_num: 14, start_idx: 0, is_valid: true }]
             }
         ];
         expect(isChannelAvailable('eeg')).toBe(true);
-        expect(isChannelAvailable('ecg')).toBe(false);
+        expect(isChannelAvailable('ecg')).toBe(true);
 
-        // Simulate static #tab-btn-eeg and #plot-area-eeg from kartsim_meeting.html
-        const staticBtn = document.createElement('button');
-        staticBtn.id = 'tab-btn-eeg';
-        staticBtn.className = 'plot-tab';
-        staticBtn.setAttribute('data-tab', 'eeg');
-        staticBtn.textContent = 'EEG';
-        tabsContainer.appendChild(staticBtn);
+        // Simulate static #tab-btn-ecg and #plot-area-ecg from kartsim_meeting.html
+        const staticEcgBtn = document.createElement('button');
+        staticEcgBtn.id = 'tab-btn-ecg';
+        staticEcgBtn.className = 'plot-tab';
+        staticEcgBtn.setAttribute('data-tab', 'ecg');
+        staticEcgBtn.textContent = 'ECG';
+        tabsContainer.appendChild(staticEcgBtn);
 
-        const staticArea = document.createElement('div');
-        staticArea.id = 'plot-area-eeg';
-        staticArea.className = 'plot-area';
-        plotContent.appendChild(staticArea);
+        const staticEcgArea = document.createElement('div');
+        staticEcgArea.id = 'plot-area-ecg';
+        staticEcgArea.className = 'plot-area';
+        plotContent.appendChild(staticEcgArea);
 
-        // Mount custom eeg group with custom label -> overrides label without marking static tab dynamic
+        // Mount custom overrides for both ecg (top-level unwrapped Bio Sensors) and eeg (inside •••)
         syncCustomChannelsManifest(
             [
+                {
+                    channel_id: 'ecg_hr',
+                    label: 'Heart Rate',
+                    unit: 'bpm',
+                    group: 'ecg',
+                    url: 'http://127.0.0.1:38472/files/study/channels/ecg.json',
+                    mtime: 1.0
+                },
                 {
                     channel_id: 'eeg_alpha',
                     label: 'Alpha',
@@ -385,19 +394,28 @@ describe('custom_channels.js & custom plot groups', () => {
             ],
             [
                 {
+                    id: 'ecg',
+                    label: 'Heart Rate (BPM)',
+                    channels: [{ channel_id: 'ecg_hr', label: 'Heart Rate' }]
+                },
+                {
                     id: 'eeg',
                     label: 'EEG Bands',
                     channels: [{ channel_id: 'eeg_alpha', label: 'Alpha' }]
                 }
             ]
         );
-        expect(staticBtn.textContent).toBe('EEG Bands');
+        expect(staticEcgBtn.textContent).toBe('Heart Rate (BPM)');
+        expect(idMap.get('folder-btn-more')).toBeDefined();
+        expect(collectAvailablePlotGroups(tabsContainer).find(g => g.id === 'eeg')?.label).toBe('EEG Bands');
 
-        // Unmount custom study -> static #tab-btn-eeg stays in DOM, restores label "EEG", and stays visible because session has native EEG
+        // Unmount custom study -> static #tab-btn-ecg stays in DOM, restores label "ECG", and native EEG stays in ••• with label "EEG"
         syncCustomChannelsManifest([], []);
-        expect(idMap.get('tab-btn-eeg')).toBe(staticBtn);
-        expect(staticBtn.textContent).toBe('EEG');
-        expect(staticBtn.style.display).toBe('');
+        expect(idMap.get('tab-btn-ecg')).toBe(staticEcgBtn);
+        expect(staticEcgBtn.textContent).toBe('ECG');
+        expect(staticEcgBtn.style.display).toBe('');
+        expect(idMap.get('folder-btn-more')).toBeDefined();
+        expect(collectAvailablePlotGroups(tabsContainer).find(g => g.id === 'eeg')?.label).toBe('EEG');
     });
 });
 

@@ -97,7 +97,8 @@ export async function refreshWorkspaceManifest(studyOverride = undefined) {
         );
         syncCustomChannelsManifest(
             Array.isArray(manifest.channels) ? manifest.channels : [],
-            Array.isArray(manifest.plot_groups) ? manifest.plot_groups : []
+            Array.isArray(manifest.plot_groups) ? manifest.plot_groups : [],
+            Array.isArray(manifest.plot_layout) ? manifest.plot_layout : null
         );
         debouncedUpdateURL();
         return manifest;

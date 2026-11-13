@@ -27,6 +27,7 @@ import { initMap, loadTrackPoints, calculateBoundsZoom, updateAllPolylineColors,
 import { debouncedUpdateURL } from './url_sync.js';
 import { GROUP_PALETTE, getGroupColor, hexToRgba } from './palette.js';
 import { setActiveAgentOverlays, toggleAgentOverlay } from './agent_overlays.js';
+import { normalizePlotGroupId, closePlotFolderPopover } from './plot_toolbar.js';
 
 export function showRightPanelTab(tabId) {
     state.activeRightTab = tabId;
@@ -628,6 +629,9 @@ export function showTab(tabId) {
             }
 
             // Automatically hide/show bottom plots and map controls bar (slider)
+            if (tabId === 'stats') {
+                closePlotFolderPopover();
+            }
             const expandablePlots = document.getElementById('expandable-plots-block');
             if (expandablePlots) {
                 expandablePlots.style.display = (tabId === 'stats') ? 'none' : 'flex';
@@ -2266,8 +2270,8 @@ export function handleReportTriggerAction(data) {
         const rawList = Array.isArray(data.openPlot) ? data.openPlot : String(data.openPlot).split(',');
         let plotOpened = false;
         rawList.forEach(item => {
-            const p = String(item || '').trim().toLowerCase();
-            if (!p) return;
+            const p = normalizePlotGroupId(item);
+            if (!p || p === '*') return;
             if (p === 'delta') {
                 if (!state.deltaPlotVisible) {
                     state.deltaPlotVisible = true;
@@ -2279,11 +2283,8 @@ export function handleReportTriggerAction(data) {
                     plotOpened = true;
                 }
             } else {
-                let channel = p;
-                if (channel === 'lat_force') channel = 'force';
-                else if (channel === 'lat_patch_vel' || channel === 'long_patch_vel') channel = 'patch_vel';
-                if (!state.activePlotChannels.has(channel)) {
-                    state.activePlotChannels.add(channel);
+                if (!state.activePlotChannels.has(p)) {
+                    state.activePlotChannels.add(p);
                     plotOpened = true;
                 }
             }
@@ -2295,7 +2296,7 @@ export function handleReportTriggerAction(data) {
 
     if (data.togglePlot) {
         const skipBecauseOpen = data.openPlot &&
-            String(data.togglePlot).trim().toLowerCase() === String(data.openPlot).trim().toLowerCase();
+            normalizePlotGroupId(data.togglePlot) === normalizePlotGroupId(data.openPlot);
         if (!skipBecauseOpen) {
             togglePlot(data.togglePlot);
         }
@@ -2554,27 +2555,17 @@ export function resetReportView(e) {
     // 5. Reset bottom plots (speed, delta, channels)
     state.deltaPlotVisible = Boolean(reportState.delta);
     state.speedPlotVisible = Boolean(reportState.speed);
-    updateExpandablePlotsVisibility();
-
-    // Reset open channel plots
-    document.querySelectorAll('.plot-tab').forEach(tab => {
-        const plotType = tab.getAttribute('data-tab');
-        const container = document.getElementById(`plot-row-${plotType}`);
-        let shouldBeOpen = false;
-        if (reportState.plot) {
-            const plotList = Array.isArray(reportState.plot) ? reportState.plot : String(reportState.plot).split(',');
-            shouldBeOpen = plotList.map(p => p.trim()).includes(plotType);
-        }
-        if (container) {
-            if (shouldBeOpen) {
-                container.style.display = 'block';
-                tab.classList.add('active');
-            } else {
-                container.style.display = 'none';
-                tab.classList.remove('active');
+    state.activePlotChannels.clear();
+    if (reportState.plot) {
+        const plotList = Array.isArray(reportState.plot) ? reportState.plot : String(reportState.plot).split(',');
+        plotList.forEach(rawPlot => {
+            const p = normalizePlotGroupId(rawPlot);
+            if (p && p !== '*' && p !== 'delta' && p !== 'speed') {
+                state.activePlotChannels.add(p);
             }
-        }
-    });
+        });
+    }
+    updateExpandablePlotsVisibility();
 
     // 6. Reset trajectory color mode & slip angle mode
     if (reportState.tcol) {

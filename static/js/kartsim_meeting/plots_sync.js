@@ -27,6 +27,13 @@ import { updateAllPolylineColors } from './map.js';
 import { getGroupColor, hexToRgba } from './palette.js';
 import { getSessionColor } from './lap_selection.js';
 import { ensureCustomPlotGroupLoaded, customChannelFieldKey } from './custom_channels.js';
+import {
+    BUILTIN_PLOT_GROUPS,
+    normalizePlotGroupId,
+    initPlotToolbar,
+    renderPlotToolbar,
+    syncPlotToolbarActiveState
+} from './plot_toolbar.js';
 
 let lastPlotUpdate = 0;
 
@@ -100,6 +107,11 @@ const CHANNEL_AVAILABILITY = {
     ecg: { keys: ['ecg'] },
     emg: { keys: ['emg'] }
 };
+
+export function isBuiltinPlotChannel(channel) {
+    const norm = normalizePlotGroupId(channel);
+    return Boolean(norm && CHANNEL_AVAILABILITY[norm]);
+}
 
 export function ensureChannelLoaded(channel) {
     if (loadedChannels.has(channel)) {
@@ -2712,29 +2724,10 @@ export function updateDeltaYLim(skipRelayoutIfDragging = false) {
 }
 
 export function initExpandablePlots() {
-    const tabs = document.querySelectorAll('.plot-tab[data-tab]');
     const content = document.getElementById('plot-content');
     const resizer = document.getElementById('plot-resizer');
 
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            const target = tab.getAttribute('data-tab');
-            if (!target) return;
-            if (!isChannelAvailable(target)) return;
-
-            if (state.activePlotChannels.has(target)) {
-                state.activePlotChannels.delete(target);
-                const targetArea = document.getElementById('plot-area-' + target);
-                if (targetArea) {
-                    Plotly.purge(targetArea);
-                }
-            } else {
-                state.activePlotChannels.add(target);
-            }
-            updateExpandablePlotsVisibility();
-            debouncedUpdateURL();
-        });
-    });
+    initPlotToolbar();
 
     const btnDelta = document.getElementById('btn-delta');
     if (btnDelta) {
@@ -2765,11 +2758,13 @@ export function initExpandablePlots() {
         }
     });
     let isResizingPlots = false;
-    resizer.addEventListener('mousedown', (e) => {
-        isResizingPlots = true;
-        document.body.style.cursor = 'ns-resize';
-        e.preventDefault();
-    });
+    if (resizer) {
+        resizer.addEventListener('mousedown', (e) => {
+            isResizingPlots = true;
+            document.body.style.cursor = 'ns-resize';
+            e.preventDefault();
+        });
+    }
 
     document.addEventListener('mousemove', (e) => {
         if (!isResizingPlots) return;
@@ -2999,27 +2994,49 @@ export function updateExpandablePlotsVisibility() {
     if (btnSpeed) btnSpeed.classList.toggle('active', state.speedPlotVisible);
     if (containerSpeed) containerSpeed.style.display = state.speedPlotVisible ? 'block' : 'none';
 
-    // Toggle the active class on plot tab elements and adjust visibility of their plot areas
-    const tabs = document.querySelectorAll('.plot-tab[data-tab]');
-    tabs.forEach(tab => {
-        const target = tab.getAttribute('data-tab');
-        const isActive = state.activePlotChannels.has(target);
-        tab.classList.toggle('active', isActive);
+    // Collect all known plot-group IDs (built-ins, custom groups, active channels, and mounted plot areas)
+    // so plots inside folders or the "•••" overflow menu show/hide identically to top-level tabs.
+    const candidateIds = new Set(BUILTIN_PLOT_GROUPS.map(g => g.id));
+    if (state.customPlotGroups instanceof Map) {
+        for (const gId of state.customPlotGroups.keys()) {
+            candidateIds.add(gId);
+        }
+    }
+    if (state.activePlotChannels) {
+        state.activePlotChannels.forEach(gId => candidateIds.add(gId));
+    }
+    if (content && Array.isArray(content.children)) {
+        content.children.forEach(el => {
+            if (el && typeof el.id === 'string' && el.id.startsWith('plot-area-')) {
+                const sub = el.id.slice('plot-area-'.length);
+                if (sub && sub !== 'speed' && sub !== 'delta') {
+                    candidateIds.add(sub);
+                }
+            }
+        });
+    }
+
+    candidateIds.forEach(target => {
+        const isActive = Boolean(state.activePlotChannels && state.activePlotChannels.has(target));
         const targetArea = document.getElementById('plot-area-' + target);
         if (targetArea) {
             targetArea.style.display = isActive ? 'block' : 'none';
         }
     });
 
+    syncPlotToolbarActiveState();
+
     const anyExtraVisible = state.deltaPlotVisible || state.speedPlotVisible || (state.activePlotChannels && state.activePlotChannels.size > 0);
     const numPlotsVisible = (state.deltaPlotVisible ? 1 : 0) + (state.speedPlotVisible ? 1 : 0) + (state.activePlotChannels ? state.activePlotChannels.size : 0);
 
-    if (anyExtraVisible) {
-        content.classList.add('expanded');
-        content.style.height = (250 + (numPlotsVisible - 1) * 180) + 'px';
-    } else {
-        content.classList.remove('expanded');
-        content.style.height = '0';
+    if (content) {
+        if (anyExtraVisible) {
+            content.classList.add('expanded');
+            content.style.height = (250 + (numPlotsVisible - 1) * 180) + 'px';
+        } else {
+            content.classList.remove('expanded');
+            content.style.height = '0';
+        }
     }
 
     if ((!state.globalTelemetryXRange || state.globalTelemetryXRange.length !== 2 || (state.globalTelemetryXRange[0] === 0 && state.globalTelemetryXRange[1] === 100)) && state.trackData && state.trackData.lap_length) {
@@ -3053,16 +3070,14 @@ export function updateExpandablePlotsVisibility() {
 
 export function togglePlot(plotName) {
     if (!plotName) return;
-    const p = String(plotName).trim().toLowerCase();
+    const p = normalizePlotGroupId(plotName);
+    if (!p || p === '*') return;
     if (p === 'delta') {
         state.deltaPlotVisible = !state.deltaPlotVisible;
     } else if (p === 'speed') {
         state.speedPlotVisible = !state.speedPlotVisible;
     } else {
-        let channel = p;
-        if (channel === 'lat_force') channel = 'force';
-        else if (channel === 'lat_patch_vel' || channel === 'long_patch_vel') channel = 'patch_vel';
-
+        const channel = p;
         if (state.activePlotChannels.has(channel)) {
             state.activePlotChannels.delete(channel);
             const targetArea = document.getElementById('plot-area-' + channel);
@@ -3099,14 +3114,11 @@ export function setVisiblePlots(plotNames) {
         state.deltaPlotVisible = false;
         state.speedPlotVisible = false;
     } else {
-        const list = (Array.isArray(plotNames) ? plotNames : raw.split(',')).map(s => String(s).trim().toLowerCase());
+        const list = (Array.isArray(plotNames) ? plotNames : raw.split(',')).map(s => normalizePlotGroupId(s));
         state.deltaPlotVisible = list.includes('delta');
         state.speedPlotVisible = list.includes('speed');
-        list.forEach(item => {
-            if (!item || item === 'delta' || item === 'speed') return;
-            let channel = item;
-            if (channel === 'lat_force') channel = 'force';
-            else if (channel === 'lat_patch_vel' || channel === 'long_patch_vel') channel = 'patch_vel';
+        list.forEach(channel => {
+            if (!channel || channel === '*' || channel === 'delta' || channel === 'speed') return;
             state.activePlotChannels.add(channel);
         });
     }
@@ -3372,10 +3384,12 @@ export function isComponentAvailable(key) {
  * without loading the full channel data.
  */
 export function isChannelAvailable(channel) {
-    if (state.customPlotGroups && state.customPlotGroups.has(channel)) return true;
+    const norm = normalizePlotGroupId(channel);
+    if (!norm) return false;
+    if (state.customPlotGroups && state.customPlotGroups.has(norm)) return true;
     if (!state.allSessionsData || state.allSessionsData.length === 0) return false;
 
-    const spec = CHANNEL_AVAILABILITY[channel];
+    const spec = CHANNEL_AVAILABILITY[norm];
     if (!spec) return true; // Unknown channel — show by default
 
     return state.allSessionsData.some(session => {
@@ -3410,23 +3424,20 @@ export function isChannelAvailable(channel) {
  * active it is also deactivated.
  */
 export function updateTabAvailability() {
-    const tabs = document.querySelectorAll('.plot-tab[data-tab]');
     let changed = false;
-    tabs.forEach(tab => {
-        const target = tab.getAttribute('data-tab');
-        const available = isChannelAvailable(target);
-        tab.style.display = available ? '' : 'none';
-
-        // Deactivate a hidden tab that was previously enabled
-        if (!available && state.activePlotChannels && state.activePlotChannels.has(target)) {
-            state.activePlotChannels.delete(target);
-            const targetArea = document.getElementById('plot-area-' + target);
-            if (targetArea && typeof window !== 'undefined' && window.Plotly && window.Plotly.purge) {
-                window.Plotly.purge(targetArea);
+    if (state.allSessionsData && state.allSessionsData.length > 0 && state.activePlotChannels) {
+        for (const target of Array.from(state.activePlotChannels)) {
+            if (!isChannelAvailable(target)) {
+                state.activePlotChannels.delete(target);
+                const targetArea = document.getElementById('plot-area-' + target);
+                if (targetArea && typeof window !== 'undefined' && window.Plotly && window.Plotly.purge) {
+                    window.Plotly.purge(targetArea);
+                }
+                changed = true;
             }
-            changed = true;
         }
-    });
+    }
+    renderPlotToolbar();
     if (changed) {
         updateExpandablePlotsVisibility();
     }
