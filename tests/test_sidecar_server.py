@@ -72,11 +72,11 @@ def _http_request(
 class _SimpleWsClient:
     """Minimal stdlib RFC 6455 client for testing sidecar WebSocket broadcasts."""
 
-    def __init__(self, port: int) -> None:
+    def __init__(self, port: int, path: str = "/ws") -> None:
         self._sock = socket.create_connection(("127.0.0.1", port), timeout=5.0)
         key = base64.b64encode(os.urandom(16)).decode("ascii")
         handshake = (
-            f"GET /ws HTTP/1.1\r\n"
+            f"GET {path} HTTP/1.1\r\n"
             f"Host: 127.0.0.1:{port}\r\n"
             f"Upgrade: websocket\r\n"
             f"Connection: Upgrade\r\n"
@@ -426,6 +426,40 @@ def test_sidecar_mcp_tools_and_websocket_live_sync(
         assert status_data["active_study"] == "2026-04-12_eeg"
     finally:
         ws.close()
+
+    # 6. Outer wrapper socket (/ws?role=wrapper) does not inflate clients_connected,
+    #    and receives wrapper_navigate when no inner viewer is connected
+    wrapper_ws = _SimpleWsClient(port, path="/ws?role=wrapper")
+    try:
+        assert wrapper_ws.recv_json(timeout=4.0)["type"] == "COMPANION_READY"
+        _, _, st_raw2 = _http_request(f"{base_url}/health")
+        assert json.loads(st_raw2.decode("utf-8"))["clientsConnected"] == 0
+
+        _, _, nav_raw = _http_request(
+            f"{base_url}/mcp",
+            method="POST",
+            body={
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "set_telemetry_view",
+                    "arguments": {
+                        "session_url": "https://brbrdb.brbrkitten.com/telemetry/kartsim/senior/2026-04-12/buckmore",
+                    },
+                },
+            },
+        )
+        nav_res = json.loads(nav_raw.decode("utf-8"))
+        assert nav_res["result"].get("isError") is not True
+        nav_frame = wrapper_ws.recv_json(timeout=4.0)
+        assert nav_frame["type"] == "wrapper_navigate"
+        assert nav_frame["sessionUrl"].startswith("/telemetry/kartsim/senior/2026-04-12/buckmore")
+        assert "companion=1" in nav_frame["sessionUrl"]
+        assert "https://brbrdb.brbrkitten.com/auth?" in nav_frame["authTarget"]
+        assert "next=%2Ftelemetry%2Fkartsim%2Fsenior%2F2026-04-12%2Fbuckmore" in nav_frame["authTarget"]
+    finally:
+        wrapper_ws.close()
 
 
 @pytest.mark.parametrize("server_runtime", ["python", "node"])

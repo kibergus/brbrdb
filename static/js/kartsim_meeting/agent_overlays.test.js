@@ -389,5 +389,17 @@ describe('agent_overlays.js', () => {
         await reattachAgentOverlaysOnMapInit();
         expect(state.agentOverlays.get('theta_heat').heatmapOverlay).not.toBeNull();
     });
+
+    it('supports plasma/magma/hot/ylorrd colormaps and reversed _r LUT variants', () => {
+        const fwd = buildColormapLut('rdylgn');
+        const rev = buildColormapLut('rdylgn_r');
+        expect(fwd).toHaveLength(256);
+        expect(rev).toHaveLength(256);
+        expect(rev[0]).toEqual(fwd[255]);
+        expect(rev[255]).toEqual(fwd[0]);
+
+        const plasmaHex = sampleColormapHex('plasma', 0.0);
+        expect(plasmaHex).toBe('#0d0887');
+    });
 });
 

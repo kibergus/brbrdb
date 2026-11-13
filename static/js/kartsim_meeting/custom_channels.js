@@ -25,6 +25,7 @@ import {
     loadingChannels,
     togglePlot,
     updateExpandablePlotsVisibility,
+    updateTabAvailability,
     renderSingleChannelPlot
 } from './plots_sync.js';
 
@@ -228,6 +229,23 @@ function mountDynamicPlotGroupElements() {
 
     const desiredGroupIds = new Set(state.customPlotGroups ? state.customPlotGroups.keys() : []);
 
+    // Restore static built-in tabs previously overridden by a custom group with the same ID
+    document.querySelectorAll('.plot-tab[data-tab]').forEach((btn) => {
+        if (typeof btn.getAttribute !== 'function') return;
+        const gId = btn.getAttribute('data-tab');
+        if (btn.getAttribute('data-custom-override') === '1' && (!gId || !desiredGroupIds.has(gId))) {
+            const defLabel = btn.getAttribute('data-default-label');
+            if (defLabel) {
+                btn.textContent = defLabel;
+            }
+            if (typeof btn.removeAttribute === 'function') {
+                btn.removeAttribute('data-custom-override');
+            } else {
+                btn.setAttribute('data-custom-override', '');
+            }
+        }
+    });
+
     // Unmount stale dynamic tabs & plot areas no longer in the active study
     tabsContainer.querySelectorAll('.dynamic-plot-tab').forEach((btn) => {
         const gId = btn.getAttribute('data-tab');
@@ -262,6 +280,11 @@ function mountDynamicPlotGroupElements() {
                 togglePlot(groupId);
             });
             tabsContainer.appendChild(btn);
+        } else if (!String(btn.className || '').includes('dynamic-plot-tab') && typeof btn.setAttribute === 'function') {
+            if (!btn.getAttribute('data-default-label')) {
+                btn.setAttribute('data-default-label', btn.textContent || groupId.toUpperCase());
+            }
+            btn.setAttribute('data-custom-override', '1');
         }
         btn.textContent = groupDef.label || groupId.toUpperCase();
         btn.style.display = '';
@@ -279,6 +302,8 @@ function mountDynamicPlotGroupElements() {
             plotContent.appendChild(area);
         }
     }
+
+    updateTabAvailability();
 }
 
 function normalizeManifestGroups(manifestChannels, manifestPlotGroups) {
@@ -412,7 +437,7 @@ export function syncCustomChannelsManifest(manifestChannels = [], manifestPlotGr
         const prevJson = prevGroup ? JSON.stringify(prevGroup) : '';
         const nextJson = JSON.stringify(nextGroup);
         const hasInvalidatedChild = nextGroup.channels.some((c) => invalidatedChannelIds.has(c.channel_id));
-        if (hasInvalidatedChild || (prevGroup && prevJson !== nextJson)) {
+        if (!prevGroup || hasInvalidatedChild || prevJson !== nextJson) {
             loadedChannels.delete(gId);
             loadingChannels.delete(gId);
             invalidatedGroups.add(gId);

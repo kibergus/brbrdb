@@ -73,7 +73,10 @@ const COLUMN_MAPPINGS = {
     tl_rl: ['Tyre Load RL'],
     tl_rr: ['Tyre Load RR'],
     sa_front: ['Slip Angle Front (deg)', 'Slip Angle Front'],
-    sa_rear: ['Slip Angle Rear (deg)', 'Slip Angle Rear']
+    sa_rear: ['Slip Angle Rear (deg)', 'Slip Angle Rear'],
+    eeg: ['EEG', 'spikerbit:EEG', 'SpikerBit EEG'],
+    ecg: ['ECG', 'spikerbit:ECG', 'SpikerBit ECG'],
+    emg: ['EMG', 'spikerbit:EMG', 'SpikerBit EMG']
 };
 
 /**
@@ -92,7 +95,10 @@ const CHANNEL_AVAILABILITY = {
     patch_vel: { keys: ['lpv_lat_fl', 'lpv_lat_fr', 'lpv_lat_rl', 'lpv_lat_rr', 'lpv_lon_fl', 'lpv_lon_fr', 'lpv_lon_rl', 'lpv_lon_rr'] },
     force: { keys: ['lf_lat_fl', 'lf_lat_fr', 'lf_lat_rl', 'lf_lat_rr', 'lf_lon_fl', 'lf_lon_fr', 'lf_lon_rl', 'lf_lon_rr', 'lf_lat_f', 'lf_lat_r', 'lf_lon_f', 'lf_lon_r'] },
     tyre_load: { keys: ['tl_fl', 'tl_fr', 'tl_rl', 'tl_rr'] },
-    slip_angle: { keys: ['sa_front', 'sa_rear'] }
+    slip_angle: { keys: ['sa_front', 'sa_rear'] },
+    eeg: { keys: ['eeg'] },
+    ecg: { keys: ['ecg'] },
+    emg: { keys: ['emg'] }
 };
 
 export function ensureChannelLoaded(channel) {
@@ -142,7 +148,10 @@ export function ensureChannelLoaded(channel) {
             'lf_lat_f', 'lf_lat_r', 'lf_lon_f', 'lf_lon_r'
         ],
         tyre_load: ['tl_fl', 'tl_fr', 'tl_rl', 'tl_rr'],
-        slip_angle: ['sa_front', 'sa_rear']
+        slip_angle: ['sa_front', 'sa_rear'],
+        eeg: ['eeg'],
+        ecg: ['ecg'],
+        emg: ['emg']
     }[channel] || [];
 
     const promise = (async () => {
@@ -1708,7 +1717,7 @@ export function renderSingleChannelPlot(activeTab) {
     const targetId = 'plot-area-' + activeTab;
     const targetEl = document.getElementById(targetId);
 
-    const lazyTabs = ['steering', 'rps', 'gforce', 'gyro', 'slide', 'patch_vel', 'force', 'tyre_load', 'slip_angle'];
+    const lazyTabs = ['steering', 'rps', 'gforce', 'gyro', 'slide', 'patch_vel', 'force', 'tyre_load', 'slip_angle', 'eeg', 'ecg', 'emg'];
     const isCustomGroup = Boolean(state.customPlotGroups && state.customPlotGroups.has(activeTab));
 
     if (lazyTabs.includes(activeTab) || isCustomGroup) {
@@ -1826,7 +1835,85 @@ export function renderSingleChannelPlot(activeTab) {
             ]
         };
 
-        if (state.currentActivePlotTab === 'pedals') {
+        if (isCustomGroup) {
+            const customGroup = state.customPlotGroups.get(state.currentActivePlotTab);
+            const groupChannels = (customGroup && Array.isArray(customGroup.channels)) ? customGroup.channels : [];
+            layout.yaxis.title = (customGroup && (customGroup.y_label || customGroup.label)) || state.currentActivePlotTab;
+            layout.showlegend = false;
+
+            if (customGroup && Array.isArray(customGroup.y_range) && customGroup.y_range.length === 2) {
+                layout.yaxis.range = [Number(customGroup.y_range[0]), Number(customGroup.y_range[1])];
+                layout.yaxis.autorange = false;
+            }
+
+            const hasY2 = Boolean(
+                (customGroup && customGroup.y2_label) ||
+                groupChannels.some(c => c && c.yaxis === 'y2')
+            );
+            if (hasY2) {
+                layout.yaxis2 = {
+                    title: (customGroup && customGroup.y2_label) ? customGroup.y2_label : '',
+                    overlaying: 'y',
+                    side: 'right',
+                    gridcolor: 'rgba(255,255,255,0)',
+                    zeroline: false,
+                    color: '#94a3b8',
+                    fixedrange: true
+                };
+                layout.margin.r = 55;
+            }
+
+            state.customPlotActiveComponents = state.customPlotActiveComponents || {};
+            if (!state.customPlotActiveComponents[state.currentActivePlotTab]) {
+                state.customPlotActiveComponents[state.currentActivePlotTab] = {};
+            }
+            const compState = state.customPlotActiveComponents[state.currentActivePlotTab];
+            groupChannels.forEach(ch => {
+                if (compState[ch.channel_id] === undefined) {
+                    compState[ch.channel_id] = true;
+                }
+            });
+
+            const colorMode = (customGroup && customGroup.color_mode === 'lap') ? 'lap' : 'channel';
+            const applyAlpha = (c, a) => (String(c || '').startsWith('#') ? hexToRgba(c, a) : (c || `rgba(56, 189, 248, ${a})`));
+
+            activeGroups.forEach(g => {
+                const laps = groupLapsMap[g] || [];
+                const isA = (g === 'A');
+                const groupDash = g === 'A' ? 'solid' : (g === 'B' ? 'dash' : (g === 'C' ? 'dot' : 'dashdot'));
+                const width = isA ? 2 : 1.5;
+                const baseAlpha = isA ? 1.0 : 0.85;
+                const suffix = isA ? '' : ` (${g})`;
+                const groupColor = getGroupColor(g);
+
+                laps.forEach((lap, i) => {
+                    const alpha = getLapAlpha(i, laps.length, baseAlpha);
+                    groupChannels.forEach((ch, chIdx) => {
+                        if (compState[ch.channel_id] === false) return;
+                        const fieldKey = customChannelFieldKey(ch.channel_id);
+                        const traceColor = colorMode === 'lap'
+                            ? hexToRgba(groupColor, alpha)
+                            : applyAlpha(ch.color || '#38bdf8', alpha);
+                        const traceDash = colorMode === 'lap'
+                            ? (groupChannels.length > 1 ? ['solid', 'dash', 'dot', 'dashdot'][chIdx % 4] : groupDash)
+                            : groupDash;
+                        const valLabel = ch.unit ? `${ch.label} (${ch.unit})` : ch.label;
+                        addTrace(
+                            data,
+                            lap,
+                            fieldKey,
+                            traceColor,
+                            width,
+                            traceDash,
+                            `${ch.label}${suffix}`,
+                            ch.yaxis === 'y2' ? 'y2' : 'y',
+                            false,
+                            valLabel
+                        );
+                    });
+                });
+            });
+        } else if (state.currentActivePlotTab === 'pedals') {
             layout.yaxis.title = 'Inputs (%)';
             layout.yaxis.range = [0, 105];
             layout.yaxis.autorange = false;
@@ -2167,82 +2254,32 @@ export function renderSingleChannelPlot(activeTab) {
                     addTrace(data, lap, 'sa_rear', `rgba(239, 68, 68, ${alpha})`, width, dash, `Rear${suffix}`, 'y', isA && i === 0);
                 });
             });
-        } else if (isCustomGroup) {
-            const customGroup = state.customPlotGroups.get(state.currentActivePlotTab);
-            const groupChannels = (customGroup && Array.isArray(customGroup.channels)) ? customGroup.channels : [];
-            layout.yaxis.title = (customGroup && (customGroup.y_label || customGroup.label)) || state.currentActivePlotTab;
+        } else if (state.currentActivePlotTab === 'eeg' || state.currentActivePlotTab === 'ecg' || state.currentActivePlotTab === 'emg') {
+            const bioKey = state.currentActivePlotTab;
+            const bioLabel = bioKey.toUpperCase();
+            layout.yaxis.title = bioLabel;
             layout.showlegend = false;
-
-            if (customGroup && Array.isArray(customGroup.y_range) && customGroup.y_range.length === 2) {
-                layout.yaxis.range = [Number(customGroup.y_range[0]), Number(customGroup.y_range[1])];
-                layout.yaxis.autorange = false;
-            }
-
-            const hasY2 = Boolean(
-                (customGroup && customGroup.y2_label) ||
-                groupChannels.some(c => c && c.yaxis === 'y2')
-            );
-            if (hasY2) {
-                layout.yaxis2 = {
-                    title: (customGroup && customGroup.y2_label) ? customGroup.y2_label : '',
-                    overlaying: 'y',
-                    side: 'right',
-                    gridcolor: 'rgba(255,255,255,0)',
-                    zeroline: false,
-                    color: '#94a3b8',
-                    fixedrange: true
-                };
-                layout.margin.r = 55;
-            }
-
-            state.customPlotActiveComponents = state.customPlotActiveComponents || {};
-            if (!state.customPlotActiveComponents[state.currentActivePlotTab]) {
-                state.customPlotActiveComponents[state.currentActivePlotTab] = {};
-            }
-            const compState = state.customPlotActiveComponents[state.currentActivePlotTab];
-            groupChannels.forEach(ch => {
-                if (compState[ch.channel_id] === undefined) {
-                    compState[ch.channel_id] = true;
-                }
-            });
-
-            const colorMode = (customGroup && customGroup.color_mode === 'lap') ? 'lap' : 'channel';
-            const applyAlpha = (c, a) => (String(c || '').startsWith('#') ? hexToRgba(c, a) : (c || `rgba(56, 189, 248, ${a})`));
-
             activeGroups.forEach(g => {
                 const laps = groupLapsMap[g] || [];
                 const isA = (g === 'A');
-                const groupDash = g === 'A' ? 'solid' : (g === 'B' ? 'dash' : (g === 'C' ? 'dot' : 'dashdot'));
+                const dash = isA ? 'solid' : 'dash';
                 const width = isA ? 2 : 1.5;
-                const baseAlpha = isA ? 1.0 : 0.85;
+                const baseAlpha = isA ? 1.0 : 0.8;
                 const suffix = isA ? '' : ` (${g})`;
-                const groupColor = getGroupColor(g);
-
+                const color = getGroupColor(g);
                 laps.forEach((lap, i) => {
-                    const alpha = getLapAlpha(i, laps.length, baseAlpha);
-                    groupChannels.forEach((ch, chIdx) => {
-                        if (compState[ch.channel_id] === false) return;
-                        const fieldKey = customChannelFieldKey(ch.channel_id);
-                        const traceColor = colorMode === 'lap'
-                            ? hexToRgba(groupColor, alpha)
-                            : applyAlpha(ch.color || '#38bdf8', alpha);
-                        const traceDash = colorMode === 'lap'
-                            ? (groupChannels.length > 1 ? ['solid', 'dash', 'dot', 'dashdot'][chIdx % 4] : groupDash)
-                            : groupDash;
-                        const valLabel = ch.unit ? `${ch.label} (${ch.unit})` : ch.label;
-                        addTrace(
-                            data,
-                            lap,
-                            fieldKey,
-                            traceColor,
-                            width,
-                            traceDash,
-                            `${ch.label}${suffix}`,
-                            ch.yaxis === 'y2' ? 'y2' : 'y',
-                            false,
-                            valLabel
-                        );
-                    });
+                    addTrace(
+                        data,
+                        lap,
+                        bioKey,
+                        hexToRgba(color, getLapAlpha(i, laps.length, baseAlpha)),
+                        width,
+                        dash,
+                        `${bioLabel}${suffix}`,
+                        'y',
+                        false,
+                        bioLabel
+                    );
                 });
             });
         }

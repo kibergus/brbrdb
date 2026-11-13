@@ -2109,8 +2109,93 @@ export function toggleSpeedPlot() {
     debouncedUpdateURL();
 }
 
+export function maybeNavigateToSessionUrl(data) {
+    if (!data || typeof data !== 'object') return false;
+    const rawTarget = data.sessionUrl || data.url;
+    if (!rawTarget || typeof rawTarget !== 'string') return false;
+    if (typeof window === 'undefined' || !window.location) return false;
+
+    const currentOrigin = window.location.origin || 'http://localhost';
+    let parsedTarget;
+    try {
+        parsedTarget = new URL(rawTarget, currentOrigin);
+    } catch {
+        return false;
+    }
+
+    const currentPathname = window.location.pathname || '';
+    const currentParams = new URLSearchParams(window.location.search || '');
+    const targetSessionId = parsedTarget.searchParams.get('session_id');
+    const currentSessionId = currentParams.get('session_id');
+
+    const pathDiffers = Boolean(parsedTarget.pathname && parsedTarget.pathname !== currentPathname);
+    const sessionDiffers = Boolean(targetSessionId && targetSessionId !== currentSessionId);
+
+    if (!pathDiffers && !sessionDiffers) {
+        return false;
+    }
+
+    // Preserve companion connection parameters across session navigation
+    ['companion', 'ws', 'ws_port', 'ws_url'].forEach((paramKey) => {
+        if (currentParams.has(paramKey) && !parsedTarget.searchParams.has(paramKey)) {
+            parsedTarget.searchParams.set(paramKey, currentParams.get(paramKey));
+        }
+    });
+    if (data.study !== undefined && !parsedTarget.searchParams.has('study')) {
+        if (data.study) parsedTarget.searchParams.set('study', String(data.study));
+    } else if (state.activeStudy && !parsedTarget.searchParams.has('study')) {
+        parsedTarget.searchParams.set('study', state.activeStudy);
+    }
+    if (data.overlays !== undefined && !parsedTarget.searchParams.has('overlays')) {
+        const ovStr = Array.isArray(data.overlays) ? data.overlays.join(',') : String(data.overlays || '');
+        if (ovStr) parsedTarget.searchParams.set('overlays', ovStr);
+    }
+    if (data.lapsA !== undefined && !parsedTarget.searchParams.has('lapsA')) {
+        const la = Array.isArray(data.lapsA) ? data.lapsA.join(',') : String(data.lapsA || '');
+        if (la) parsedTarget.searchParams.set('lapsA', la);
+    }
+    if (data.lapsB !== undefined && !parsedTarget.searchParams.has('lapsB')) {
+        const lb = Array.isArray(data.lapsB) ? data.lapsB.join(',') : String(data.lapsB || '');
+        if (lb) parsedTarget.searchParams.set('lapsB', lb);
+    }
+    if (data.dist !== undefined && data.dist !== null && !parsedTarget.searchParams.has('dist')) {
+        parsedTarget.searchParams.set('dist', String(data.dist));
+    }
+    if (data.turnNumber !== undefined && data.turnNumber !== null && !parsedTarget.searchParams.has('turn')) {
+        const tIdx = Math.max(0, parseInt(data.turnNumber, 10) - 1);
+        if (!isNaN(tIdx)) parsedTarget.searchParams.set('turn', String(tIdx));
+    } else if (data.turn !== undefined && data.turn !== null && !parsedTarget.searchParams.has('turn')) {
+        parsedTarget.searchParams.set('turn', String(data.turn));
+    }
+    if (data.plots !== undefined && !parsedTarget.searchParams.has('plots')) {
+        const pl = Array.isArray(data.plots) ? data.plots.join(',') : String(data.plots || '');
+        if (pl) {
+            const list = pl.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+            if (list.includes('delta')) parsedTarget.searchParams.set('delta', '1');
+            if (list.includes('speed')) parsedTarget.searchParams.set('speed', '1');
+            const extras = list.filter(x => x !== 'delta' && x !== 'speed');
+            if (extras.length > 0) parsedTarget.searchParams.set('plots', extras.join(','));
+        }
+    }
+
+    const finalUrl = parsedTarget.origin === currentOrigin
+        ? `${parsedTarget.pathname}${parsedTarget.search}${parsedTarget.hash}`
+        : parsedTarget.toString();
+
+    if (typeof window.location.assign === 'function') {
+        window.location.assign(finalUrl);
+    } else {
+        window.location.href = finalUrl;
+    }
+    return true;
+}
+
 export function handleReportTriggerAction(data) {
     if (!data) return;
+
+    if (maybeNavigateToSessionUrl(data)) {
+        return;
+    }
 
     // 0. Switch tab (map/stats) first if requested so subsequent actions target the active tab
     if (data.tab) {
@@ -2389,7 +2474,8 @@ export function initReportInteractions() {
                                    event.data.study !== undefined || event.data.overlays !== undefined ||
                                    event.data.toggleOverlay !== undefined || event.data.openPlot !== undefined ||
                                    event.data.turnNumber !== undefined || event.data.tcol !== undefined ||
-                                   event.data.trajectoryColor !== undefined || event.data.mapType !== undefined;
+                                   event.data.trajectoryColor !== undefined || event.data.mapType !== undefined ||
+                                   event.data.sessionUrl !== undefined || event.data.url !== undefined;
             if (isKnownType || (!type && hasKnownPayload)) {
                 handleReportTriggerAction(event.data);
             }

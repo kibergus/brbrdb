@@ -19,16 +19,20 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { initCompanionControl, handleCompanionCommand } from './companion.js';
 import * as lapSelection from './lap_selection.js';
 
-vi.mock('./lap_selection.js', () => ({
-    handleReportTriggerAction: vi.fn(),
-    seekToDistance: vi.fn(),
-    setPlotXLim: vi.fn(),
-    setGroupALaps: vi.fn(),
-    centerMapOnCoords: vi.fn(),
-    focusMapOnRange: vi.fn(),
-    collapseSidePanel: vi.fn(),
-    expandSidePanel: vi.fn()
-}));
+vi.mock('./lap_selection.js', async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+        handleReportTriggerAction: vi.fn(),
+        maybeNavigateToSessionUrl: actual.maybeNavigateToSessionUrl,
+        seekToDistance: vi.fn(),
+        setPlotXLim: vi.fn(),
+        setGroupALaps: vi.fn(),
+        centerMapOnCoords: vi.fn(),
+        focusMapOnRange: vi.fn(),
+        collapseSidePanel: vi.fn(),
+        expandSidePanel: vi.fn()
+    };
+});
 
 describe('companion.js', () => {
     let mockWebSocket;

@@ -21,7 +21,7 @@
  * and custom telemetry channels directly from local workspaces.
  */
 import { state } from './state.js';
-import { handleReportTriggerAction, collapseSidePanel } from './lap_selection.js';
+import { handleReportTriggerAction, maybeNavigateToSessionUrl, collapseSidePanel } from './lap_selection.js';
 import { syncAgentOverlaysManifest, setActiveAgentOverlays } from './agent_overlays.js';
 import { syncCustomChannelsManifest } from './custom_channels.js';
 import { debouncedUpdateURL } from './url_sync.js';
@@ -130,59 +130,6 @@ export async function switchWorkspaceStudy(studyId) {
         }
     }
     return refreshWorkspaceManifest(normalized);
-}
-
-function maybeNavigateToSessionUrl(data) {
-    const rawTarget = data.sessionUrl || data.url;
-    if (!rawTarget || typeof rawTarget !== 'string') return false;
-    if (typeof window === 'undefined' || !window.location) return false;
-
-    const currentOrigin = window.location.origin || 'http://localhost';
-    let parsedTarget;
-    try {
-        parsedTarget = new URL(rawTarget, currentOrigin);
-    } catch {
-        return false;
-    }
-
-    const currentPathname = window.location.pathname || '';
-    const currentParams = new URLSearchParams(window.location.search || '');
-    const targetSessionId = parsedTarget.searchParams.get('session_id');
-    const currentSessionId = currentParams.get('session_id');
-
-    const pathDiffers = Boolean(parsedTarget.pathname && parsedTarget.pathname !== currentPathname);
-    const sessionDiffers = Boolean(targetSessionId && targetSessionId !== currentSessionId);
-
-    if (!pathDiffers && !sessionDiffers) {
-        return false;
-    }
-
-    // Preserve companion connection parameters across session navigation
-    ['companion', 'ws', 'ws_port', 'ws_url'].forEach((paramKey) => {
-        if (currentParams.has(paramKey) && !parsedTarget.searchParams.has(paramKey)) {
-            parsedTarget.searchParams.set(paramKey, currentParams.get(paramKey));
-        }
-    });
-    if (data.study !== undefined && !parsedTarget.searchParams.has('study')) {
-        if (data.study) parsedTarget.searchParams.set('study', String(data.study));
-    } else if (state.activeStudy && !parsedTarget.searchParams.has('study')) {
-        parsedTarget.searchParams.set('study', state.activeStudy);
-    }
-    if (data.overlays !== undefined && !parsedTarget.searchParams.has('overlays')) {
-        const ovStr = Array.isArray(data.overlays) ? data.overlays.join(',') : String(data.overlays || '');
-        if (ovStr) parsedTarget.searchParams.set('overlays', ovStr);
-    }
-
-    const finalUrl = parsedTarget.origin === currentOrigin
-        ? `${parsedTarget.pathname}${parsedTarget.search}${parsedTarget.hash}`
-        : parsedTarget.toString();
-
-    if (typeof window.location.assign === 'function') {
-        window.location.assign(finalUrl);
-    } else {
-        window.location.href = finalUrl;
-    }
-    return true;
 }
 
 export function handleCompanionCommand(data) {

@@ -59,6 +59,33 @@ const COLORMAP_STOPS = {
         [0.5, [221, 221, 221]],
         [0.75, [244, 152, 122]],
         [1.0, [180, 4, 38]]
+    ],
+    plasma: [
+        [0.0, [13, 8, 135]],
+        [0.25, [126, 3, 168]],
+        [0.5, [204, 71, 120]],
+        [0.75, [248, 149, 64]],
+        [1.0, [240, 249, 33]]
+    ],
+    magma: [
+        [0.0, [0, 0, 4]],
+        [0.25, [81, 18, 124]],
+        [0.5, [183, 55, 121]],
+        [0.75, [252, 137, 97]],
+        [1.0, [252, 253, 191]]
+    ],
+    hot: [
+        [0.0, [10, 0, 0]],
+        [0.35, [230, 0, 0]],
+        [0.7, [255, 210, 0]],
+        [1.0, [255, 255, 255]]
+    ],
+    ylorrd: [
+        [0.0, [255, 255, 178]],
+        [0.25, [254, 204, 92]],
+        [0.5, [253, 141, 60]],
+        [0.75, [240, 59, 32]],
+        [1.0, [189, 0, 38]]
     ]
 };
 
@@ -71,7 +98,9 @@ export function buildColormapLut(colormapName) {
     if (_lutCache.has(key)) {
         return _lutCache.get(key);
     }
-    const stops = COLORMAP_STOPS[key] || COLORMAP_STOPS.turbo;
+    const isReversed = key.endsWith('_r') && !COLORMAP_STOPS[key];
+    const baseKey = isReversed ? key.slice(0, -2) : key;
+    const stops = COLORMAP_STOPS[baseKey] || COLORMAP_STOPS.turbo;
     const lut = new Array(256);
     for (let i = 0; i < 256; i++) {
         const t = i / 255;
@@ -91,6 +120,9 @@ export function buildColormapLut(colormapName) {
             Math.round(lo[1][1] + f * (hi[1][1] - lo[1][1])),
             Math.round(lo[1][2] + f * (hi[1][2] - lo[1][2]))
         ];
+    }
+    if (isReversed) {
+        lut.reverse();
     }
     _lutCache.set(key, lut);
     return lut;

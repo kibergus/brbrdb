@@ -338,5 +338,66 @@ describe('custom_channels.js & custom plot groups', () => {
         expect(idMap.get('plot-area-eeg')).toBeUndefined();
         expect(state.activePlotChannels.has('eeg')).toBe(false);
     });
+
+    it('supports native EEG/ECG/EMG columns and cleanly restores static built-in #tab-btn-eeg after custom override unmount', async () => {
+        const { isChannelAvailable } = await import('./plots_sync.js');
+
+        // Without EEG column, built-in eeg is unavailable
+        state.allSessionsData = [{ session_id: 'sess_1', columns: ['Speed', 'Throttle'], laps: [] }];
+        expect(isChannelAvailable('eeg')).toBe(false);
+        expect(isChannelAvailable('ecg')).toBe(false);
+
+        // With native EEG column from Spiker:bit, built-in eeg becomes available
+        state.allSessionsData = [
+            {
+                session_id: 'sess_1',
+                columns: ['Speed', 'Throttle', 'EEG'],
+                laps: [{ lap_num: 14, start_idx: 0, is_valid: true }]
+            }
+        ];
+        expect(isChannelAvailable('eeg')).toBe(true);
+        expect(isChannelAvailable('ecg')).toBe(false);
+
+        // Simulate static #tab-btn-eeg and #plot-area-eeg from kartsim_meeting.html
+        const staticBtn = document.createElement('button');
+        staticBtn.id = 'tab-btn-eeg';
+        staticBtn.className = 'plot-tab';
+        staticBtn.setAttribute('data-tab', 'eeg');
+        staticBtn.textContent = 'EEG';
+        tabsContainer.appendChild(staticBtn);
+
+        const staticArea = document.createElement('div');
+        staticArea.id = 'plot-area-eeg';
+        staticArea.className = 'plot-area';
+        plotContent.appendChild(staticArea);
+
+        // Mount custom eeg group with custom label -> overrides label without marking static tab dynamic
+        syncCustomChannelsManifest(
+            [
+                {
+                    channel_id: 'eeg_alpha',
+                    label: 'Alpha',
+                    unit: 'uV^2',
+                    group: 'eeg',
+                    url: 'http://127.0.0.1:38472/files/study/channels/eeg.json',
+                    mtime: 1.0
+                }
+            ],
+            [
+                {
+                    id: 'eeg',
+                    label: 'EEG Bands',
+                    channels: [{ channel_id: 'eeg_alpha', label: 'Alpha' }]
+                }
+            ]
+        );
+        expect(staticBtn.textContent).toBe('EEG Bands');
+
+        // Unmount custom study -> static #tab-btn-eeg stays in DOM, restores label "EEG", and stays visible because session has native EEG
+        syncCustomChannelsManifest([], []);
+        expect(idMap.get('tab-btn-eeg')).toBe(staticBtn);
+        expect(staticBtn.textContent).toBe('EEG');
+        expect(staticBtn.style.display).toBe('');
+    });
 });
 

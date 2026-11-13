@@ -1588,6 +1588,39 @@ describe('handleReportTriggerAction companion extensions', () => {
         expect(state.activePlotChannels.has('eeg')).toBe(true);
         expect(plotsSync.togglePlot).not.toHaveBeenCalled();
     });
+
+    it('navigates directly when handleReportTriggerAction receives sessionUrl or url for another session', () => {
+        const assignMock = vi.fn();
+        vi.stubGlobal('window', {
+            location: {
+                origin: 'https://brbrdb.brbrkitten.com',
+                pathname: '/telemetry/kartsim/senior/2026-04-10/lydd',
+                search: '?companion=1&ws_port=38472',
+                assign: assignMock
+            }
+        });
+
+        handleReportTriggerAction({
+            sessionUrl: '/telemetry/kartsim/senior/2026-04-12/buckmore_park',
+            study: '2026-04-12_eeg',
+            overlays: ['blink_heatmap', 'blink_events'],
+            dist: 205,
+            turnNumber: 3,
+            lapsA: ['sess-14'],
+            plots: ['speed', 'eeg']
+        });
+
+        expect(assignMock).toHaveBeenCalledTimes(1);
+        const navUrl = assignMock.mock.calls[0][0];
+        expect(navUrl).toContain('/telemetry/kartsim/senior/2026-04-12/buckmore_park');
+        expect(navUrl).toContain('companion=1');
+        expect(navUrl).toContain('study=2026-04-12_eeg');
+        expect(navUrl).toContain('overlays=blink_heatmap%2Cblink_events');
+        expect(navUrl).toContain('dist=205');
+        expect(navUrl).toContain('turn=2');
+        expect(navUrl).toContain('speed=1');
+        expect(navUrl).toContain('plots=eeg');
+    });
 });
 
 
